@@ -1,0 +1,39 @@
+{
+  "name": "shapeshift",
+  "version": "0.1.0",
+  "description": "Scalable, distributed system for extracting and transforming LibreTexts content into various export formats.",
+  "main": "index.js",
+  "scripts": {
+    "build": "rimraf ./build && tsc",
+    "lint": "eslint . --ext .ts",
+    "lint-and-fix": "eslint . --ext .ts --fix",
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "prepare": "husky",
+    "prettier": "prettier --config .prettierrc 'src/**/*.ts' --write"
+  },
+  "author": "LibreTexts <info@libretexts.org>",
+  "license": "MIT",
+  "devDependencies": {
+    "@commitlint/cli": "^18.6.1",
+    "@commitlint/config-conventional": "^18.6.2",
+    "@types/aws-lambda": "^8.10.133",
+    "@types/node": "^20.11.19",
+    "@typescript-eslint/eslint-plugin": "^7.0.1",
+    "@typescript-eslint/parser": "^7.0.1",
+    "eslint": "^8.56.0",
+    "eslint-config-prettier": "^9.1.0",
+    "eslint-plugin-prettier": "^5.1.3",
+    "husky": "^9.0.11",
+    "prettier": "^3.2.5",
+    "rimraf": "^5.0.5",
+    "semantic-release": "^23.0.2",
+    "typescript": "^5.3.3"
+  },
+  "dependencies": {
+    "@aws-sdk/client-cloudwatch": "^3.515.0",
+    "@aws-sdk/client-dynamodb": "^3.515.0",
+    "@aws-sdk/client-ecs": "^3.515.0",
+    "@aws-sdk/client-sqs": "^3.515.0",
+    "zod": "^3.22.4"
+  }
+}
