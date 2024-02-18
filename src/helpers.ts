@@ -1,3 +1,4 @@
+import { libraryNameKeysWDev } from './librariesmap';
 import { LambdaBaseResponse } from './types';
 
 export function generateHTTPResponse(responseBody: LambdaBaseResponse, reqOrigin?: string) {
@@ -16,3 +17,8 @@ export function generateHTTPResponse(responseBody: LambdaBaseResponse, reqOrigin
     },
   };
 }
+
+export const getSubdomainFromLibrary = (library: string): string | null => {
+  if (libraryNameKeysWDev.includes(library)) return library;
+  return null;
+};
