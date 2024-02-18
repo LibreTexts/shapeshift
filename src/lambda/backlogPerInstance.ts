@@ -1,7 +1,8 @@
 import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwatch';
 import { ECSClient, ListTasksCommand } from '@aws-sdk/client-ecs';
+import { GetQueueAttributesCommand } from '@aws-sdk/client-sqs';
 import { Handler } from 'aws-lambda';
-import { SQSClient, GetQueueAttributesCommand } from '@aws-sdk/client-sqs';
+import { QueueClient } from '../queueClient';
 
 type BacklogPerInstanceEnvironment = {
   cloudwatchMetricName: string;
@@ -15,8 +16,8 @@ let environment: BacklogPerInstanceEnvironment;
 
 async function computeBacklogPerInstance() {
   const ecsClient = new ECSClient();
-  const sqsClient = new SQSClient();
-  const queueAttr = await sqsClient.send(
+  const queueClient = QueueClient.getClient();
+  const queueAttr = await queueClient.send(
     new GetQueueAttributesCommand({
       AttributeNames: ['ApproximateNumberOfMessages'],
       QueueUrl: environment.sqsQueueURL,

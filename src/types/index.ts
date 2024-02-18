@@ -6,11 +6,11 @@ export type Job = {
   jobUrl: string;
 };
 
+export type JobQueueMessage = {
+  jobId: string;
+  receiptHandle: string;
+};
+
 export type JobStatus = 'created' | 'inprogress' | 'finished' | 'failed';
 
 export type LambdaBaseResponse = { status: number };
-
-export type LambdaHandlerEnvironment = {
-  sqsHighPriorityQueueURL: string;
-  sqsQueueURL: string;
-};

@@ -1,13 +1,15 @@
 import { APIGatewayEvent } from 'aws-lambda';
-import { DynamoDBClient, GetItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
+import { DBClient } from '../dbClient';
+import { GetItemCommand, PutItemCommand } from '@aws-sdk/client-dynamodb';
 import { generateHTTPResponse } from '../helpers';
 import { Job } from '../types';
-import { LambdaBaseResponse, LambdaHandlerEnvironment } from '../types';
+import { LambdaBaseResponse } from '../types';
+import { LambdaHandlerEnvironment } from './lambdaHandlerEnvironment';
 import { randomBytes } from 'crypto';
-import { SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
+import { QueueClient } from '../queueClient';
+import { SendMessageCommand } from '@aws-sdk/client-sqs';
 import { z } from 'zod';
 
-let environment: LambdaHandlerEnvironment;
 const createJobSchema = z.object({
   highPriority: z.boolean(),
   url: z.string().url(),
@@ -82,9 +84,7 @@ async function validateGetJobRequest(rawInput: string): Promise<GetJobValidatedI
   };
 }
 
-export async function handleCreateJobRequest(environ: LambdaHandlerEnvironment, event: APIGatewayEvent) {
-  environment = environ;
-
+export async function handleCreateJobRequest(event: APIGatewayEvent) {
   const reqOrigin = event.headers?.origin;
   if (!event.body) {
     return generateHTTPResponse(
@@ -107,8 +107,8 @@ export async function handleCreateJobRequest(environ: LambdaHandlerEnvironment, 
   }
   const request = validationRes.body;
 
-  const sqsClient = new SQSClient();
-  const dbClient = new DynamoDBClient();
+  const sqsClient = QueueClient.getClient();
+  const dbClient = DBClient.getClient();
 
   const jobId = randomBytes(6).toString('hex');
   await dbClient.send(
@@ -137,7 +137,9 @@ export async function handleCreateJobRequest(environ: LambdaHandlerEnvironment, 
     new SendMessageCommand({
       MessageBody: jobId,
       ...(request.highPriority && { MessageDeduplicationId: jobId }),
-      QueueUrl: request.highPriority ? environment.sqsHighPriorityQueueURL : environment.sqsQueueURL,
+      QueueUrl: request.highPriority
+        ? LambdaHandlerEnvironment.getEnvironment().sqsHighPriorityQueueURL
+        : LambdaHandlerEnvironment.getEnvironment().sqsQueueURL,
     }),
   );
 
@@ -153,9 +155,7 @@ export async function handleCreateJobRequest(environ: LambdaHandlerEnvironment, 
   );
 }
 
-export async function handleGetJobRequest(environ: LambdaHandlerEnvironment, event: APIGatewayEvent) {
-  environment = environ;
-
+export async function handleGetJobRequest(event: APIGatewayEvent) {
   const reqOrigin = event.headers?.origin;
   if (!event.pathParameters?.jobId) {
     return generateHTTPResponse(
@@ -178,7 +178,7 @@ export async function handleGetJobRequest(environ: LambdaHandlerEnvironment, eve
   }
   const jobId = validationRes.jobId;
 
-  const dbClient = new DynamoDBClient();
+  const dbClient = DBClient.getClient();
   const { Item } = await dbClient.send(
     new GetItemCommand({
       Key: {
