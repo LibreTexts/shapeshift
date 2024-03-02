@@ -54,7 +54,7 @@ const CXOneTemplates = {
             <group id="${devGroupID}"></group>
             <permissions><role>Manager</role></permissions>
           </grant>`
-          : ""
+          : ''
       }
       <grant>
         <user id="${userID}"></user>

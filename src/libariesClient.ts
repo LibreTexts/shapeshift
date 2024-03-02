@@ -1,12 +1,8 @@
-import { SSMClient, GetParametersByPathCommand } from "@aws-sdk/client-ssm";
-import {
-  CXOneFetchPageParams,
-  LibrariesSSMClient,
-  LibraryAPIRequestHeaders,
-  LibraryKeyPair,
-} from "./types";
-import { createHmac } from "crypto";
-import axios, { AxiosResponse } from "axios";
+import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';
+import { CXOneFetchPageParams, LibrariesSSMClient, LibraryAPIRequestHeaders, LibraryKeyPair } from './types';
+import { createHmac } from 'crypto';
+import axios, { AxiosResponse } from 'axios';
+import { getErrorMessage } from './helpers';
 
 /**
  * Class for interacting with the LibreTexts libraries hosted on Mindtouch.
@@ -17,7 +13,7 @@ export class LibrariesClient {
   private ssmClient: LibrariesSSMClient | null = null;
   private requestHeaders: LibraryAPIRequestHeaders | null = null;
   private keyPair: LibraryKeyPair | null = null;
-  private lib: string = "";
+  private lib: string = '';
 
   constructor(lib: string) {
     this.lib = lib;
@@ -39,36 +35,33 @@ export class LibrariesClient {
   private _generateAPIRequestHeaders(): LibraryAPIRequestHeaders | null {
     try {
       if (!this.ssmClient || !this.keyPair) {
-        throw new Error("Error generating libraries client.");
+        throw new Error('Error generating libraries client.');
       }
 
       const epoch = Math.floor(Date.now() / 1000);
-      const hmac = createHmac("sha256", this.keyPair.secret);
+      const hmac = createHmac('sha256', this.keyPair.secret);
       hmac.update(`${this.keyPair.key}${epoch}=${this.ssmClient.apiUsername}`);
       return {
-        "X-Deki-Token": `${this.keyPair.key}_${epoch}_=${
-          this.ssmClient.apiUsername
-        }_${hmac.digest("hex")}`,
-        "X-Requested-With": "XMLHttpRequest",
+        'X-Deki-Token': `${this.keyPair.key}_${epoch}_=${this.ssmClient.apiUsername}_${hmac.digest('hex')}`,
+        'X-Requested-With': 'XMLHttpRequest',
       };
     } catch (err) {
-      console.error("Error generating API request headers.");
+      console.error('Error generating API request headers.');
       return null;
     }
   }
 
   private _generateLibrariesSSMClient(): LibrariesSSMClient | null {
     try {
-      const libTokenPairPath =
-        process.env.AWS_SSM_LIB_TOKEN_PAIR_PATH || "/libkeys/production";
-      const apiUsername = process.env.LIBRARIES_API_USERNAME || "LibreBot";
+      const libTokenPairPath = process.env.AWS_SSM_LIB_TOKEN_PAIR_PATH || '/libkeys/production';
+      const apiUsername = process.env.LIBRARIES_API_USERNAME || 'LibreBot';
 
       const ssm = new SSMClient({
         credentials: {
-          accessKeyId: process.env.AWS_SSM_ACCESS_KEY_ID || "unknown",
-          secretAccessKey: process.env.AWS_SSM_SECRET_KEY || "unknown",
+          accessKeyId: process.env.AWS_SSM_ACCESS_KEY_ID || 'unknown',
+          secretAccessKey: process.env.AWS_SSM_SECRET_KEY || 'unknown',
         },
-        region: process.env.AWS_SSM_REGION || "unknown",
+        region: process.env.AWS_SSM_REGION || 'unknown',
       });
 
       return {
@@ -77,7 +70,7 @@ export class LibrariesClient {
         ssm,
       };
     } catch (err) {
-      console.error("Error generating libraries client.");
+      console.error('Error generating libraries client.');
       return null;
     }
   }
@@ -85,14 +78,12 @@ export class LibrariesClient {
   /**
    * Retrieves the token pair requried to interact with a library's API.
    */
-  private async _getLibraryTokenPair(
-    lib: string
-  ): Promise<LibraryKeyPair | null> {
+  private async _getLibraryTokenPair(lib: string): Promise<LibraryKeyPair | null> {
     try {
       if (!this.ssmClient) {
-        throw new Error("Error retrieving library token pair. Lib: " + lib);
+        throw new Error('Error retrieving library token pair. Lib: ' + lib);
       }
-      const basePath = this.ssmClient.libTokenPairPath.endsWith("/")
+      const basePath = this.ssmClient.libTokenPairPath.endsWith('/')
         ? this.ssmClient.libTokenPairPath
         : `${this.ssmClient.libTokenPairPath}/`;
       const pairResponse = await this.ssmClient.ssm.send(
@@ -101,33 +92,25 @@ export class LibrariesClient {
           MaxResults: 10,
           Recursive: true,
           WithDecryption: true,
-        })
+        }),
       );
 
       if (pairResponse.$metadata.httpStatusCode !== 200) {
-        console.error("Error retrieving library token pair. Lib: " + lib);
-        console.error("Metadata: ");
+        console.error('Error retrieving library token pair. Lib: ' + lib);
+        console.error('Metadata: ');
         console.error(pairResponse.$metadata);
-        throw new Error("Error retrieving library token pair.");
+        throw new Error('Error retrieving library token pair.');
       }
       if (!pairResponse.Parameters) {
-        console.error(
-          "No data returned from token pair retrieval. Lib: " + lib
-        );
-        throw new Error("Error retrieving library token pair.");
+        console.error('No data returned from token pair retrieval. Lib: ' + lib);
+        throw new Error('Error retrieving library token pair.');
       }
 
-      const libKey = pairResponse.Parameters.find((p) =>
-        p.Name?.includes(`${lib}/key`)
-      );
-      const libSec = pairResponse.Parameters.find((p) =>
-        p.Name?.includes(`${lib}/secret`)
-      );
+      const libKey = pairResponse.Parameters.find((p) => p.Name?.includes(`${lib}/key`));
+      const libSec = pairResponse.Parameters.find((p) => p.Name?.includes(`${lib}/secret`));
       if (!libKey?.Value || !libSec?.Value) {
-        console.error(
-          "Key param not found in token pair retrieval. Lib: " + lib
-        );
-        throw new Error("Error retrieving library token pair.");
+        console.error('Key param not found in token pair retrieval. Lib: ' + lib);
+        throw new Error('Error retrieving library token pair.');
       }
 
       return {
@@ -135,7 +118,7 @@ export class LibrariesClient {
         secret: libSec.Value,
       };
     } catch (err) {
-      console.error("Error retrieving library token pair. Lib: " + lib);
+      console.error('Error retrieving library token pair. Lib: ' + lib);
       return null;
     }
   }
@@ -154,19 +137,16 @@ export class LibrariesClient {
       const { subdomain, options, query, silentFail } = params;
 
       if (!this.requestHeaders) {
-        throw new Error("Error generating API request headers.");
+        throw new Error('Error generating API request headers.');
       }
       const finalOptions = this._optionsMerge(this.requestHeaders, options);
 
       const { path, api } = params;
       const isNumber = !isNaN(Number(path));
-      const queryIsFirst = api.includes("?") ? false : true;
+      const queryIsFirst = api.includes('?') ? false : true;
       const url = `https://${subdomain}.libretexts.org/@api/deki/pages/${
-        isNumber ? "" : "="
-      }${encodeURIComponent(encodeURIComponent(path))}/${api}${this._parseQuery(
-        query,
-        queryIsFirst
-      )}`;
+        isNumber ? '' : '='
+      }${encodeURIComponent(encodeURIComponent(path))}/${api}${this._parseQuery(query, queryIsFirst)}`;
 
       const res = await axios(url, finalOptions);
       if (!res.data && !silentFail) {
@@ -174,8 +154,8 @@ export class LibrariesClient {
       }
 
       return res;
-    } catch (err: any) {
-      throw new Error(`Request failed: ${err.message}`);
+    } catch (err: unknown) {
+      throw new Error(`Request failed: ${getErrorMessage(err)}`);
     }
   }
 
@@ -185,24 +165,21 @@ export class LibrariesClient {
    * @param {boolean} first - Whether or not this is the first query parameter (defaults to false)
    * @returns {string} - An encoded query string (e.g. '&key=value&key2=value2' or '?key=value&key2=value2' if first is true)
    */
-  private _parseQuery(query?: Record<string, any>, first = false) {
-    if (!query) return "";
+  private _parseQuery(query?: Record<string, string>, first = false) {
+    if (!query) return '';
 
     const searchParams = new URLSearchParams();
     for (const key in query) {
       searchParams.append(key, query[key]);
     }
-    return `${first ? "?" : "&"}${searchParams.toString()}`;
+    return `${first ? '?' : '&'}${searchParams.toString()}`;
   }
 
-  private _optionsMerge(
-    headers: Record<string, any>,
-    options?: Record<string, any>
-  ) {
+  private _optionsMerge(headers: Record<string, string>, options?: Record<string, string | object>) {
     if (!options) {
       return { headers };
     }
-    if (options.headers) {
+    if (!options.headers) {
       options.headers = Object.assign(headers, options.headers);
     } else {
       options.headers = headers;
