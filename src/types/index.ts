@@ -14,3 +14,9 @@ export type JobQueueMessage = {
 export type JobStatus = 'created' | 'inprogress' | 'finished' | 'failed';
 
 export type LambdaBaseResponse = { status: number };
+
+export type ErrorWithMessage = {
+  message: string;
+};
+
+export * from './librariesclient';
