@@ -35,7 +35,7 @@
     "@aws-sdk/client-ecs": "^3.515.0",
     "@aws-sdk/client-sqs": "^3.515.0",
     "@aws-sdk/client-ssm": "^3.523.0",
-    "axios": "^1.6.7",
+    "axios": "^1.8.2",
     "zod": "^3.22.4"
   }
 }
