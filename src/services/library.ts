@@ -1,22 +1,59 @@
 import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';
-import { CXOneFetchPageParams, LibrariesSSMClient, LibraryAPIRequestHeaders, LibraryKeyPair } from './types';
 import { createHmac } from 'crypto';
 import axios, { AxiosResponse } from 'axios';
-import { getErrorMessage } from './helpers';
+import { getErrorMessage } from '../helpers';
+import Expert from '@libretexts/cxone-expert-node';
+import Auth from '@libretexts/cxone-expert-node/dist/modules/auth';
+import { getEnvironmentVariable } from '../lib/environment';
+
+export type CXOneFetchPageParams = {
+  subdomain: string;
+  options?: Record<string, string>;
+  query?: Record<string, string>;
+  silentFail?: boolean;
+  path: string | number;
+  api: string;
+};
+
+export type LibrariesSSMClient = {
+  apiUsername: string;
+  libTokenPairPath: string;
+  ssm: SSMClient;
+};
+
+export type LibraryKeyPair = {
+  key: string;
+  secret: string;
+};
+
+export type LibraryAPIRequestHeaders = {
+  'X-Deki-Token': string;
+  'X-Requested-With': string;
+};
+
+type ConstructorParams = {
+  lib: string;
+  user?: string;
+};
 
 /**
  * Class for interacting with the LibreTexts libraries hosted on Mindtouch.
  * NOTE: init() must be called immediately after instantiation, otherwise all fetch calls will fail.
  * @param {string} lib - The subdomain of the library to interact with.
  */
-export class LibrariesClient {
+export class LibraryService {
+  private expertAuthInstance: Auth | null = null;
+  private expertClient: Expert | null = null;
   private ssmClient: LibrariesSSMClient | null = null;
   private requestHeaders: LibraryAPIRequestHeaders | null = null;
   private keyPair: LibraryKeyPair | null = null;
-  private lib: string = '';
+  private readonly lib: string;
+  private readonly logName = 'LibraryClient';
+  private readonly user: string;
 
-  constructor(lib: string) {
-    this.lib = lib;
+  constructor(params: ConstructorParams) {
+    this.lib = params.lib;
+    this.user = params.user ?? 'LibreBot';
   }
 
   /**
@@ -26,6 +63,38 @@ export class LibrariesClient {
     this.ssmClient = this._generateLibrariesSSMClient();
     this.keyPair = await this._getLibraryTokenPair(this.lib);
     this.requestHeaders = this._generateAPIRequestHeaders();
+    this.expertClient = new Expert(`https://${this.lib}.libretexts.org`);
+  }
+
+  public get api() {
+    if (!this.expertClient) {
+      this.expertClient = new Expert(`https://${this.lib}.libretexts.org`);
+    }
+    return this.expertClient;
+  }
+
+  public get auth() {
+    if (!this.keyPair || !this.user || !this.expertClient) {
+      throw new Error(`[${this.logName}] Cannot get auth instance: missing KeyPair, User, or Client instance!`);
+    }
+    this.expertAuthInstance = this.expertClient.auth.ServerToken({
+      key: this.keyPair?.key ?? 'INVALID',
+      secret: this.keyPair?.secret ?? 'INVALID',
+      user: this.user,
+    });
+    return this.expertAuthInstance.getHeader();
+  }
+
+  public get authToken(): string {
+    if (!this.keyPair || !this.user || !this.expertClient) {
+      throw new Error(`[${this.logName}] Cannot get token: missing KeyPair, User, or Client instance!`);
+    }
+    this.expertAuthInstance = this.expertClient.auth.ServerToken({
+      key: this.keyPair?.key ?? 'INVALID',
+      secret: this.keyPair?.secret ?? 'INVALID',
+      user: this.user,
+    });
+    return this.expertAuthInstance.getToken()!;
   }
 
   /**
@@ -58,10 +127,10 @@ export class LibrariesClient {
 
       const ssm = new SSMClient({
         credentials: {
-          accessKeyId: process.env.AWS_SSM_ACCESS_KEY_ID || 'unknown',
-          secretAccessKey: process.env.AWS_SSM_SECRET_KEY || 'unknown',
+          accessKeyId: getEnvironmentVariable('AWS_ACCESS_KEY_ID'),
+          secretAccessKey: getEnvironmentVariable('AWS_SECRET_KEY'),
         },
-        region: process.env.AWS_SSM_REGION || 'unknown',
+        region: getEnvironmentVariable('AWS_REGION'),
       });
 
       return {
@@ -118,7 +187,7 @@ export class LibrariesClient {
         secret: libSec.Value,
       };
     } catch (err) {
-      console.error('Error retrieving library token pair. Lib: ' + lib);
+      console.error('Error retrieving library token pair. Lib: ' + lib, err);
       return null;
     }
   }

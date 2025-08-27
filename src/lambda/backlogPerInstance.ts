@@ -2,7 +2,7 @@ import { CloudWatchClient, PutMetricDataCommand } from '@aws-sdk/client-cloudwat
 import { ECSClient, ListTasksCommand } from '@aws-sdk/client-ecs';
 import { GetQueueAttributesCommand } from '@aws-sdk/client-sqs';
 import { Handler } from 'aws-lambda';
-import { QueueClient } from '../queueClient';
+import { QueueClient } from '../lib/queueClient';
 
 type BacklogPerInstanceEnvironment = {
   cloudwatchMetricName: string;
