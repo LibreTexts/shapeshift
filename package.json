@@ -38,7 +38,7 @@
     "@aws-sdk/client-sqs": "^3.515.0",
     "@aws-sdk/client-ssm": "^3.523.0",
     "@libretexts/cxone-expert-node": "^1.1.1",
-    "axios": "^1.6.7",
+    "axios": "^1.12.1",
     "chromiumly": "^3.8.2",
     "dotenv": "^17.1.0",
     "jszip": "^3.10.1",
