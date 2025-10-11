@@ -5,6 +5,7 @@ import JSZip from 'jszip';
 import { resolve } from 'node:path';
 import fs from 'node:fs/promises';
 import formatXml from 'xml-formatter';
+import { getEnvironmentVariable } from '../lib/environment';
 
 type ThinCCTopicPageData = { title: string; url: string };
 
@@ -104,7 +105,8 @@ export class ThinCCService {
     bookID: BookID;
     outFileNameOverride?: string;
   }) {
-    const dirPath = resolve(`./.tmp/out/${bookID.lib}-${bookID.pageID}`);
+    const tmpDir = getEnvironmentVariable('TMP_OUT_DIR', './.tmp');
+    const dirPath = resolve(`${tmpDir}/out/${bookID.lib}-${bookID.pageID}`);
     const fileName = outFileNameOverride ?? 'LibreText';
     const filePath = `${dirPath}/${fileName}.imscc`;
     await fs.mkdir(dirPath, { recursive: true });

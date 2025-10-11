@@ -18,6 +18,7 @@
       "singleQuote": true,
       "tabWidth": 2,
       "trailingComma": "all"
-    }]
+    }],
+    "@typescript-eslint/no-explicit-any": "off"
   }
 }

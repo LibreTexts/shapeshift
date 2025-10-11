@@ -1,14 +1,15 @@
 import { LicenseInfo } from './licensing';
 import { BookPageInfo } from '../services/book';
+import { PDFCoverOpts } from '../services/pdf';
 
 export const pdfPageMargins = '0.75in 0.625in 0.9in'; // top, left/right, bottom
 
 export function generatePDFHeader(headerImg: string) {
   return `
     <style>
-    * {
-      -webkit-print-color-adjust: exact;
-    }
+      * {
+        print-color-adjust: exact;
+      }
       #header {
           padding: 0 !important;
           margin: 0 !important;
@@ -44,28 +45,22 @@ export function generatePDFFooter({
   pageLicense,
   prefix,
 }: {
-  currentPage: BookPageInfo;
+  currentPage: BookPageInfo | null;
   mainColor: string;
   pageLicense: LicenseInfo | null;
   prefix: string;
 }) {
-  let programLink = null;
-  /* TODO
-  if (currentPage) {
-    const { programname, programurl, attributionprefix } = currentPage;
-    if (programname && programurl && attributionprefix) {
-      programLink = `
-        <a href="${programurl}" rel="noreferrer">
-          ${attributionprefix} ${programname}
-        </a>
-      `;
+  let programLink = '';
+  if (currentPage?.printInfo) {
+    const { attributionPrefix, programName, programURL } = currentPage.printInfo;
+    if (attributionPrefix && programName && programURL) {
+      programLink = `<a href="${programURL}" rel="noreferrer">${attributionPrefix} ${programName}</a>`;
     }
   }
-   */
   return `
     <style>
       * {
-        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
       }
       a {
           text-decoration:none;
@@ -219,3 +214,191 @@ export const pdfTOCStyles = `
     content: none !important; // MT default styling
   }
 `;
+
+const pdfCoverStyles = `
+  body {
+    margin: 0;
+    height: 100vh;
+    width: 100vw;
+    display: flex;
+    background-color: #127bc4;
+    font-family: 'Open Sans', sans-serif;
+    align-content: stretch;
+  }
+  * {
+    white-space: pre-wrap;
+    box-sizing: border-box;
+    /*border: 1px solid black;*/
+    print-color-adjust: exact;
+  }
+  #frontContainer, #backContainer {
+    display: flex;
+    flex: 1;
+    flex-direction: column;
+    justify-content: space-evenly;
+    /*width: 800px;*/
+    color: white;
+    padding: 80px 50px;
+    background-size: 100% 100%;
+    background-repeat: no-repeat;
+  }
+  #spine {
+    display: flex;
+    /*border: 1px dashed black;*/
+    writing-mode: vertical-rl;
+    padding: 80px 0;
+    align-items: center;
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    overflow: hidden;
+    color: white;
+  }
+  #spineCite > img {
+    max-width: 100%;
+    max-height: 6vh;
+    /*margin-top: 20px;*/
+  }
+  #spine > div {
+    flex: 1;
+    width: 100%;
+    display: flex;
+    align-items: center;
+  }
+  #frontContainer > div, #backContainer > div {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    flex: 1;
+    margin-right: 190px;
+  }
+  #backContainer > div {
+    align-items: center;
+  }
+  #spine > div:first-child {
+    margin-bottom: 70px;
+  }
+  #backContainer > div {
+    margin-left: 190px;
+    margin-right: unset;
+  }
+  #frontTitle {
+    font-size: 50px;
+    text-transform: uppercase;
+  }
+  #frontCite {
+    font-size: 28px;
+  }
+  #backLogo {
+    max-height: 70%;
+    max-width: 80%;
+    object-fit: contain;
+  }
+  div#backOverview {
+    flex: 1;
+    margin: 20px;
+    text-align: justify;
+    display: flex;
+    justify-content: center;
+    flex-direction: column;
+  }
+  #canvas {
+    align-self: flex-end;
+  }
+  #spineCite {
+    font-size: 80%;
+  }
+`;
+
+export function generatePDFFrontCoverContent(currentPage: BookPageInfo) {
+  return `
+    <div id="frontContainer">
+      <div>
+        <div id="frontTitle">${currentPage.printInfo.title ?? ''}</div>
+      </div>
+      <div>
+        <div id="frontCite"><i>${currentPage.printInfo.authorName ?? ''}</i><br/>${currentPage.printInfo.companyName ?? ''}</div>
+      </div>
+    </div>
+  `;
+}
+
+export function generatePDFBackCoverContent(currentPage: BookPageInfo) {
+  let logoSrc = 'https://cdn.libretexts.net/shapeshift/pdf_back_logo.png';
+  const logoTag = currentPage.tags.find((t) => t.startsWith('luluCover@'));
+  if (logoTag) {
+    logoSrc = logoTag.replace('luluCover@', '');
+  }
+  return `
+    <div id="backContainer">
+      <div>${logoSrc ? `<img id="backLogo" src="${logoSrc}">` : ''}</div>
+      <div>
+        <div id="backOverview">${currentPage.summary ?? ''}</div>
+        <canvas id="canvas"></canvas>
+      </div>
+    </div>
+    <script src="https://cdn.libretexts.net/shapeshift/qrcode.js"></script>
+    <script>
+      QRCode.toCanvas(
+        document.getElementById('canvas'),
+        '${currentPage.url}',
+        {
+          color: {
+            dark: '#127BC4',
+            light: '#FFF',
+          },
+          errorCorrectionLevel: 'low',
+          margin: 2,
+          scale: 2,
+        },
+        function (error) {
+          if (error) {
+            console.error(error);
+            return;
+          }
+          console.log('success!');
+        },
+      );
+    </script>
+  `;
+}
+
+export function generatePDFSpineContent({
+  currentPage,
+  opt,
+  spineWidth,
+  width,
+}: {
+  currentPage: BookPageInfo;
+  opt?: PDFCoverOpts;
+  spineWidth: number;
+  width: number;
+}) {
+  return `
+    <div id="spine">
+      <div>${currentPage.printInfo.spineTitle || currentPage.printInfo.title || currentPage.printInfo.title || ''}</div>
+      <div id="spineCite"><b style="flex:1; text-align: center">${currentPage.printInfo.authorName || ''}</b><img src="https://cdn.libretexts.net/shapeshift/stacked_logo.png" /></div>
+    </div>
+    <style>
+      #spine {
+        background-image: url("https://cdn.libretexts.net/shapeshift/SpineImages/${opt?.extraPadding ? 'LuluSpine' : 'NormalSpine'}/${currentPage.subdomain}.png");
+        width: ${(spineWidth / width) * 100}%;
+        font-size: ${Math.min((spineWidth / width) * 500, 40)}px;
+      }
+    </style>
+  `;
+}
+
+export function generatePDFCoverStyles({ currentPage, opt }: { currentPage: BookPageInfo; opt?: PDFCoverOpts }) {
+  return `
+    <style>${pdfCoverStyles}</style>
+		<link href="https://fonts.googleapis.com/css?family=Open+Sans:300,300i" rel="stylesheet" />
+    <style>
+      #frontContainer{
+        background-image: url("https://cdn.libretexts.net/shapeshift/CoverImages/${opt?.extraPadding ? 'LuluFront' : 'NormalFront'}/${currentPage.subdomain}.png");
+      }
+      #backContainer{
+        background-image: url("https://cdn.libretexts.net/shapeshift/CoverImages/${opt?.extraPadding ? 'LuluBack' : 'NormalBack'}/${currentPage.subdomain}.png");
+      }
+    </style>
+  `;
+}

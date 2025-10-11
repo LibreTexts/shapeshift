@@ -34,8 +34,11 @@ export type BookPageInfo = {
 };
 
 export type BookPrintInfo = {
+  attributionPrefix: string;
   authorName: string;
   companyName: string;
+  programName: string;
+  programURL: string;
   spineTitle: string;
   title: string;
 };
@@ -211,6 +214,7 @@ export class BookService {
     const getPageInfo = async (p: GetPagesResponse): Promise<BookPageInfo> => {
       await CXOneRateLimiter.waitUntilAPIAvailable(2);
       const pageDetails = await lib.api.pages.getPage(Number(p['@id']), { auth: lib.auth });
+      const url = pageDetails['uri.ui']!;
       const subpagesRaw = isNonNullCXOneObject(p.subpages) ? p.subpages : null;
       const subpages = Array.isArray(subpagesRaw?.page)
         ? subpagesRaw?.page
@@ -232,6 +236,10 @@ export class BookService {
         id: Number(p['@id']),
         lib: libName,
         license: getLicense(parsedTags),
+        // FIXME: how to support non-English texts?
+        ...(['Back_Matter', 'Front_Matter'].some((s) => url.includes(s)) && {
+          matterType: url.includes('Back_Matter') ? 'Back' : 'Front',
+        }),
         printInfo,
         properties: parsedProperties,
         subdomain: libName,
@@ -239,7 +247,7 @@ export class BookService {
         summary: summaryProp?.value ?? '',
         tags: parsedTags,
         title: pageDetails.title?.trim() || '',
-        url: pageDetails['uri.ui']!,
+        url,
       };
     };
     const pages = await getPageInfo(pagesRaw);
@@ -310,8 +318,11 @@ export class BookService {
     tags: string[];
   }): Promise<BookPrintInfo> {
     const info: BookPrintInfo = {
+      attributionPrefix: '',
       authorName: '',
       companyName: '',
+      programName: '',
+      programURL: '',
       spineTitle: '',
       title: 'null',
     };
@@ -339,6 +350,9 @@ export class BookService {
       if (author) {
         info.authorName = author.name ?? '';
         info.companyName = author.companyname ?? '';
+        if (author.attributionprefix) info.attributionPrefix = author.attributionprefix;
+        if (author.programname) info.programName = author.programname;
+        if (author.programurl) info.programURL = author.programurl;
       }
     }
     return info;

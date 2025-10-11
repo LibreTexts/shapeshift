@@ -111,3 +111,7 @@ export function assembleUrl(parts: string[]) {
   }
   return url;
 }
+
+export function isNullOrUndefined(arg: any): arg is null | undefined {
+  return typeof arg === 'undefined' || arg === null;
+}

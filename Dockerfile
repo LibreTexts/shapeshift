@@ -1,11 +1,15 @@
-FROM node:20.11-alpine
+FROM ghcr.io/puppeteer/puppeteer:latest
 LABEL org.opencontainers.image.source="https://github.com/LibreTexts/shapeshift"
 
 WORKDIR /usr/src/shapeshift
 
-COPY . .
-
+# Install prod deps first for better caching
+COPY package*.json ./
 RUN npm ci
+
+# Build
+COPY . .
 RUN npm run build
 
-ENTRYPOINT ["node", "build/index.js"]
+# Puppeteer image sets up Chrome; no executablePath needed
+ENTRYPOINT ["node", "build/run.js"]

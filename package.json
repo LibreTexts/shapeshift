@@ -9,7 +9,8 @@
     "lint-and-fix": "eslint . --ext .ts --fix",
     "test": "echo \"Error: no test specified\" && exit 1",
     "prepare": "husky",
-    "prettier": "prettier --config .prettierrc 'src/**/*.ts' --write"
+    "prettier": "prettier --config .prettierrc 'src/**/*.ts' --write",
+    "sync-db-schema": "tsx src/syncDBSchema.ts"
   },
   "author": "LibreTexts <info@libretexts.org>",
   "license": "MIT",
@@ -45,12 +46,11 @@
     "loglayer": "^6.6.0",
     "mysql2": "^3.14.2",
     "pdf-lib": "^1.17.1",
-    "puppeteer": "^24.13.0",
+    "puppeteer": "^24.22.3",
     "rate-limiter-flexible": "^7.1.1",
     "reflect-metadata": "^0.2.2",
     "sequelize": "^6.37.7",
     "sequelize-typescript": "^2.1.6",
-    "serialize-error": "^12.0.0",
     "uuid": "^11.1.0",
     "xml-formatter": "^3.6.6",
     "yargs": "^17.7.2",

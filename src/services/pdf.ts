@@ -3,20 +3,33 @@ import { v4 as uuid } from 'uuid';
 import { resolve } from 'node:path';
 import puppeteer, { Browser, Dialog, Viewport, HTTPRequest, GoToOptions } from 'puppeteer';
 import { pdfIgnoreList } from '../util/ignoreLists';
-import { generatePDFFooter, generatePDFHeader, pdfPageMargins, pdfTOCStyles } from '../util/pdfHelpers';
+import {
+  generatePDFBackCoverContent,
+  generatePDFCoverStyles,
+  generatePDFFooter,
+  generatePDFFrontCoverContent,
+  generatePDFHeader,
+  generatePDFSpineContent,
+  pdfPageMargins,
+  pdfTOCStyles,
+} from '../util/pdfHelpers';
 import { ImageConstants } from '../util/imageConstants';
-import { sleep } from '../helpers';
+import { isNullOrUndefined, sleep } from '../helpers';
 import { log as logService } from '../lib/log';
 import { BookID, BookPageInfo } from './book';
 import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
 import { PDFDocument } from 'pdf-lib';
 import { LogLayer } from 'loglayer';
+import { getEnvironmentVariable } from '../lib/environment';
 
-type PDFCoverOpts = {
+export type PDFCoverOpts = {
   extraPadding?: boolean;
   hardcover?: boolean;
   thin?: boolean;
 };
+
+const pdfCoverTypes = ['Amazon', 'CaseWrap', 'CoilBound', 'Main', 'PerfectBound'] as const;
+type PDFCoverType = (typeof pdfCoverTypes)[number];
 
 export class PDFService {
   private _browser: Browser | null = null;
@@ -32,9 +45,20 @@ export class PDFService {
     this.logger = logService.child().withContext({ logSource: this.logName });
   }
 
+  private async calculateNumPagesInPDFDocument(filePath: string): Promise<number> {
+    const file = await fs.readFile(filePath);
+    const filePDF = await PDFDocument.load(file);
+    return filePDF.getPageCount();
+  }
+
   private async getBrowser(): Promise<Browser> {
     if (!this._browser) {
-      this._browser = await puppeteer.launch();
+      this._browser = await puppeteer.launch({
+        headless: true,
+        args: ['--font-render-hinting=none', '--force-color-profile=sRGB'],
+      });
+      console.log({ executable: puppeteer.executablePath() });
+      console.log({ version: await this._browser.version() });
     }
     return this._browser;
   }
@@ -46,7 +70,8 @@ export class PDFService {
     bookID: BookID;
     outFileNameOverride?: string;
   }) {
-    const dirPath = resolve(`./.tmp/out/${bookID.lib}-${bookID.pageID}`);
+    const tmpDir = getEnvironmentVariable('TMP_OUT_DIR', './.tmp');
+    const dirPath = resolve(`${tmpDir}/out/${bookID.lib}-${bookID.pageID}`);
     const fileName = outFileNameOverride ?? 'Full';
     const filePath = `${dirPath}/${fileName}.pdf`;
     await fs.mkdir(dirPath, { recursive: true });
@@ -60,7 +85,8 @@ export class PDFService {
     bookID: BookID;
     outFileNameOverride?: string;
   }) {
-    const dirPath = resolve(`./.tmp/pdf/${bookID.lib}-${bookID.pageID}`);
+    const tmpDir = getEnvironmentVariable('TMP_OUT_DIR', './.tmp');
+    const dirPath = resolve(`${tmpDir}/pdf/${bookID.lib}-${bookID.pageID}`);
     const fileName = outFileNameOverride ?? uuid();
     const filePath = `${dirPath}/${fileName}.pdf`;
     await fs.mkdir(dirPath, { recursive: true });
@@ -68,7 +94,8 @@ export class PDFService {
   }
 
   private async ensureCoversDirectory(bookID: BookID) {
-    const dirPath = resolve(`./.tmp/pdf/${bookID.lib}-${bookID.pageID}/covers/`);
+    const tmpDir = getEnvironmentVariable('TMP_OUT_DIR', './.tmp');
+    const dirPath = resolve(`${tmpDir}/pdf/${bookID.lib}-${bookID.pageID}/covers/`);
     await fs.mkdir(dirPath, { recursive: true });
     return dirPath;
   }
@@ -103,27 +130,42 @@ export class PDFService {
   }
 
   public async convertBook({ bookID, pages }: { bookID: BookID; pages: BookPageInfo }) {
+    let backMatterIdx = 0;
+    let frontMatterIdx = 0;
     const pagePaths: string[] = [];
     const convertTree = async (p: BookPageInfo) => {
-      const idx = `${pagePaths.length}`.padStart(4, '0');
+      const idx = `${pagePaths.length + 1}`.padStart(4, '0');
       if (
         Array.isArray(p.subpages) &&
         p.subpages.length > 1 &&
-        (p.tags.includes('article:topic-category') || p.tags.includes('article:topic-guide'))
+        (p.tags.includes('article:topic-category') || p.tags.includes('article:topic-guide')) &&
+        !['Back Matter', 'Front Matter'].some((t) => !p.title.includes(t)) // TODO: handle non-English texts
       ) {
         pagePaths.push(
           await this.generateTableOfContents({
             pageInfo: p,
-            outFileNameOverride: `1:${idx}_TOC`,
+            outFileNameOverride: `${idx}_TOC`,
           }),
         );
       } else {
-        pagePaths.push(
-          await this.convertPage({
-            pageInfo: p,
-            outFileNameOverride: `1:${idx}_${p.lib}-${p.id}`,
-          }),
-        );
+        let idxPrefix = idx;
+        if (p.matterType === 'Front') {
+          frontMatterIdx += 1;
+          idxPrefix = `0000:${frontMatterIdx}`;
+        }
+        if (p.matterType === 'Back') {
+          backMatterIdx += 1;
+          idxPrefix = `9999:${backMatterIdx}`;
+        }
+        // TODO: handle non-English texts
+        if (!['Back Matter', 'Front Matter'].some((t) => p.title.includes(t))) {
+          pagePaths.push(
+            await this.convertPage({
+              pageInfo: p,
+              outFileNameOverride: `${idxPrefix}_${p.lib}-${p.id}`,
+            }),
+          );
+        }
       }
       if (!Array.isArray(p.subpages)) return;
       for (const sub of p.subpages) {
@@ -131,7 +173,30 @@ export class PDFService {
       }
     };
     await convertTree(pages);
-    return await this.mergePagesAndWrite({ bookID, pages: pagePaths });
+    const contentFilePath = await this.mergeContentPagesAndWrite({ bookID, pages: pagePaths });
+    const numPages = await this.calculateNumPagesInPDFDocument(contentFilePath);
+
+    // <covers>
+    await Promise.all(
+      (
+        [
+          { coverType: 'Amazon', numPages },
+          { coverType: 'CaseWrap', numPages, opt: { extraPadding: true, hardcover: true } },
+          { coverType: 'CoilBound', numPages, opt: { extraPadding: true, thin: true } },
+          { coverType: 'Main', numPages: null },
+          { coverType: 'PerfectBound', numPages, opt: { extraPadding: true } },
+        ] as { coverType: PDFCoverType; numPages: number | null; opt?: PDFCoverOpts }[]
+      ).map(async (config) => {
+        await this.generateCover({
+          bookInfo: pages,
+          coverType: config.coverType,
+          numPages: config.numPages,
+          opt: config.opt,
+        });
+      }),
+    );
+    // </covers>
+    return await this.mergeContentPagesAndWrite({ bookID, pages: pagePaths });
   }
 
   public async convertPage({
@@ -175,16 +240,23 @@ export class PDFService {
     const showHeaders = !(
       pageInfo.tags.includes('printoptions:no-header') || pageInfo.tags.includes('printoptions:no-header-title')
     );
-    // TOOD: re-evaluate
+    // TODO: re-evaluate
+    if (pageInfo.tags.includes('hidetop:solutions')) {
+      await page.addStyleTag({ content: 'dd, dl {display: none;} h3 {font-size: 160%}' });
+    }
     if (pageInfo.url.includes('Wakim_and_Grewal')) {
       await page.addStyleTag({ content: `.mt-content-container {font-size: 93%}` });
     }
     await page.addStyleTag({
       content: `
         @page {
-          size: letter portrait;
+          size: calc(8.5in - (0.75in + 0.9in)) calc(11in - 0.625in);
           margin: ${showHeaders ? `${pdfPageMargins};` : '0.625in;'}
           padding: 0;
+          print-color-adjust: exact;
+        }
+        #elm-main-content {
+          padding: 0 !important;
         }
         ${pdfTOCStyles}
       `,
@@ -262,12 +334,21 @@ export class PDFService {
     return outputDocument.save();
   }
 
-  public async mergePagesAndWrite({ bookID, pages }: { bookID: BookID; pages: string[] }) {
-    const sortedPages = Array.from(pages).sort((a, b) =>
-      a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' }),
-    );
+  public async mergeContentPagesAndWrite({ bookID, pages }: { bookID: BookID; pages: string[] }) {
+    const extractFileName = (filePath: string) => {
+      const split = filePath.split('/');
+      return split[split.length - 1];
+    };
+    const isSplittable = (filePath: string) => !!filePath.split('/').length;
+    const sortedPages = pages
+      .filter((p) => isSplittable(p))
+      .sort((aRaw, bRaw) => {
+        const a = extractFileName(aRaw);
+        const b = extractFileName(bRaw);
+        return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+      });
     const mergedRaw = await this.mergeFiles(sortedPages);
-    const outPath = await this.generateFinalOutputFileName({ bookID });
+    const outPath = await this.generatePageOutputFileName({ bookID, outFileNameOverride: 'Content' });
     await fs.writeFile(outPath, mergedRaw);
     return outPath;
   }
@@ -349,11 +430,13 @@ export class PDFService {
 
   private async generateCover({
     bookInfo,
+    coverType,
     numPages,
     opt,
   }: {
     bookInfo: BookPageInfo;
-    numPages: number;
+    coverType: PDFCoverType;
+    numPages: number | null;
     opt?: PDFCoverOpts;
   }) {
     const dirPath = await this.ensureCoversDirectory({ lib: bookInfo.lib, pageID: bookInfo.id });
@@ -361,19 +444,46 @@ export class PDFService {
     // options.thin || numPages < 32
     const browser = await this.getBrowser();
     const page = await browser.newPage();
-    const content = '';
+
+    const spineWidth = this.getCoverSpineWidth({ numPages, opt });
+    const width = this.getCoverWidth({ numPages, opt });
+    const frontContent = generatePDFFrontCoverContent(bookInfo);
+    const backContent = generatePDFBackCoverContent(bookInfo);
+    const spine = generatePDFSpineContent({ currentPage: bookInfo, opt, spineWidth, width });
+    const styles = generatePDFCoverStyles({ currentPage: bookInfo, opt });
+
+    const baseContent = numPages
+      ? `${styles}${backContent}${opt?.thin ? '' : spine}${frontContent}`
+      : `${styles}${frontContent}`;
+    const content = `
+      ${baseContent}
+      ${
+        opt?.extraPadding
+          ? `
+          <style>
+            #frontContainer, #backContainer {
+              padding: 117px 50px;
+            }
+            #spine {
+              padding: 117px 0;
+            }
+          </style>`
+          : ''
+      }
+    `;
     await page.setContent(content, { waitUntil: ['load', 'domcontentloaded', 'networkidle0'] });
     await page.pdf({
-      path: `${dirPath}/`,
+      path: `${dirPath}/${coverType}.pdf`,
       printBackground: true,
       width: numPages ? `${this.getCoverWidth({ numPages, opt })} in` : '8.5 in',
       height: numPages ? (opt?.hardcover ? '12.75 in' : '11.25 in') : '11 in',
       timeout: this.pageLoadSettings.timeout,
     });
     await page.close();
+    this.logger.withMetadata({ coverType, url: bookInfo.url }).info('Generated cover.');
   }
 
-  private getCoverSpineWidth({ numPages, opt }: { numPages: number; opt?: PDFCoverOpts }) {
+  private getCoverSpineWidth({ numPages, opt }: { numPages: number | null; opt?: PDFCoverOpts }) {
     const sizes: Record<string, number | null> = {
       '0': null,
       '24': 0.25,
@@ -405,8 +515,8 @@ export class PDFService {
       '800': 2.125,
     };
     if (opt?.thin) return 0;
-    if (opt && !opt.extraPadding) return numPages * 0.002252; // Amazon side
-    if (opt?.hardcover) {
+    if (opt && !opt.extraPadding && !isNullOrUndefined(numPages)) return numPages * 0.002252; // Amazon side
+    if (opt?.hardcover && !isNullOrUndefined(numPages)) {
       const res = Object.entries(sizes).reduce(
         (acc, [k, v]) => {
           if (numPages > parseInt(k)) return v;
@@ -417,11 +527,12 @@ export class PDFService {
       if (res) return res;
     }
 
+    if (isNullOrUndefined(numPages)) return 0;
     const baseWidth = numPages / 444 + 0.06;
     return Math.floor(baseWidth * 1000) / 1000;
   }
 
-  private getCoverWidth({ numPages, opt }: { numPages: number; opt?: PDFCoverOpts }) {
+  private getCoverWidth({ numPages, opt }: { numPages: number | null; opt?: PDFCoverOpts }) {
     const sizes: Record<string, number | null> = {
       '0': null,
       '24': 0.25,
@@ -453,8 +564,8 @@ export class PDFService {
       '800': 2.125,
     };
     if (opt?.thin) return 17.25;
-    if (opt && !opt.extraPadding) return numPages * 0.002252 + 0.375 + 17; // Amazon size
-    if (opt?.hardcover) {
+    if (opt && !opt.extraPadding && !isNullOrUndefined(numPages)) return numPages * 0.002252 + 0.375 + 17; // Amazon size
+    if (opt?.hardcover && !isNullOrUndefined(numPages)) {
       const res = Object.entries(sizes).reduce(
         (acc, [k, v]) => {
           if (numPages > parseInt(k)) return v;
@@ -465,6 +576,7 @@ export class PDFService {
       if (res) return res + 18.75;
     }
 
+    if (isNullOrUndefined(numPages)) return 0;
     const baseWidth = numPages / 444 + 0.06 + 17.25;
     return Math.floor(baseWidth * 1000) / 1000;
   }
@@ -526,9 +638,9 @@ export class PDFService {
       displayHeaderFooter: true,
       headerTemplate: generatePDFHeader(ImageConstants['default']),
       footerTemplate: generatePDFFooter({
-        currentPage: pageInfo,
+        currentPage: null,
         mainColor: '#127BC4',
-        pageLicense: pageInfo.license,
+        pageLicense: null,
         prefix: '',
       }),
       printBackground: true,
@@ -540,7 +652,9 @@ export class PDFService {
     return path;
   }
 
+  /*
   private async generateMatter({ mode, pageInfo }: { mode: 'back' | 'front'; pageInfo: BookPageInfo }) {
     // TODO
   }
+   */
 }

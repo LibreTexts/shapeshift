@@ -1,4 +1,4 @@
-import { ImageConstants } from '../../util/image_constants';
+import { ImageConstants } from '../../util/imageConstants.js';
 
 export function createPdfFooter(
   currentPage: Record<string, string>,
@@ -24,7 +24,7 @@ export function createPdfFooter(
     <title>PDF Footer</title>
     <style>
       * {
-        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
       }
       a {
         text-decoration:none;
@@ -128,7 +128,7 @@ export function createPdfHeader(headerImg?: string) {
       <title>PDF Header</title>
       <style>
         * {
-          -webkit-print-color-adjust: exact;
+          print-color-adjust: exact;
         }
           #header {
             padding: 0 !important;

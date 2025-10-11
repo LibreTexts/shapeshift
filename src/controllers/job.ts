@@ -8,7 +8,7 @@ import { APIGatewayEvent } from 'aws-lambda';
 import { z } from 'zod';
 import { Attributes } from 'sequelize';
 import { Job } from '../model';
-import { LambdaBaseResponse } from '../types';
+import { LambdaBaseResponse } from '../helpers';
 
 const createJobSchema = z.object({
   highPriority: z.boolean(),
