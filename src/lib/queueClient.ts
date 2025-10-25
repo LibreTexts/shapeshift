@@ -1,6 +1,6 @@
 import { ReceiveMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
 import { JobQueueMessage, JobQueueMessageRawBody } from '../services/job';
-import { WorkerEnvironment } from './workerEnvironment';
+import { ProcessorWorkerEnvironment } from './processorWorkerEnvironment';
 import { getEnvironmentVariable } from './environment';
 
 export class QueueClient {
@@ -18,7 +18,7 @@ export class QueueClient {
     const messages = await client.send(
       new ReceiveMessageCommand({
         MaxNumberOfMessages: 2,
-        QueueUrl: WorkerEnvironment.getEnvironment().sqsQueueURL,
+        QueueUrl: ProcessorWorkerEnvironment.getEnvironment().SQS_QUEUE_URL,
         WaitTimeSeconds: 60,
       }),
     );

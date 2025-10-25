@@ -1,6 +1,6 @@
 import { QueueClient } from '../lib/queueClient';
 import { DeleteMessageCommand } from '@aws-sdk/client-sqs';
-import { WorkerEnvironment } from '../lib/workerEnvironment';
+import { ProcessorWorkerEnvironment } from '../lib/processorWorkerEnvironment';
 import { BookService } from './book';
 import { getEnvironment } from '../lib/environment';
 import { PDFService } from './pdf';
@@ -76,7 +76,7 @@ export class JobService {
     const client = QueueClient.getClient();
     await client.send(
       new DeleteMessageCommand({
-        QueueUrl: WorkerEnvironment.getEnvironment().sqsQueueURL,
+        QueueUrl: ProcessorWorkerEnvironment.getEnvironment().SQS_QUEUE_URL,
         ReceiptHandle: job.receiptHandle,
       }),
     );

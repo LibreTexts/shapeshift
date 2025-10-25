@@ -1,26 +1,20 @@
 import { libraryNameKeysWDev } from './librariesmap';
-
-export type LambdaBaseResponse = { status: number };
+import { Request } from 'express';
 
 export type ErrorWithMessage = {
   message: string;
 };
 
-export function generateHTTPResponse(responseBody: LambdaBaseResponse, reqOrigin?: string) {
-  let allowOrigin = false;
-  if (reqOrigin && reqOrigin.endsWith('.libretexts.org')) {
-    allowOrigin = true;
+export function extractIPFromHeaders(req: Request) {
+  const forwardFor = req.headers['x-forwarded-for'];
+  if (forwardFor && typeof forwardFor === 'string') {
+    const ips = forwardFor.split(',').map((ip) => ip.trim());
+    if (ips.length > 0) {
+      return ips[0]; // Use the first IP in the list
+    }
   }
-  return {
-    body: JSON.stringify(responseBody),
-    statusCode: responseBody.status.toString(),
-    headers: {
-      'Content-Type': 'application/json',
-      'Access-Control-Allow-Origin': allowOrigin ? reqOrigin : 'https://api.libretexts.org',
-      'Access-Control-Allow-Headers': 'Content-Type,X-Amz-Date,Authorization,X-Api-Key,X-Amz-Security-Token',
-      'Access-Control-Allow-Methods': 'POST,OPTIONS',
-    },
-  };
+
+  return req.ip || ''; // Fallback to req.ip if no X-Forwarded-For header
 }
 
 export function getSubdomainFromLibrary(library: string): string | null {

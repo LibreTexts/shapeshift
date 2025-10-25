@@ -4,7 +4,7 @@ import axios, { AxiosResponse } from 'axios';
 import { getErrorMessage } from '../helpers';
 import Expert from '@libretexts/cxone-expert-node';
 import Auth from '@libretexts/cxone-expert-node/dist/modules/auth';
-import { getEnvironmentVariable } from '../lib/environment';
+import { ProcessorWorkerEnvironment } from '../lib/processorWorkerEnvironment';
 
 export type CXOneFetchPageParams = {
   subdomain: string;
@@ -125,12 +125,13 @@ export class LibraryService {
       const libTokenPairPath = process.env.AWS_SSM_LIB_TOKEN_PAIR_PATH || '/libkeys/production';
       const apiUsername = process.env.LIBRARIES_API_USERNAME || 'LibreBot';
 
+      const workerEnvironment = ProcessorWorkerEnvironment.getEnvironment();
       const ssm = new SSMClient({
         credentials: {
-          accessKeyId: getEnvironmentVariable('AWS_ACCESS_KEY_ID'),
-          secretAccessKey: getEnvironmentVariable('AWS_SECRET_KEY'),
+          accessKeyId: workerEnvironment.AWS_ACCESS_KEY_ID,
+          secretAccessKey: workerEnvironment.AWS_SECRET_ACCESS_KEY,
         },
-        region: getEnvironmentVariable('AWS_REGION'),
+        region: workerEnvironment.AWS_REGION,
       });
 
       return {

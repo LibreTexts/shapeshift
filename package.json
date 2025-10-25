@@ -18,6 +18,8 @@
     "@commitlint/cli": "^18.6.1",
     "@commitlint/config-conventional": "^18.6.2",
     "@types/aws-lambda": "^8.10.133",
+    "@types/cors": "^2.8.19",
+    "@types/express": "^5.0.3",
     "@types/node": "^20.19.8",
     "@types/validator": "^13.15.2",
     "@types/yargs": "^17.0.33",
@@ -36,12 +38,17 @@
   "dependencies": {
     "@aws-sdk/client-cloudwatch": "^3.515.0",
     "@aws-sdk/client-ecs": "^3.515.0",
+    "@aws-sdk/client-s3": "^3.908.0",
     "@aws-sdk/client-sqs": "^3.515.0",
     "@aws-sdk/client-ssm": "^3.523.0",
-    "@libretexts/cxone-expert-node": "^1.1.1",
+    "@aws-sdk/lib-storage": "^3.910.0",
+    "@libretexts/cxone-expert-node": "^1.1.2",
     "axios": "^1.6.7",
     "chromiumly": "^3.8.2",
+    "cors": "^2.8.5",
     "dotenv": "^17.1.0",
+    "express": "^5.1.0",
+    "helmet": "^8.1.0",
     "jszip": "^3.10.1",
     "loglayer": "^6.6.0",
     "mysql2": "^3.14.2",
@@ -54,6 +61,6 @@
     "uuid": "^11.1.0",
     "xml-formatter": "^3.6.6",
     "yargs": "^17.7.2",
-    "zod": "^3.22.4"
+    "zod": "^3.25.76"
   }
 }
