@@ -1,14 +1,13 @@
-import zod, { AnyZodObject, z } from 'zod';
+import zod, { ZodObject, ZodError } from 'zod';
 import { Request, Response, NextFunction } from 'express';
-
-const jobIdSchema = z.string().length(12);
+const jobIdSchema = zod.string().length(12);
 
 export const validators = {
   job: {
     create: zod.object({
       body: zod.object({
-        highPriority: z.boolean(),
-        url: z.string().url(),
+        highPriority: zod.boolean(),
+        url: zod.url(),
       }),
     }),
     get: zod.object({
@@ -19,7 +18,7 @@ export const validators = {
   },
 };
 
-function extractZodErrorMessages(validationResult: z.ZodError): string[] {
+function extractZodErrorMessages(validationResult: ZodError): string[] {
   const errors: string[] = [];
   for (const error of validationResult.issues) {
     errors.push(error.message);
@@ -27,7 +26,7 @@ function extractZodErrorMessages(validationResult: z.ZodError): string[] {
   return errors;
 }
 
-export function validateZod(schema: AnyZodObject) {
+export function validateZod(schema: ZodObject) {
   return async (req: Request, res: Response, next: NextFunction) => {
     let validationErrors: string[] = [];
     try {
