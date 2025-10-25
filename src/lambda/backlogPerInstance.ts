@@ -4,23 +4,38 @@ import { GetQueueAttributesCommand } from '@aws-sdk/client-sqs';
 import { Handler } from 'aws-lambda';
 import { QueueClient } from '../lib/queueClient';
 
-type BacklogPerInstanceEnvironment = {
-  cloudwatchMetricName: string;
-  cloudwatchNamespace: string;
-  ecsClusterName: string;
-  ecsServiceName: string;
-  sqsQueueURL: string;
-};
+const BACKLOG_PER_INSTANCE_ENVIRONMENT_VARIABLES = [
+  'CLOUDWATCH_METRIC_NAME',
+  'CLOUDWATCH_NAMESPACE',
+  'ECS_CLUSTER_NAME',
+  'ECS_SERVICE_NAME',
+  'SQS_QUEUE_URL',
+] as const;
+type BacklogPerInstanceEnvironmentVariable = (typeof BACKLOG_PER_INSTANCE_ENVIRONMENT_VARIABLES)[number];
+type BacklogPerInstanceEnvironment = Record<BacklogPerInstanceEnvironmentVariable, string>;
 
-let environment: BacklogPerInstanceEnvironment;
+let _environment: BacklogPerInstanceEnvironment;
+
+function getEnvironment() {
+  if (!_environment) _environment = {} as BacklogPerInstanceEnvironment;
+  if (Object.keys(_environment).length === 0) {
+    for (const varName of BACKLOG_PER_INSTANCE_ENVIRONMENT_VARIABLES) {
+      const v = process.env[varName];
+      if (!v) throw new Error(`Missing required environment variable ${varName}`);
+      _environment[varName] = v;
+    }
+  }
+  return _environment;
+}
 
 async function computeBacklogPerInstance() {
+  const environment = getEnvironment();
   const ecsClient = new ECSClient();
   const queueClient = QueueClient.getClient();
   const queueAttr = await queueClient.send(
     new GetQueueAttributesCommand({
       AttributeNames: ['ApproximateNumberOfMessages'],
-      QueueUrl: environment.sqsQueueURL,
+      QueueUrl: environment.SQS_QUEUE_URL,
     }),
   );
   const numMessagesRaw = queueAttr.Attributes?.ApproximateNumberOfMessages;
@@ -31,8 +46,8 @@ async function computeBacklogPerInstance() {
 
   const tasks = await ecsClient.send(
     new ListTasksCommand({
-      cluster: environment.ecsClusterName,
-      serviceName: environment.ecsServiceName,
+      cluster: environment.ECS_CLUSTER_NAME,
+      serviceName: environment.ECS_SERVICE_NAME,
     }),
   );
   const numTasks = tasks.taskArns?.length;
@@ -43,23 +58,24 @@ async function computeBacklogPerInstance() {
 }
 
 async function updateBacklogPerInstanceMetric(metricValue: number) {
+  const environment = getEnvironment();
   const cloudwatchClient = new CloudWatchClient();
   await cloudwatchClient.send(
     new PutMetricDataCommand({
-      Namespace: environment.cloudwatchNamespace,
+      Namespace: environment.CLOUDWATCH_NAMESPACE,
       MetricData: [
         {
           Dimensions: [
             {
               Name: 'ClusterName',
-              Value: environment.ecsClusterName,
+              Value: environment.ECS_CLUSTER_NAME,
             },
             {
               Name: 'ServiceName',
-              Value: environment.ecsServiceName,
+              Value: environment.ECS_SERVICE_NAME,
             },
           ],
-          MetricName: environment.cloudwatchMetricName,
+          MetricName: environment.CLOUDWATCH_METRIC_NAME,
           StorageResolution: 60,
           Timestamp: new Date(),
           Unit: 'Count',
@@ -73,20 +89,7 @@ async function updateBacklogPerInstanceMetric(metricValue: number) {
 
 export const runMetricUpdate: Handler = async () => {
   try {
-    const environ = {
-      cloudwatchMetricName: process.env.CLOUDWATCH_METRIC_NAME,
-      cloudwatchNamespace: process.env.CLOUDWATCH_NAMESPACE,
-      ecsClusterName: process.env.ECS_CLUSTER_NAME,
-      ecsServiceName: process.env.ECS_SERVICE_NAME,
-      sqsQueueURL: process.env.SQS_QUEUE_URL,
-    };
-    Object.entries(environ).forEach(([key, value]) => {
-      if (!value) {
-        throw new Error(`Missing required environment variable ${key}`);
-      }
-    });
-    environment = environ as BacklogPerInstanceEnvironment;
-
+    getEnvironment(); // ensure required variables are present
     const backlogPerInstance = await computeBacklogPerInstance();
     await updateBacklogPerInstanceMetric(backlogPerInstance);
     return { statusCode: 200 };
