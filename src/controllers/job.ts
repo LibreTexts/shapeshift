@@ -3,20 +3,32 @@ import { getEnvironment } from '../lib/environment';
 import { QueueClient } from '../lib/queueClient';
 import { SendMessageCommand } from '@aws-sdk/client-sqs';
 import zod from 'zod';
-import { Request, Response } from 'express';
+import { Response } from 'express';
 import { validators } from '../api/validators';
-import { extractIPFromHeaders } from '../helpers';
+import { extractIPFromHeaders, ZodRequest } from '../helpers';
 import { APIWorkerEnvironment } from '../lib/apiWorkerEnvironment';
+import { LogLayer } from 'loglayer';
+import { log as logService } from '../lib/log';
 
 export class JobController {
-  public async create(req: Request & zod.infer<typeof validators.job.create>, res: Response) {
+  private readonly logger: LogLayer;
+  private readonly logName = 'JobController';
+
+  constructor() {
+    this.logger = logService.child().withContext({ logSource: this.logName });
+  }
+
+  public async create(req: ZodRequest<zod.infer<typeof validators.job.create>>, res: Response) {
     const data = req.body;
     const jobModel = new JobService();
+    const { isHighPriority, url } = data;
+    const requesterIp = extractIPFromHeaders(req);
     const jobId = await jobModel.create({
-      isHighPriority: data.highPriority,
-      requesterIp: extractIPFromHeaders(req),
-      url: data.url,
+      isHighPriority,
+      requesterIp,
+      url,
     });
+    this.logger.withMetadata({ isHighPriority, jobId, requesterIp, url }).info('Job created.');
 
     if (getEnvironment() !== 'DEVELOPMENT') {
       const sqsClient = QueueClient.getClient();
@@ -40,8 +52,8 @@ export class JobController {
     });
   }
 
-  public async get(req: zod.infer<typeof validators.job.get>, res: Response) {
-    const jobId = req.params.jobId;
+  public async get(req: ZodRequest<zod.infer<typeof validators.job.get>>, res: Response) {
+    const jobId = req.params.jobID;
     const jobModel = new JobService();
     const job = await jobModel.get(jobId);
     if (!job) {

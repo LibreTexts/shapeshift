@@ -1,3 +1,4 @@
+import axios from 'axios';
 import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
 import { getLicense, LicenseInfo } from '../util/licensing';
 import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject, omit } from '../helpers';
@@ -44,6 +45,12 @@ export type BookPrintInfo = {
 };
 
 export class BookService {
+  private readonly DEFAULT_THUMBNAILS = {
+    BACK_MATTER: 'https://cdn.libretexts.net/DefaultImages/Back%20matter.jpg',
+    DEFAULT: 'https://cdn.libretexts.net/DefaultImages/default.png',
+    FRONT_MATTER: 'https://cdn.libretexts.net/DefaultImages/Front%20Matter.jpg',
+  };
+
   public async createDefaultBackMatter({ createOnly, pageInfo }: { createOnly?: boolean; pageInfo: BookPageInfo }) {
     const lib = new LibraryService({ lib: pageInfo.lib });
     await lib.init();
@@ -95,6 +102,16 @@ export class BookService {
         edittime: 'now',
         ...(!createOnly && { abort: 'exists' }),
       },
+    );
+
+    // Set thumbnail
+    const thumbnailRes = await axios.get(this.DEFAULT_THUMBNAILS.BACK_MATTER, { responseType: 'arraybuffer' });
+    const thumbnail = Buffer.from(thumbnailRes.data);
+    await lib.api.pages.putPageFileName(
+      assembleUrl([pageInfo.url, 'Back_Matter']),
+      '=mindtouch.page%2523thumbnail',
+      thumbnail,
+      { auth: lib.auth },
     );
   }
 
@@ -163,6 +180,16 @@ export class BookService {
         ...(!createOnly && { abort: 'exists' }),
       },
     );
+
+    // Set thumbnail
+    const thumbnailRes = await axios.get(this.DEFAULT_THUMBNAILS.FRONT_MATTER, { responseType: 'arraybuffer' });
+    const thumbnail = Buffer.from(thumbnailRes.data);
+    await lib.api.pages.putPageFileName(
+      assembleUrl([pageInfo.url, 'Front_Matter']),
+      '=mindtouch.page%2523thumbnail',
+      thumbnail,
+      { auth: lib.auth },
+    );
   }
 
   public async createMatter({
@@ -187,12 +214,17 @@ export class BookService {
         ...(!createOnly && { abort: 'exists' }),
       },
     );
-    /*
-    await Promise.all([{ property: '', value: '' }].map((p) => lib.api.pages.putPageProperties(pageInfo.id, { auth: lib.auth }, {
-      TODO: needs to be fixed in cxone-expert-sdk
-    })))
-     */
-    // TODO: set thumbnail
+    await Promise.all(
+      [
+        { property: 'mindtouch.idf#guideDisplay', value: 'single' },
+        { property: 'mindtouch.page#welcomeHidden', value: 'true' },
+        {
+          property: 'mindtouch#idf.guideTabs',
+          value:
+            '[{"templateKey":"Topic_hierarchy","templateTitle":"Topic hierarchy","templatePath":"MindTouch/IDF3/Views/Topic_hierarchy","guid":"fc488b5c-f7e1-1cad-1a9a-343d5c8641f5"}]',
+        },
+      ].map((p) => lib.api.pages.putPageProperties(pageInfo.id, p.property, p.value, { auth: lib.auth })),
+    );
     mode === 'Front'
       ? await this.createDefaultFrontMatter({ createOnly, pageInfo })
       : await this.createDefaultBackMatter({ createOnly, pageInfo });

@@ -53,7 +53,12 @@ export class JobService {
       await this.finish(jobMsg);
       return;
     }
+
     const pages = await bookModel.discoverPages(bookID.lib, bookID.pageID);
+
+    // FIXME: will discoverPages need to be called again if the matter was just now created?
+    await bookModel.createMatter({ mode: 'Front', pageInfo: pages });
+    await bookModel.createMatter({ mode: 'Back', pageInfo: pages });
 
     const pdfService = new PDFService();
     await pdfService.convertBook({ bookID, pages });

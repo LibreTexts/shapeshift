@@ -21,6 +21,7 @@ import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
 import { PDFDocument } from 'pdf-lib';
 import { LogLayer } from 'loglayer';
 import { getEnvironmentVariable } from '../lib/environment';
+import { StorageService } from '../lib/storageService';
 
 export type PDFCoverOpts = {
   extraPadding?: boolean;
@@ -39,10 +40,12 @@ export class PDFService {
     timeout: 120000,
     waitUntil: ['load', 'domcontentloaded', 'networkidle0'],
   };
+  private readonly storageService: StorageService;
   private readonly viewportSettings: Viewport = { width: 975, height: 1000 };
 
   constructor() {
     this.logger = logService.child().withContext({ logSource: this.logName });
+    this.storageService = new StorageService();
   }
 
   private async calculateNumPagesInPDFDocument(filePath: string): Promise<number> {
@@ -63,33 +66,20 @@ export class PDFService {
     return this._browser;
   }
 
-  private async generateFinalOutputFileName({
-    bookID,
-    outFileNameOverride,
-  }: {
-    bookID: BookID;
-    outFileNameOverride?: string;
-  }) {
-    const tmpDir = getEnvironmentVariable('TMP_OUT_DIR', './.tmp');
-    const dirPath = resolve(`${tmpDir}/out/${bookID.lib}-${bookID.pageID}`);
-    const fileName = outFileNameOverride ?? 'Full';
-    const filePath = `${dirPath}/${fileName}.pdf`;
-    await fs.mkdir(dirPath, { recursive: true });
-    return filePath;
-  }
-
   private async generatePageOutputFileName({
     bookID,
     outFileNameOverride,
+    preferLocalStorage = false,
   }: {
     bookID: BookID;
     outFileNameOverride?: string;
+    preferLocalStorage?: boolean;
   }) {
-    const tmpDir = getEnvironmentVariable('TMP_OUT_DIR', './.tmp');
-    const dirPath = resolve(`${tmpDir}/pdf/${bookID.lib}-${bookID.pageID}`);
+    const baseDir = preferLocalStorage ? getEnvironmentVariable('TMP_OUT_DIR', './.tmp') : '';
+    const dirPath = resolve(`${baseDir}/pdf/${bookID.lib}-${bookID.pageID}`);
     const fileName = outFileNameOverride ?? uuid();
     const filePath = `${dirPath}/${fileName}.pdf`;
-    await fs.mkdir(dirPath, { recursive: true });
+    if (preferLocalStorage) await fs.mkdir(dirPath, { recursive: true });
     return filePath;
   }
 
@@ -173,7 +163,12 @@ export class PDFService {
       }
     };
     await convertTree(pages);
-    const contentFilePath = await this.mergeContentPagesAndWrite({ bookID, pages: pagePaths });
+    const preferLocalStorage = getEnvironmentVariable('USE_LOCAL_STORAGE', 'false') === 'true';
+    const contentFilePath = await this.mergeContentPagesAndWrite({
+      bookID,
+      pages: pagePaths,
+      preferLocalStorage,
+    });
     const numPages = await this.calculateNumPagesInPDFDocument(contentFilePath);
 
     // <covers>
@@ -196,7 +191,11 @@ export class PDFService {
       }),
     );
     // </covers>
-    return await this.mergeContentPagesAndWrite({ bookID, pages: pagePaths });
+    return await this.mergeContentPagesAndWrite({
+      bookID,
+      pages: pagePaths,
+      preferLocalStorage,
+    });
   }
 
   public async convertPage({
@@ -268,6 +267,7 @@ export class PDFService {
         pageID: pageInfo.id,
       },
       outFileNameOverride,
+      preferLocalStorage: true,
     });
     await page.pdf({
       // Letter Margin
@@ -334,7 +334,15 @@ export class PDFService {
     return outputDocument.save();
   }
 
-  public async mergeContentPagesAndWrite({ bookID, pages }: { bookID: BookID; pages: string[] }) {
+  public async mergeContentPagesAndWrite({
+    bookID,
+    pages,
+    preferLocalStorage = false,
+  }: {
+    bookID: BookID;
+    pages: string[];
+    preferLocalStorage?: boolean;
+  }) {
     const extractFileName = (filePath: string) => {
       const split = filePath.split('/');
       return split[split.length - 1];
@@ -348,8 +356,20 @@ export class PDFService {
         return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
       });
     const mergedRaw = await this.mergeFiles(sortedPages);
-    const outPath = await this.generatePageOutputFileName({ bookID, outFileNameOverride: 'Content' });
-    await fs.writeFile(outPath, mergedRaw);
+    const outPath = await this.generatePageOutputFileName({
+      bookID,
+      outFileNameOverride: 'Content',
+      preferLocalStorage,
+    });
+    if (!preferLocalStorage) {
+      await this.storageService.uploadFile({
+        contentType: 'application/pdf',
+        data: Buffer.from(mergedRaw),
+        key: outPath,
+      });
+    } else {
+      await fs.writeFile(outPath, mergedRaw);
+    }
     return outPath;
   }
 
@@ -622,6 +642,7 @@ export class PDFService {
         pageID: pageInfo.id,
       },
       outFileNameOverride,
+      preferLocalStorage: true,
     });
     const styleTag = `
       @page {
@@ -651,10 +672,4 @@ export class PDFService {
     this.logger.withMetadata({ url: pageInfo.url }).info('Finished Table of Contents.');
     return path;
   }
-
-  /*
-  private async generateMatter({ mode, pageInfo }: { mode: 'back' | 'front'; pageInfo: BookPageInfo }) {
-    // TODO
-  }
-   */
 }

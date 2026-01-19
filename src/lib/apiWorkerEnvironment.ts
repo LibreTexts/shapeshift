@@ -1,4 +1,10 @@
-const API_WORKER_ENVIRONMENT_VARIABLE_NAMES = ['SQS_HIGH_PRIORITY_QUEUE_URL', 'SQS_QUEUE_URL'] as const;
+const API_WORKER_ENVIRONMENT_VARIABLE_NAMES = [
+  'CLOUDFRONT_DISTRIBUTION_DOMAIN',
+  'CLOUDFRONT_KEY_PAIR_ID',
+  'CLOUDFRONT_PRIVATE_KEY',
+  'SQS_HIGH_PRIORITY_QUEUE_URL',
+  'SQS_QUEUE_URL',
+] as const;
 // Environment variables that are REQUIRED for API workers.
 type APIWorkerEnvironmentVariables = Record<(typeof API_WORKER_ENVIRONMENT_VARIABLE_NAMES)[number], string>;
 export class APIWorkerEnvironment {

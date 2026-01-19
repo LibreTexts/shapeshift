@@ -150,9 +150,7 @@ export class LibraryService {
    */
   private async _getLibraryTokenPair(lib: string): Promise<LibraryKeyPair | null> {
     try {
-      if (!this.ssmClient) {
-        throw new Error('Error retrieving library token pair. Lib: ' + lib);
-      }
+      if (!this.ssmClient) throw new Error('Error retrieving library token pair. Lib: ' + lib);
       const basePath = this.ssmClient.libTokenPairPath.endsWith('/')
         ? this.ssmClient.libTokenPairPath
         : `${this.ssmClient.libTokenPairPath}/`;

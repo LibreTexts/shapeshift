@@ -1,8 +1,19 @@
 import zod, { ZodObject, ZodError } from 'zod';
 import { Request, Response, NextFunction } from 'express';
-const jobIdSchema = zod.string().length(12);
+
+const bookIDSchema = zod.stringFormat('BookID', /[a-z1-2]{3,9}[-][0-9]{2,10}/gi);
+const jobIDSchema = zod.string().length(12);
 
 export const validators = {
+  download: {
+    get: zod.object({
+      params: zod.object({
+        bookID: bookIDSchema,
+        fileName: zod.enum(['LibreText.imscc', 'Publication.zip', 'Full.pdf']), // FIXME: define all
+        format: zod.enum(['pdf', 'thincc']),
+      }),
+    }),
+  },
   job: {
     create: zod.object({
       body: zod.object({
@@ -12,7 +23,7 @@ export const validators = {
     }),
     get: zod.object({
       params: zod.object({
-        jobId: jobIdSchema,
+        jobID: jobIDSchema,
       }),
     }),
   },

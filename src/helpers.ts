@@ -5,6 +5,8 @@ export type ErrorWithMessage = {
   message: string;
 };
 
+export type ZodRequest<T> = Request & T;
+
 export function extractIPFromHeaders(req: Request) {
   const forwardFor = req.headers['x-forwarded-for'];
   if (forwardFor && typeof forwardFor === 'string') {

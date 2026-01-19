@@ -21,3 +21,5 @@ process.on('SIGTERM', () => {
   console.log('Attempting graceful shutdown of Shapeshift worker...');
   isActiveWorker = false;
 });
+
+runProcess();
