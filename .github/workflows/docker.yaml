@@ -1,0 +1,46 @@
+name: Build Docker Images
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Semantic version to label the Docker images under'
+        required: true
+        type: string
+
+jobs:
+  check_authorization:
+    name: Check authorization to publish new Docker images
+    runs-on: ubuntu-latest
+    outputs:
+      isAuthorized: ${{ steps.check-auth.outputs.is_authorized }}
+    steps:
+      - name: check-auth
+        id: check-auth
+        run: echo "is_authorized=${{ contains(secrets.DEPLOYMENT_AUTHORIZED_USERS, github.triggering_actor) }}" >> $GITHUB_OUTPUT
+  build:
+    name: Build Docker images
+    needs: check_authorization
+    if: needs.check_authorization.outputs.isAuthorized == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Build and push API image
+        uses: docker/build-push-action@v6
+        with:
+          file: ./Dockerfile-api
+          platforms: [linux/amd64, linux/arm64]
+          push: true
+          tags: ghcr.io/libretexts/shapeshift-api:${{ inputs.version }}
+      - name: Build and push Processor image
+        uses: docker/build-push-action@v6
+        with:
+          file: ./Dockerfile-processor
+          platforms: [linux/amd64, linux/arm64]
+          push: true
+          tags: ghcr.io/libretexts/shapeshift-processor:${{ inputs.version }}
