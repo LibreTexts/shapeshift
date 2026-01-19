@@ -34,13 +34,13 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           file: ./Dockerfile-api
-          platforms: [linux/amd64, linux/arm64]
+          platforms: linux/amd64, linux/arm64
           push: true
           tags: ghcr.io/libretexts/shapeshift-api:${{ inputs.version }}
       - name: Build and push Processor image
         uses: docker/build-push-action@v6
         with:
           file: ./Dockerfile-processor
-          platforms: [linux/amd64, linux/arm64]
+          platforms: linux/amd64, linux/arm64
           push: true
           tags: ghcr.io/libretexts/shapeshift-processor:${{ inputs.version }}
