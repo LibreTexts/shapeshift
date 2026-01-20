@@ -45,7 +45,7 @@
     "@aws-sdk/lib-storage": "^3.910.0",
     "@libretexts/cxone-expert-node": "^1.1.2",
     "axios": "^1.6.7",
-    "chromiumly": "^3.8.2",
+    "chromiumly": "^4.2.0",
     "cors": "^2.8.5",
     "dotenv": "^17.1.0",
     "express": "^5.1.0",
