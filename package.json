@@ -48,7 +48,7 @@
     "chromiumly": "^4.2.0",
     "cors": "^2.8.5",
     "dotenv": "^17.1.0",
-    "express": "^5.1.0",
+    "express": "^5.2.0",
     "helmet": "^8.1.0",
     "jszip": "^3.10.1",
     "loglayer": "^6.6.0",
