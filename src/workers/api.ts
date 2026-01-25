@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
+import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { connectDatabase } from '../model';
 import { router } from '../api/routes';
 import { log as logService } from '../lib/log';
@@ -9,8 +10,24 @@ import { APIWorkerEnvironment } from '../lib/apiWorkerEnvironment';
 const app = express();
 const port = process.env.PORT ? Number.parseInt(process.env.PORT) : 5000;
 
+const apiLimiter = rateLimit({
+  windowMs: 60 * 1000, // 1 minute
+  limit: 100, // limit requests/IP address/windowMs
+  keyGenerator: (req) => {
+    const forwardFor = req.headers['x-forwarded-for'];
+    if (forwardFor && typeof forwardFor === 'string') {
+      const ips = forwardFor.split(',').map((ip) => ip.trim());
+      if (ips.length > 0) {
+        return ipKeyGenerator(ips[0]); // Use the first IP in the list
+      }
+    }
+
+    return ipKeyGenerator(req.ip || ''); // Fallback to req.ip if no X-Forwarded-For header
+  },
+});
+
 app.use(helmet.hidePoweredBy());
-app.use('/api/v1', router);
+app.use('/api/v1', apiLimiter, router);
 app.use('/health', (_req, res) => res.send({ healthy: true, msg: 'API worker appears healthy.' }));
 
 const logger = logService.child().withContext({ logSource: 'API worker' });
