@@ -1,19 +1,40 @@
 import { Sequelize } from 'sequelize-typescript';
 import { Job } from './job';
 import { getEnvironment, getEnvironmentVariable } from '../lib/environment';
+import { ConnectionOptions } from 'sequelize';
 
 const env = getEnvironment();
-const sequelize = new Sequelize(
-  getEnvironmentVariable(`${env}_DB`, 'shapeshift'),
-  getEnvironmentVariable(`${env}_DB_USER`, 'shapeshift_db_username'),
-  getEnvironmentVariable(`${env}_DB_PASSWORD`, 'shapeshift_db_password'),
-  {
-    dialect: 'mysql',
-    host: getEnvironmentVariable(`${env}_DB_HOST`, 'localhost'),
-    logging: env === 'DEVELOPMENT' ? console.log : false,
-    port: Number(getEnvironmentVariable(`${env}_DB_PORT`, 3306)),
-  },
-);
+function getReaderConfig(): ConnectionOptions | null {
+  const host = getEnvironmentVariable(`${env}_DB_HOST_READ`, 'NONE');
+  if (host !== 'NONE') {
+    const username = getEnvironmentVariable(`${env}_DB_USER_READ`, '');
+    const password = getEnvironmentVariable(`${env}_DB_PASSWORD_READ`, '');
+    const port = getEnvironmentVariable(`${env}_DB_PORT_READ`, 3306);
+    if (username && password && port) return { host, password, port, username };
+  }
+  return null;
+}
+
+const readerConfig = getReaderConfig();
+const writerConfig = {
+  host: getEnvironmentVariable(`${env}_DB_HOST`, 'localhost'),
+  password: getEnvironmentVariable(`${env}_DB_PASSWORD`, 'shapeshift_db_password'),
+  port: Number(getEnvironmentVariable(`${env}_DB_PORT`, 3306)),
+  username: getEnvironmentVariable(`${env}_DB_USER`, 'shapeshift_db_username'),
+};
+const sequelize = new Sequelize({
+  dialect: 'mysql',
+  database: getEnvironmentVariable(`${env}_DB`, 'shapeshift'),
+  logging: env === 'DEVELOPMENT' ? console.log : false,
+  ...(readerConfig
+    ? {
+        replication: {
+          read: [readerConfig],
+          write: writerConfig,
+        },
+      }
+    : writerConfig),
+});
 
 sequelize.addModels([Job]);
 
