@@ -35,7 +35,7 @@ export class DownloadController {
     const signedURL = getSignedUrl({
       dateLessThan: inFiveMinutes.toString(),
       keyPairId: env.CLOUDFRONT_KEY_PAIR_ID,
-      privateKey: env.CLOUDFRONT_PRIVATE_KEY,
+      privateKey: Buffer.from(env.CLOUDFRONT_PRIVATE_KEY, 'base64').toString('utf-8'),
       url: `https://${env.CLOUDFRONT_DISTRIBUTION_DOMAIN}/${path}`,
     });
     this.logger
