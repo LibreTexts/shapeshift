@@ -13,13 +13,7 @@ export class StorageService {
   constructor() {
     this.logger = logService.child().withContext({ logSource: this.logName });
     const env = ProcessorWorkerEnvironment.getEnvironment();
-    this.client = new S3Client({
-      credentials: {
-        accessKeyId: env.AWS_ACCESS_KEY_ID,
-        secretAccessKey: env.AWS_SECRET_ACCESS_KEY,
-      },
-      region: env.AWS_REGION,
-    });
+    this.client = new S3Client({ region: env.AWS_REGION });
   }
 
   public async uploadFile({ contentType, data, key }: { contentType: string; data: Buffer; key: string }) {

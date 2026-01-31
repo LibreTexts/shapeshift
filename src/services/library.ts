@@ -126,13 +126,7 @@ export class LibraryService {
       const apiUsername = process.env.LIBRARIES_API_USERNAME || 'LibreBot';
 
       const workerEnvironment = ProcessorWorkerEnvironment.getEnvironment();
-      const ssm = new SSMClient({
-        credentials: {
-          accessKeyId: workerEnvironment.AWS_ACCESS_KEY_ID,
-          secretAccessKey: workerEnvironment.AWS_SECRET_ACCESS_KEY,
-        },
-        region: workerEnvironment.AWS_REGION,
-      });
+      const ssm = new SSMClient({ region: workerEnvironment.AWS_REGION });
 
       return {
         apiUsername,

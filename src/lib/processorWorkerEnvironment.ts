@@ -1,10 +1,4 @@
-const PROCESSOR_WORKER_ENVIRONMENT_VARIABLE_NAMES = [
-  'AWS_ACCESS_KEY_ID',
-  'AWS_REGION',
-  'AWS_SECRET_ACCESS_KEY',
-  'BUCKET',
-  'SQS_QUEUE_URL',
-] as const;
+const PROCESSOR_WORKER_ENVIRONMENT_VARIABLE_NAMES = ['AWS_REGION', 'BUCKET', 'SQS_QUEUE_URL'] as const;
 // Environment variables that are REQUIRED for processor workers.
 type ProcessorWorkerEnvironmentVariables = Record<(typeof PROCESSOR_WORKER_ENVIRONMENT_VARIABLE_NAMES)[number], string>;
 export class ProcessorWorkerEnvironment {
