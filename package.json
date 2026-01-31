@@ -1,6 +1,6 @@
 {
   "name": "shapeshift",
-  "version": "1.1.1",
+  "version": "1.1.2",
   "description": "Scalable, distributed system for extracting and transforming LibreTexts content into various export formats.",
   "main": "index.js",
   "scripts": {
