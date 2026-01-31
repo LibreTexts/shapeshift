@@ -10,7 +10,8 @@
     "test": "echo \"Error: no test specified\" && exit 1",
     "prepare": "husky",
     "prettier": "prettier --config .prettierrc 'src/**/*.ts' --write",
-    "sync-db-schema": "tsx src/syncDBSchema.ts"
+    "sync-db-schema": "tsx src/syncDBSchema.ts",
+    "build-backlog-per-instance": "rimraf ./bpi-dist && npx esbuild src/lambda/backlogPerInstance.ts --bundle --platform=node --target=node22 --format=cjs --outfile=bpi-dist/backlogPerInstance.js --minify --tree-shaking=true && cd bpi-dist && zip -9 -r ../backlogPerInstance.zip backlogPerInstance.js"
   },
   "author": "LibreTexts <info@libretexts.org>",
   "license": "MIT",
@@ -25,6 +26,7 @@
     "@types/yargs": "^17.0.33",
     "@typescript-eslint/eslint-plugin": "^7.0.1",
     "@typescript-eslint/parser": "^7.0.1",
+    "esbuild": "^0.27.2",
     "eslint": "^8.56.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-prettier": "^5.1.3",
