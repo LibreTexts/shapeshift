@@ -1,30 +1,30 @@
 import { GetObjectCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { Upload } from '@aws-sdk/lib-storage';
-import { ProcessorWorkerEnvironment } from './processorWorkerEnvironment';
 import { log as logService } from './log';
 import { LogLayer } from 'loglayer';
 import { Readable } from 'node:stream';
+import { Environment } from './environment';
 
 export class StorageService {
+  private readonly bucket: string;
   private readonly client: S3Client;
   private readonly logger: LogLayer;
   private readonly logName = 'StorageService';
 
   constructor() {
+    this.bucket = Environment.getRequired('BUCKET');
     this.logger = logService.child().withContext({ logSource: this.logName });
-    const env = ProcessorWorkerEnvironment.getEnvironment();
-    this.client = new S3Client({ region: env.AWS_REGION });
+    this.client = new S3Client({ region: Environment.getRequired('AWS_REGION') });
   }
 
   public async uploadFile({ contentType, data, key }: { contentType: string; data: Buffer; key: string }) {
     try {
-      const env = ProcessorWorkerEnvironment.getEnvironment();
       const uploader = new Upload({
         client: this.client,
         queueSize: 4,
         leavePartsOnError: false,
         params: {
-          Bucket: env.BUCKET,
+          Bucket: this.bucket,
           Body: data,
           ContentType: contentType,
           Key: key,
@@ -39,10 +39,9 @@ export class StorageService {
 
   public async readFileAsBuffer(key: string): Promise<Buffer | null> {
     try {
-      const env = ProcessorWorkerEnvironment.getEnvironment();
       const res = await this.client.send(
         new GetObjectCommand({
-          Bucket: env.BUCKET,
+          Bucket: this.bucket,
           Key: key,
         }),
       );
@@ -61,10 +60,9 @@ export class StorageService {
 
   public async ensureFileExists(key: string) {
     try {
-      const env = ProcessorWorkerEnvironment.getEnvironment();
       const r = await this.client.send(
         new HeadObjectCommand({
-          Bucket: env.BUCKET,
+          Bucket: this.bucket,
           Key: key,
         }),
       );

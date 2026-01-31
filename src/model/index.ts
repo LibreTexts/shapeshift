@@ -1,15 +1,14 @@
 import { Sequelize } from 'sequelize-typescript';
 import { Job } from './job';
-import { getEnvironment, getEnvironmentVariable } from '../lib/environment';
+import { Environment } from '../lib/environment';
 import { ConnectionOptions } from 'sequelize';
 
-const env = getEnvironment();
 function getReaderConfig(): ConnectionOptions | null {
-  const host = getEnvironmentVariable(`${env}_DB_HOST_READ`, 'NONE');
+  const host = Environment.getOptional('DB_HOST_READ', 'NONE');
   if (host !== 'NONE') {
-    const username = getEnvironmentVariable(`${env}_DB_USER_READ`, '');
-    const password = getEnvironmentVariable(`${env}_DB_PASSWORD_READ`, '');
-    const port = getEnvironmentVariable(`${env}_DB_PORT_READ`, 3306);
+    const username = Environment.getOptional('DB_USER_READ');
+    const password = Environment.getOptional('DB_PASSWORD_READ');
+    const port = Number.parseInt(Environment.getOptional('DB_PORT_READ', '3306'));
     if (username && password && port) return { host, password, port, username };
   }
   return null;
@@ -17,15 +16,15 @@ function getReaderConfig(): ConnectionOptions | null {
 
 const readerConfig = getReaderConfig();
 const writerConfig = {
-  host: getEnvironmentVariable(`${env}_DB_HOST`, 'localhost'),
-  password: getEnvironmentVariable(`${env}_DB_PASSWORD`, 'shapeshift_db_password'),
-  port: Number(getEnvironmentVariable(`${env}_DB_PORT`, 3306)),
-  username: getEnvironmentVariable(`${env}_DB_USER`, 'shapeshift_db_username'),
+  host: Environment.getOptional('DB_HOST', 'localhost'),
+  password: Environment.getOptional('DB_PASSWORD'),
+  port: Number.parseInt(Environment.getOptional('DB_PORT', '3306')),
+  username: Environment.getOptional('DB_USER'),
 };
 const sequelize = new Sequelize({
   dialect: 'mysql',
-  database: getEnvironmentVariable(`${env}_DB`, 'shapeshift'),
-  logging: env === 'DEVELOPMENT' ? console.log : false,
+  database: Environment.getOptional('DB', 'shapeshift'),
+  logging: Environment.getSystemEnvironment() === 'DEVELOPMENT' ? console.log : false,
   ...(readerConfig
     ? {
         replication: {

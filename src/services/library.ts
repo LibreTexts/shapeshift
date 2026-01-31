@@ -4,7 +4,7 @@ import axios, { AxiosResponse } from 'axios';
 import { getErrorMessage } from '../helpers';
 import Expert from '@libretexts/cxone-expert-node';
 import Auth from '@libretexts/cxone-expert-node/dist/modules/auth';
-import { ProcessorWorkerEnvironment } from '../lib/processorWorkerEnvironment';
+import { Environment } from '../lib/environment';
 
 export type CXOneFetchPageParams = {
   subdomain: string;
@@ -125,8 +125,7 @@ export class LibraryService {
       const libTokenPairPath = process.env.AWS_SSM_LIB_TOKEN_PAIR_PATH || '/libkeys/production';
       const apiUsername = process.env.LIBRARIES_API_USERNAME || 'LibreBot';
 
-      const workerEnvironment = ProcessorWorkerEnvironment.getEnvironment();
-      const ssm = new SSMClient({ region: workerEnvironment.AWS_REGION });
+      const ssm = new SSMClient({ region: Environment.getRequired('AWS_REGION') });
 
       return {
         apiUsername,

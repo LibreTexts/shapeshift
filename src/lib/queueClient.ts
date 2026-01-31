@@ -1,10 +1,22 @@
-import { ReceiveMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
+import {
+  DeleteMessageCommand,
+  GetQueueAttributesCommand,
+  ReceiveMessageCommand,
+  SendMessageCommand,
+  SQSClient,
+} from '@aws-sdk/client-sqs';
 import { JobQueueMessage, JobQueueMessageRawBody } from '../services/job';
-import { ProcessorWorkerEnvironment } from './processorWorkerEnvironment';
-import { getEnvironmentVariable } from './environment';
+import { Environment } from './environment';
 
 export class QueueClient {
   private static _instance: SQSClient;
+
+  public static getQueueUrl() {
+    const isHighPriorityProcessor = Environment.getOptional('IS_HIGH_PRIORITY_PROCESSOR', 'false');
+    return isHighPriorityProcessor === 'true'
+      ? Environment.getRequired('SQS_HIGH_PRIORITY_QUEUE_URL')
+      : Environment.getRequired('SQS_QUEUE_URL');
+  }
 
   public static getClient() {
     if (!this._instance) {
@@ -13,17 +25,45 @@ export class QueueClient {
     return this._instance;
   }
 
+  public async deleteJobMessage(receiptHandle: string) {
+    const queueUrl = QueueClient.getQueueUrl();
+    const client = QueueClient.getClient();
+    await client.send(
+      new DeleteMessageCommand({
+        QueueUrl: queueUrl,
+        ReceiptHandle: receiptHandle,
+      }),
+    );
+  }
+
+  public async getNumberOfQueuedJobs() {
+    const queueUrl = QueueClient.getQueueUrl();
+    const client = QueueClient.getClient();
+    const queueAttr = await client.send(
+      new GetQueueAttributesCommand({
+        AttributeNames: ['ApproximateNumberOfMessages'],
+        QueueUrl: queueUrl,
+      }),
+    );
+    const numMessagesRaw = queueAttr.Attributes?.ApproximateNumberOfMessages;
+    if (!numMessagesRaw) {
+      throw new Error('Did not retrieve number of messages from queue');
+    }
+    return Number.parseInt(numMessagesRaw);
+  }
+
   public async lookForJobs(): Promise<JobQueueMessage[]> {
+    const queueUrl = QueueClient.getQueueUrl();
     const client = QueueClient.getClient();
     const messages = await client.send(
       new ReceiveMessageCommand({
         MaxNumberOfMessages: 2,
-        QueueUrl: ProcessorWorkerEnvironment.getEnvironment().SQS_QUEUE_URL,
         WaitTimeSeconds: 60,
+        QueueUrl: queueUrl,
       }),
     );
 
-    const isInterruptibleWorker = getEnvironmentVariable('IS_INTERRUPTIBLE_ENV', 'true') === 'true';
+    const isHighPriorityProcessor = Environment.getOptional('IS_HIGH_PRIORITY_PROCESSOR', 'false') === 'true';
     return (messages.Messages ?? [])
       .map((msg) => {
         const body = JSON.parse(msg.Body!) as JobQueueMessageRawBody;
@@ -34,6 +74,19 @@ export class QueueClient {
         };
       })
       .filter((msg): msg is JobQueueMessage => !!msg.jobId && !!msg.receiptHandle)
-      .filter((msg) => !(isInterruptibleWorker && msg.isHighPriority));
+      .filter((msg) => !(isHighPriorityProcessor && msg.isHighPriority));
+  }
+
+  public async sendJobMessage(msg: JobQueueMessageRawBody) {
+    const client = QueueClient.getClient();
+    await client.send(
+      new SendMessageCommand({
+        MessageBody: msg.jobId,
+        ...(msg.isHighPriority && { MessageDeduplicationId: msg.jobId }),
+        QueueUrl: msg.isHighPriority
+          ? Environment.getRequired('SQS_HIGH_PRIORITY_QUEUE_URL')
+          : Environment.getRequired('SQS_QUEUE_URL'),
+      }),
+    );
   }
 }

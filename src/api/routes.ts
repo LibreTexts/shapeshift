@@ -1,6 +1,6 @@
 import cors from 'cors';
 import express from 'express';
-import { getEnvironment } from '../lib/environment';
+import { Environment } from '../lib/environment';
 import { JobController } from '../controllers/job';
 import { validateZod, validators } from './validators';
 import { DownloadController } from '../controllers/download';
@@ -12,10 +12,8 @@ const router = express.Router();
 router.use(
   cors({
     origin(origin, callback) {
-      const env = getEnvironment();
-
       // Allow same-origin requests or all in development
-      if (!origin || env === 'DEVELOPMENT') return callback(null, true);
+      if (!origin || Environment.getSystemEnvironment() === 'DEVELOPMENT') return callback(null, true);
 
       if (origin.endsWith('.libretexts.org')) return callback(null, origin);
       return callback(new Error('CORS policy: Not allowed by CORS'));

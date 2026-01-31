@@ -20,7 +20,7 @@ import { BookID, BookPageInfo } from './book';
 import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
 import { PDFDocument } from 'pdf-lib';
 import { LogLayer } from 'loglayer';
-import { getEnvironmentVariable } from '../lib/environment';
+import { Environment } from '../lib/environment';
 import { StorageService } from '../lib/storageService';
 
 export type PDFCoverOpts = {
@@ -75,7 +75,7 @@ export class PDFService {
     outFileNameOverride?: string;
     preferLocalStorage?: boolean;
   }) {
-    const baseDir = preferLocalStorage ? getEnvironmentVariable('TMP_OUT_DIR', './.tmp') : '';
+    const baseDir = preferLocalStorage ? Environment.getOptional('TMP_OUT_DIR', './.tmp') : '';
     const dirPath = resolve(`${baseDir}/pdf/${bookID.lib}-${bookID.pageID}`);
     const fileName = outFileNameOverride ?? uuid();
     const filePath = `${dirPath}/${fileName}.pdf`;
@@ -84,7 +84,7 @@ export class PDFService {
   }
 
   private async ensureCoversDirectory(bookID: BookID) {
-    const tmpDir = getEnvironmentVariable('TMP_OUT_DIR', './.tmp');
+    const tmpDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
     const dirPath = resolve(`${tmpDir}/pdf/${bookID.lib}-${bookID.pageID}/covers/`);
     await fs.mkdir(dirPath, { recursive: true });
     return dirPath;
@@ -163,7 +163,7 @@ export class PDFService {
       }
     };
     await convertTree(pages);
-    const preferLocalStorage = getEnvironmentVariable('USE_LOCAL_STORAGE', 'false') === 'true';
+    const preferLocalStorage = Environment.getOptional('USE_LOCAL_STORAGE', 'false') === 'true';
     const contentFilePath = await this.mergeContentPagesAndWrite({
       bookID,
       pages: pagePaths,

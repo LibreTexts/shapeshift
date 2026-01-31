@@ -5,15 +5,21 @@ import zod from 'zod';
 import { Response } from 'express';
 import { extractIPFromHeaders, ZodRequest } from '../helpers';
 import { StorageService } from '../lib/storageService';
-import { APIWorkerEnvironment } from '../lib/apiWorkerEnvironment';
 import { getSignedUrl } from '@aws-sdk/cloudfront-signer';
+import { Environment } from '../lib/environment';
 
 export class DownloadController {
+  private readonly cloudFrontDistributionDomain: string;
+  private readonly cloudFrontKeyPairId: string;
+  private readonly cloudFrontPrivateKey: string;
   private readonly logger: LogLayer;
   private readonly logName = 'DownloadController';
   private readonly storageService: StorageService;
 
   constructor() {
+    this.cloudFrontDistributionDomain = Environment.getRequired('CLOUDFRONT_DISTRIBUTION_DOMAIN');
+    this.cloudFrontKeyPairId = Environment.getRequired('CLOUDFRONT_KEY_PAIR_ID');
+    this.cloudFrontPrivateKey = Environment.getRequired('CLOUDFRONT_PRIVATE_KEY');
     this.logger = logService.child().withContext({ logSource: this.logName });
     this.storageService = new StorageService();
   }
@@ -29,14 +35,13 @@ export class DownloadController {
     }
 
     // TODO: record download event
-    const env = APIWorkerEnvironment.getEnvironment();
     const inFiveMinutes = new Date();
     inFiveMinutes.setMinutes(inFiveMinutes.getMinutes() + 5);
     const signedURL = getSignedUrl({
       dateLessThan: inFiveMinutes.toString(),
-      keyPairId: env.CLOUDFRONT_KEY_PAIR_ID,
-      privateKey: Buffer.from(env.CLOUDFRONT_PRIVATE_KEY, 'base64').toString('utf-8'),
-      url: `https://${env.CLOUDFRONT_DISTRIBUTION_DOMAIN}/${path}`,
+      keyPairId: this.cloudFrontKeyPairId,
+      privateKey: Buffer.from(this.cloudFrontPrivateKey, 'base64').toString('utf-8'),
+      url: `https://${this.cloudFrontDistributionDomain}/${path}`,
     });
     this.logger
       .withMetadata({

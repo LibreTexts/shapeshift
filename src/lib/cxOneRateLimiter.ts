@@ -1,4 +1,4 @@
-import { getEnvironmentVariable } from './environment';
+import { Environment } from './environment';
 import { log } from './log';
 import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
 import { sleep } from '../helpers';
@@ -10,9 +10,9 @@ export class CXOneRateLimiter {
   private static get() {
     if (!this._instance) {
       this._instance = new RateLimiterMemory({
-        duration: Number(getEnvironmentVariable('CXONE_RATE_LIMITER_DURATION', 60)),
+        duration: Number.parseInt(Environment.getOptional('CXONE_RATE_LIMITER_DURATION', '60')),
         keyPrefix: CXOneRateLimiter._keyPrefix,
-        points: Number(getEnvironmentVariable('CXONE_RATE_LIMITER_POINTS', 800)),
+        points: Number.parseInt(Environment.getOptional('CXONE_RATE_LIMITER_POINTS', '800')),
       });
     }
     return this._instance;

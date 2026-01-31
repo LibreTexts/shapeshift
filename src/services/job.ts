@@ -1,8 +1,6 @@
 import { QueueClient } from '../lib/queueClient';
-import { DeleteMessageCommand } from '@aws-sdk/client-sqs';
-import { ProcessorWorkerEnvironment } from '../lib/processorWorkerEnvironment';
 import { BookService } from './book';
-import { getEnvironment } from '../lib/environment';
+import { Environment } from '../lib/environment';
 import { PDFService } from './pdf';
 import { Job } from '../model';
 import { CreationAttributes } from 'sequelize';
@@ -22,6 +20,12 @@ export type JobQueueMessage = {
 export type JobStatus = 'created' | 'inprogress' | 'finished' | 'failed';
 
 export class JobService {
+  private readonly queueClient: QueueClient;
+
+  constructor() {
+    this.queueClient = new QueueClient();
+  }
+
   public async create(input: CreationAttributes<Job>) {
     const job = await Job.create({
       ...input,
@@ -77,13 +81,7 @@ export class JobService {
   public async finish(job: JobQueueMessage) {
     await this.setStatus(job.jobId, 'finished');
 
-    if (getEnvironment() === 'DEVELOPMENT') return;
-    const client = QueueClient.getClient();
-    await client.send(
-      new DeleteMessageCommand({
-        QueueUrl: ProcessorWorkerEnvironment.getEnvironment().SQS_QUEUE_URL,
-        ReceiptHandle: job.receiptHandle,
-      }),
-    );
+    if (Environment.getSystemEnvironment() === 'DEVELOPMENT') return;
+    await this.queueClient.deleteJobMessage(job.receiptHandle);
   }
 }

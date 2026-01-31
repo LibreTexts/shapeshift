@@ -5,10 +5,11 @@ import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
 import { connectDatabase } from '../model';
 import { router } from '../api/routes';
 import { log as logService } from '../lib/log';
-import { APIWorkerEnvironment } from '../lib/apiWorkerEnvironment';
+import { Environment } from '../lib/environment';
 
+Environment.load();
 const app = express();
-const port = process.env.PORT ? Number.parseInt(process.env.PORT) : 5000;
+const port = Number.parseInt(Environment.getOptional('PORT', '5000'));
 
 const apiLimiter = rateLimit({
   windowMs: 60 * 1000, // 1 minute
@@ -32,7 +33,6 @@ app.use('/health', (_req, res) => res.send({ healthy: true, msg: 'API worker app
 
 const logger = logService.child().withContext({ logSource: 'API worker' });
 const server = app.listen(port, async () => {
-  APIWorkerEnvironment.getEnvironment(); // verify environment before continuing
   await connectDatabase();
   console.log(`Shapeshift API worker listening on ${port}.`);
 });

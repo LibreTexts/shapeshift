@@ -1,21 +1,21 @@
 import { JobService } from '../services/job';
-import { getEnvironment } from '../lib/environment';
+import { Environment } from '../lib/environment';
 import { QueueClient } from '../lib/queueClient';
-import { SendMessageCommand } from '@aws-sdk/client-sqs';
 import zod from 'zod';
 import { Response } from 'express';
 import { validators } from '../api/validators';
 import { extractIPFromHeaders, ZodRequest } from '../helpers';
-import { APIWorkerEnvironment } from '../lib/apiWorkerEnvironment';
 import { LogLayer } from 'loglayer';
 import { log as logService } from '../lib/log';
 
 export class JobController {
   private readonly logger: LogLayer;
   private readonly logName = 'JobController';
+  private readonly queueClient: QueueClient;
 
   constructor() {
     this.logger = logService.child().withContext({ logSource: this.logName });
+    this.queueClient = new QueueClient();
   }
 
   public async create(req: ZodRequest<zod.infer<typeof validators.job.create>>, res: Response) {
@@ -30,17 +30,8 @@ export class JobController {
     });
     this.logger.withMetadata({ isHighPriority, jobId, requesterIp, url }).info('Job created.');
 
-    if (getEnvironment() !== 'DEVELOPMENT') {
-      const sqsClient = QueueClient.getClient();
-      await sqsClient.send(
-        new SendMessageCommand({
-          MessageBody: jobId,
-          ...(data.highPriority && { MessageDeduplicationId: jobId }),
-          QueueUrl: data.highPriority
-            ? APIWorkerEnvironment.getEnvironment().SQS_HIGH_PRIORITY_QUEUE_URL
-            : APIWorkerEnvironment.getEnvironment().SQS_QUEUE_URL,
-        }),
-      );
+    if (Environment.getSystemEnvironment() !== 'DEVELOPMENT') {
+      await this.queueClient.sendJobMessage({ isHighPriority, jobId });
     }
 
     return res.status(200).send({
