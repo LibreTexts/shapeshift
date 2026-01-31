@@ -58,7 +58,7 @@ export class QueueClient {
     const messages = await client.send(
       new ReceiveMessageCommand({
         MaxNumberOfMessages: 2,
-        WaitTimeSeconds: 60,
+        WaitTimeSeconds: 20,
         QueueUrl: queueUrl,
       }),
     );
