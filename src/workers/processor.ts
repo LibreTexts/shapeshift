@@ -9,6 +9,7 @@ let isActiveWorker = true;
 export async function runProcess() {
   Environment.load();
   await connectDatabase();
+  console.log(`Shapeshift processor worker started.`);
   const queueClient = new QueueClient();
   const jobModel = new JobService();
   while (isActiveWorker) {

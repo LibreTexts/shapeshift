@@ -27,6 +27,7 @@ const apiLimiter = rateLimit({
   },
 });
 
+app.use(express.json());
 app.use(helmet.hidePoweredBy());
 app.use('/api/v1', apiLimiter, router);
 app.use('/health', (_req, res) => res.send({ healthy: true, msg: 'API worker appears healthy.' }));

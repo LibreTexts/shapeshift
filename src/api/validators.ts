@@ -17,7 +17,7 @@ export const validators = {
   job: {
     create: zod.object({
       body: zod.object({
-        highPriority: zod.boolean(),
+        highPriority: zod.boolean().optional(),
         url: zod.url(),
       }),
     }),
