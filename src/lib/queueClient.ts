@@ -81,7 +81,7 @@ export class QueueClient {
     const client = QueueClient.getClient();
     await client.send(
       new SendMessageCommand({
-        MessageBody: msg.jobId,
+        MessageBody: JSON.stringify(msg),
         ...(msg.isHighPriority && { MessageDeduplicationId: msg.jobId }),
         QueueUrl: msg.isHighPriority
           ? Environment.getRequired('SQS_HIGH_PRIORITY_QUEUE_URL')
