@@ -125,7 +125,12 @@ export class LibraryService {
       const libTokenPairPath = process.env.AWS_SSM_LIB_TOKEN_PAIR_PATH || '/libkeys/production';
       const apiUsername = process.env.LIBRARIES_API_USERNAME || 'LibreBot';
 
-      const ssm = new SSMClient({ region: Environment.getRequired('AWS_REGION') });
+      const ssm = new SSMClient({
+        ...(Environment.getSystemEnvironment() === 'DEVELOPMENT' && {
+          endpoint: `http://${Environment.getOptional('LOCALSTACK_HOST', 'localhost')}:${Environment.getOptional('LOCALSTACK_PORT', '4566')}`,
+        }),
+        region: Environment.getRequired('AWS_REGION'),
+      });
 
       return {
         apiUsername,

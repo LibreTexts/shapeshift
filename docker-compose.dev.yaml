@@ -1,14 +1,14 @@
-name: "shapeshift"
+name: "shapeshift-dev"
 services:
-  mysql:
-    image: "bitnami/mysql:latest"
-    container_name: mysql-dev
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile-api
     ports:
-      - 3001:3306
-    volumes:
-      - ./.dev-data/mysql:/bitnami/mysql/data
-    environment:
-      - MYSQL_DATABASE=shapeshift
-      - MYSQL_ROOT_PASSWORD=secret
-      - MYSQL_USER=admin
-      - MYSQL_PASSWORD=admin
+      - "80:80"
+    env_file: ./dev.env
+  processor:
+    build:
+      context: .
+      dockerfile: Dockerfile-processor
+    env_file: ./dev.env

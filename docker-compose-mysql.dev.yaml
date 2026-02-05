@@ -1,0 +1,14 @@
+name: "shapeshift-dev-mysql"
+services:
+  mysql:
+    image: "bitnami/mysql:latest"
+    container_name: mysql-dev
+    ports:
+      - 3001:3306
+    volumes:
+      - ./.dev-data/mysql:/bitnami/mysql/data
+    environment:
+      - MYSQL_DATABASE=shapeshift
+      - MYSQL_ROOT_PASSWORD=secret
+      - MYSQL_USER=admin
+      - MYSQL_PASSWORD=admin

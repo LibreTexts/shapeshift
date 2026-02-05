@@ -20,7 +20,7 @@ export class QueueClient {
 
   public static getClient() {
     if (!this._instance) {
-      this._instance = new SQSClient();
+      this._instance = new SQSClient({ region: Environment.getRequired('AWS_REGION') });
     }
     return this._instance;
   }

@@ -27,6 +27,8 @@ const OPTIONAL_ENV = [
   'DB_USER',
   'DB_USER_READ',
   'IS_HIGH_PRIORITY_PROCESSOR',
+  'LOCALSTACK_HOST',
+  'LOCALSTACK_PORT',
   'PORT',
   'TMP_OUT_DIR',
   'USE_LOCAL_STORAGE',
@@ -74,7 +76,7 @@ export class Environment {
 
     const nodeEnvRaw = process.env.NODE_ENV;
     if (nodeEnvRaw) {
-      env.NODE_ENV = nodeEnvRaw as SystemEnvironment;
+      env.NODE_ENV = nodeEnvRaw.toUpperCase() as SystemEnvironment;
     } else {
       throw new Error('Missing "NODE_ENV" variable!');
     }
