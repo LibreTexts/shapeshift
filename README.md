@@ -3,14 +3,32 @@ A scalable, distributed system for extracting and transforming LibreTexts conten
 
 ## Development
 
-### MySQL
-Shapeshift uses MySQL for job data storage. An existing MySQL setup can be connected via environment variables or you
-can use the Docker Compose to run an ephemeral instance.
+Shapeshift services are split into two containers, `shapeshift-api` and `shapeshift-processor`, which use MySQL for job data storage. 
+
+#### Ephermeral MySQL
+If you want to start an ephermeral MySQL container for development, you can do so with:
 ```shell
 # Start
 docker compose -f docker-compose-mysql.dev.yml up -d
 # Stop
 docker compose -f docker-compose-mysql.dev.yml down
+```
+
+#### Existing MySQL
+If you have an existing local MySQL installation, you can connect to it by adding:
+```yaml
+extra_hosts:
+    - "host.docker.internal:host-gateway"
+```
+to each service in `docker-compose.dev.yaml` and then setting the `DB_HOST` variable to `host.docker.internal`.
+
+#### The Main Stack
+After MySQL is set up, start/stop the stack with:
+```shell
+# Start
+docker compose -f docker-compose.dev.yaml up -d
+# Stop
+docker compose -f docker-compose.dev.yaml down
 ```
 
 ### Run Development Build
@@ -26,6 +44,15 @@ Docker container, allowing you to test the entire job workflow end-to-end. Creat
 [install the CLI](https://docs.localstack.cloud/aws/getting-started/installation/) to get started. Set the `AWS_REGION`,
 `LOCALSTACK_HOST`, and `LOCALSTACK_PORT` environment variables appropriately. Test data is stored on your machine unless
 the Cloud Pods feature is used.
+
+### Running a Test Request
+```bash
+curl --request POST \
+  --url http://localhost:80/api/v1/job \
+  --header 'content-type: application/json' \
+  --data '{"url":"https://dev.libretexts.org/Sandboxes/eaturner_at_ucdavis.edu/Test_Book","highPriority":false}'
+```
+
 
 ## License
 [MIT](https://github.com/LibreTexts/shapeshift/blob/main/LICENSE.md)
