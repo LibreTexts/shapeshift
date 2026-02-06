@@ -14,7 +14,13 @@ export class StorageService {
   constructor() {
     this.bucket = Environment.getRequired('BUCKET');
     this.logger = logService.child().withContext({ logSource: this.logName });
-    this.client = new S3Client({ region: Environment.getRequired('AWS_REGION') });
+    this.client = new S3Client({
+      ...(Environment.getSystemEnvironment() === 'DEVELOPMENT' && {
+        endpoint: `http://${Environment.getOptional('LOCALSTACK_HOST', 'localhost')}:${Environment.getOptional('LOCALSTACK_PORT', '4566')}`,
+        forcePathStyle: true,
+      }),
+      region: Environment.getRequired('AWS_REGION'),
+    });
   }
 
   public async uploadFile({ contentType, data, key }: { contentType: string; data: Buffer; key: string }) {
