@@ -9,6 +9,9 @@ import { ZodRequest } from '../helpers';
 
 // <API routes>
 const router = express.Router();
+const jobController = new JobController();
+const downloadController = new DownloadController();
+
 router.use(
   cors({
     origin(origin, callback) {
@@ -23,17 +26,12 @@ router.use(
     maxAge: 7200,
   }),
 );
-router.route('/download/:bookID/:format/:fileName').get(validateZod(validators.download.get), async (req, res) => {
-  const downloadController = new DownloadController();
-  return await downloadController.downloadFile(req as ZodRequest<zod.infer<typeof validators.download.get>>, res);
-});
-router.route('/job').post(validateZod(validators.job.create), async (req, res) => {
-  const jobController = new JobController();
-  return await jobController.create(req, res);
-});
-router.route('/job/:jobID').get(validateZod(validators.job.get), async (req, res) => {
-  const jobController = new JobController();
-  return await jobController.get(req, res);
-});
+router
+  .route('/download/:bookID/:format/:fileName')
+  .get(validateZod(validators.download.get), (req, res) =>
+    downloadController.downloadFile(req as ZodRequest<zod.infer<typeof validators.download.get>>, res),
+  );
+router.route('/job').post(validateZod(validators.job.create), (req, res) => jobController.create(req, res));
+router.route('/job/:jobID').get(validateZod(validators.job.get), (req, res) => jobController.get(req, res));
 
 export { router };
