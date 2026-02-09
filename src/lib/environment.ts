@@ -61,7 +61,11 @@ export class Environment {
   }
 
   public static getSystemEnvironment(): SystemEnvironment {
-    return this.instance.NODE_ENV;
+    const raw = this.instance.NODE_ENV;
+    if (!raw) {
+      throw new Error('Missing NODE_ENV variable');
+    }
+    return raw.toUpperCase() as SystemEnvironment;
   }
 
   private static get instance(): EnvironmentVariables {

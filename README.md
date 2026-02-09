@@ -14,13 +14,13 @@ docker compose -f docker-compose-mysql.dev.yml up -d
 docker compose -f docker-compose-mysql.dev.yml down
 ```
 
-#### Existing MySQL
-If you have an existing local MySQL installation, you can connect to it by adding:
+#### Connecting to Locally Installed Resources
+If you have an existing local MySQL or LocalStack installation running on your machine, you
+can connect to them by enabling host networking mode. Add this config to each service in `docker-compose.dev.yaml`:
 ```yaml
-extra_hosts:
-    - "host.docker.internal:host-gateway"
+network_mode: "host"
 ```
-to each service in `docker-compose.dev.yaml` and then setting the `DB_HOST` variable to `host.docker.internal`.
+This will allow your Shapeshift containers to connect to the MySQL/LocalStack running on your device using `localhost` as the host name.
 
 #### The Main Stack
 After MySQL is set up, start/stop the stack with:

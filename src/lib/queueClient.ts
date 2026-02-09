@@ -20,7 +20,24 @@ export class QueueClient {
 
   public static getClient() {
     if (!this._instance) {
-      this._instance = new SQSClient({ region: Environment.getRequired('AWS_REGION') });
+      const config: any = {
+        region: Environment.getRequired('AWS_REGION'),
+      };
+      
+      // Extract endpoint from queue URL for local development
+      const queueUrl = this.getQueueUrl();
+      try {
+        const url = new URL(queueUrl);
+        // If it's not the standard AWS SQS endpoint, use it as a custom endpoint
+        if (!url.hostname.endsWith('amazonaws.com')) {
+          config.endpoint = `${url.protocol}//${url.host}`;
+          config.forcePathStyle = true;
+        }
+      } catch (err) {
+        // If URL parsing fails, proceed without custom endpoint
+      }
+      
+      this._instance = new SQSClient(config);
     }
     return this._instance;
   }

@@ -30,9 +30,7 @@ export class JobController {
     });
     this.logger.withMetadata({ isHighPriority, jobId, requesterIp, url }).info('Job created.');
 
-    if (Environment.getSystemEnvironment() !== 'DEVELOPMENT') {
-      await this.queueClient.sendJobMessage({ isHighPriority, jobId });
-    }
+    await this.queueClient.sendJobMessage({ isHighPriority, jobId });
 
     return res.status(200).send({
       data: {

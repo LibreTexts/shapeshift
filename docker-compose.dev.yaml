@@ -7,12 +7,10 @@ services:
     ports:
       - "80:80"
     env_file: ./dev.env
-    # extra_hosts:
-    #   - "host.docker.internal:host-gateway"
+    # network_mode: "host"
   processor:
     build:
       context: .
       dockerfile: Dockerfile-processor
     env_file: ./dev.env
-    # extra_hosts:
-    #   - "host.docker.internal:host-gateway"
+    # network_mode: "host"
