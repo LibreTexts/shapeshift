@@ -49,8 +49,16 @@ export function validateZod(schema: ZodObject) {
 
       if (!validationRes.success) {
         validationErrors = extractZodErrorMessages(validationRes.error);
+        if (process.env.NODE_ENV === 'development') {
+          console.error('Validation errors:', validationErrors);
+        }
         throw new Error('Validation failed');
       }
+
+      // Assign the validated/transformed data back to the request object for use in route handlers
+      req.body = validationRes.data.body;
+      req.query = validationRes.data.query as typeof req.query;
+      req.params = validationRes.data.params as typeof req.params;
 
       next();
     } catch (err) {
