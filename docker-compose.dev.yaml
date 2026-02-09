@@ -7,10 +7,10 @@ services:
     ports:
       - "80:80"
     env_file: ./dev.env
-    # network_mode: "host"
+    network_mode: "host"
   processor:
     build:
       context: .
       dockerfile: Dockerfile-processor
     env_file: ./dev.env
-    # network_mode: "host"
+    network_mode: "host"
