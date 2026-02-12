@@ -106,4 +106,31 @@ export class QueueClient {
       }),
     );
   }
+
+  public async clearQueue() {
+    const queueUrl = QueueClient.getQueueUrl();
+    const client = QueueClient.getClient();
+    while (true) {
+      const messages = await client.send(
+        new ReceiveMessageCommand({
+          MaxNumberOfMessages: 10,
+          WaitTimeSeconds: 1,
+          QueueUrl: queueUrl,
+        }),
+      );
+      if (!messages.Messages || messages.Messages.length === 0) {
+        break;
+      }
+      await Promise.all(
+        messages.Messages.map((msg) =>
+          client.send(
+            new DeleteMessageCommand({
+              QueueUrl: queueUrl,
+              ReceiptHandle: msg.ReceiptHandle!,
+            }),
+          ),
+        ),
+      );
+    }
+  }
 }

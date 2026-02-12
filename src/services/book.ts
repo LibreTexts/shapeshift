@@ -59,7 +59,6 @@ export class BookService {
     // Index
     await lib.api.pages.postPageContents(
       assembleUrl([pageInfo.url, 'Back_Matter', '10:_Index']),
-      { auth: lib.auth },
       `
         <p class="mt-script-comment">Dynamic Index</p><pre class="script">template('DynamicIndex');</pre>
         <p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic</a><a href="#">showtoc:no</a><a href="#">printoptions:no-header</a><a href="#">columns:three</a></p>
@@ -74,12 +73,11 @@ export class BookService {
     // Dynamic Glossary
     const chemLib = new LibraryService({ lib: 'chem' });
     await chemLib.init();
-    const dynamicGlossary = (await chemLib.api.pages.getPageContents(279134, { auth: chemLib.auth }, { mode: 'edit' }))
+    const dynamicGlossary = (await chemLib.api.pages.getPageContents(279134, undefined, { mode: 'edit' }))
       .body;
     if (dynamicGlossary) {
       await lib.api.pages.postPageContents(
         assembleUrl([pageInfo.url, 'Back_Matter', '20:_Glossary']),
-        { auth: lib.auth },
         `
         ${dynamicGlossary}
         \n<p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic</a><a href="#">showtoc:no</a><a href="#">printoptions:no-header</a><a href="#">columns:three</a></p>
@@ -95,7 +93,6 @@ export class BookService {
     // Detailed Licensing
     await lib.api.pages.postPageContents(
       assembleUrl([pageInfo.url, 'Back_Matter', '30:_Detailed_Licensing']),
-      { auth: lib.auth },
       dynamicDetailedLicensingLayout,
       {
         title: 'Detailed Licensing',
@@ -111,7 +108,6 @@ export class BookService {
       assembleUrl([pageInfo.url, 'Back_Matter']),
       '=mindtouch.page%2523thumbnail',
       thumbnail,
-      { auth: lib.auth },
     );
   }
 
@@ -124,7 +120,6 @@ export class BookService {
     const QRoptions = { errorCorrectionLevel: 'L', margin: 2, scale: 2 };
     await lib.api.pages.postPageContents(
       assembleUrl([pageInfo.url, 'Front_Matter', '01:_TitlePage']),
-      { auth: lib.auth },
       `
         <div style="height:95vh; display:flex; flex-direction: column; position: relative; align-items: center">
         <div style=" display:flex; flex:1; flex-direction: column; justify-content: center">
@@ -145,7 +140,6 @@ export class BookService {
     // InfoPage
     await lib.api.pages.postPageContents(
       assembleUrl([pageInfo.url, 'Front_Matter', '02:_InfoPage']),
-      { auth: lib.auth },
       `
         <p class=\\"mt-script-comment\\">Cross Library Transclusion</p><pre class=\\"script\\">template('CrossTransclude/Web',{'Library':'chem','PageID':170365});</pre>
         <p class=\\"template:tag-insert\\"><em>Tags recommended by the template: </em><a href=\\"#\\">article:topic</a><a href=\\"#\\">transcluded:yes</a><a href=\\"#\\">printoptions:no-header-title</a></p>
@@ -160,7 +154,6 @@ export class BookService {
     // Table of Contents
     await lib.api.pages.postPageContents(
       assembleUrl([pageInfo.url, 'Front_Matter', '03:_Table_of_Contents']),
-      { auth: lib.auth },
       dynamicTOCLayout,
       {
         title: 'Table of Contents',
@@ -172,7 +165,6 @@ export class BookService {
     // Licensing
     await lib.api.pages.postPageContents(
       assembleUrl([pageInfo.url, 'Front_Matter', '04:_Licensing']),
-      { auth: lib.auth },
       dynamicLicensingLayout,
       {
         title: 'Licensing',
@@ -188,7 +180,6 @@ export class BookService {
       assembleUrl([pageInfo.url, 'Front_Matter']),
       '=mindtouch.page%2523thumbnail',
       thumbnail,
-      { auth: lib.auth },
     );
   }
 
@@ -206,7 +197,6 @@ export class BookService {
     await CXOneRateLimiter.waitUntilAPIAvailable(4);
     await lib.api.pages.postPageContents(
       pageInfo.id,
-      { auth: lib.auth },
       `<p>{{template.ShowOrg()}}</p><p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic-guide</a></p>`,
       {
         title: `${mode} Matter`,
@@ -223,11 +213,29 @@ export class BookService {
           value:
             '[{"templateKey":"Topic_hierarchy","templateTitle":"Topic hierarchy","templatePath":"MindTouch/IDF3/Views/Topic_hierarchy","guid":"fc488b5c-f7e1-1cad-1a9a-343d5c8641f5"}]',
         },
-      ].map((p) => lib.api.pages.putPageProperties(pageInfo.id, p.property, p.value, { auth: lib.auth })),
+      ].map((p) => lib.api.pages.putPageProperties(pageInfo.id, p.property, p.value)),
     );
     mode === 'Front'
       ? await this.createDefaultFrontMatter({ createOnly, pageInfo })
       : await this.createDefaultBackMatter({ createOnly, pageInfo });
+  }
+
+  public async checkMatterExists(pages: BookPageInfo, matterType: BookMatterType): Promise<boolean> {
+    // Recursively search for a page with 'Front_Matter' or 'Back_Matter' in the URL, depending on the matterType
+    const searchTerm = matterType === 'Front' ? 'Front_Matter' : 'Back_Matter';
+    if (pages.url.includes(searchTerm)) {
+      return true;
+    }
+    if (!pages.subpages?.length) {
+      return false;
+    }
+    for (const subpage of pages.subpages) {
+      const found = await this.checkMatterExists(subpage, matterType);
+      if (found) {
+        return true;
+      }
+    }
+    return false; 
   }
 
   public async discoverPages(libName: string, pageID: number, flat: true): Promise<BookPageInfo[]>;
@@ -240,12 +248,12 @@ export class BookService {
     const lib = new LibraryService({ lib: libName });
     await lib.init();
     await CXOneRateLimiter.waitUntilAPIAvailable(2);
-    const pagesRespRaw = await lib.api.pages.getPageTree(pageID, { auth: lib.auth });
+    const pagesRespRaw = await lib.api.pages.getPageTree(pageID);
     const pagesRaw = pagesRespRaw.page;
 
     const getPageInfo = async (p: GetPagesResponse): Promise<BookPageInfo> => {
       await CXOneRateLimiter.waitUntilAPIAvailable(2);
-      const pageDetails = await lib.api.pages.getPage(Number(p['@id']), { auth: lib.auth });
+      const pageDetails = await lib.api.pages.getPage(Number(p['@id']));
       const url = pageDetails['uri.ui']!;
       const subpagesRaw = isNonNullCXOneObject(p.subpages) ? p.subpages : null;
       const subpages = Array.isArray(subpagesRaw?.page)
@@ -292,7 +300,7 @@ export class BookService {
     const libClient = new LibraryService({ lib });
     await libClient.init();
 
-    const page = await libClient.api.pages.getPage(path, { auth: libClient.auth });
+    const page = await libClient.api.pages.getPage(path);
     if (!page) return null;
     if (Number.isNaN(Number(page['@id']))) return null;
 
@@ -302,7 +310,7 @@ export class BookService {
     };
   }
 
-  private flattenPagesObj(pagesRaw: BookPageInfo) {
+  public flattenPagesObj(pagesRaw: BookPageInfo) {
     if (!pagesRaw) return null;
 
     const recurse = (subpages: BookPageInfo[]) => {

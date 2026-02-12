@@ -6,3 +6,5 @@ build
 .tmp/
 bpi-dist/
 backlogPerInstance.zip
+localstack-data/
+tmp/
