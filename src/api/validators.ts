@@ -55,10 +55,12 @@ export function validateZod(schema: ZodObject) {
         throw new Error('Validation failed');
       }
 
-      // Assign the validated/transformed data back to the request object for use in route handlers
-      req.body = validationRes.data.body;
-      req.query = validationRes.data.query as typeof req.query;
-      req.params = validationRes.data.params as typeof req.params;
+      // Store validated/transformed data in a custom property
+      req.validatedData = {
+        body: validationRes.data.body,
+        query: validationRes.data.query,
+        params: validationRes.data.params,
+      };
 
       next();
     } catch (err) {

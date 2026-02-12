@@ -5,6 +5,7 @@ import { PDFService } from './pdf';
 import { Job } from '../model';
 import { CreationAttributes } from 'sequelize';
 import { ThinCCService } from './thinCC';
+import { log } from '../lib/log';
 
 export type JobQueueMessageRawBody = {
   jobId: string;
@@ -45,33 +46,77 @@ export class JobService {
   }
 
   public async run(jobMsg: JobQueueMessage) {
-    await this.setStatus(jobMsg.jobId, 'inprogress');
-    const job = await this.get(jobMsg.jobId);
-    if (!job?.url) return;
+    try {
+      await this.setStatus(jobMsg.jobId, 'inprogress');
+      const job = await this.get(jobMsg.jobId);
+      if (!job?.url) return;
 
-    // <shift the shape>
-    const bookModel = new BookService();
-    const bookID = await bookModel.getIDFromURL(job.url);
-    if (!bookID) {
-      await this.setStatus(jobMsg.jobId, 'failed');
-      await this.finish(jobMsg);
-      return;
+      const pdfService = new PDFService();
+
+      try {
+        // <shift the shape>
+        const bookModel = new BookService();
+        const bookID = await bookModel.getIDFromURL(job.url);
+        if (!bookID) {
+          await this.setStatus(jobMsg.jobId, 'failed');
+          await this.finish(jobMsg);
+          return;
+        }
+
+        const initPages = await bookModel.discoverPages(bookID.lib, bookID.pageID);
+
+        // Check for front/back matter and create if missing
+        let didCreateMatter = false;
+        const frontMatterExists = bookModel.checkMatterExists(initPages, 'Front');
+        const backMatterExists = bookModel.checkMatterExists(initPages, 'Back');
+
+        if (!frontMatterExists) {
+          log.warn(`Front matter is missing for book ${bookID.lib}/${bookID.pageID}. Creating front matter...`);
+          await bookModel.createMatter({ mode: 'Front', pageInfo: initPages });
+          didCreateMatter = true;
+        }
+
+        if (!backMatterExists) {
+          log.warn(`Back matter is missing for book ${bookID.lib}/${bookID.pageID}. Creating back matter...`);
+          await bookModel.createMatter({ mode: 'Back', pageInfo: initPages });
+          didCreateMatter = true;
+        }
+
+        // If we created matter, we need to re-discover pages to get updated structure
+        const pages = didCreateMatter
+          ? await bookModel.discoverPages(bookID.lib, bookID.pageID)
+          : initPages;
+
+
+        await pdfService.convertBook({
+          bookID,
+          pages,
+          options: {
+            forceRestart: false, // Set to true to clear checkpoints and start fresh
+            jobId: jobMsg.jobId,
+            onProgress: (progress) => {
+              log.info(`Progress: ${progress.current}/${progress.total} - ${progress.status}`);
+            },
+          },
+        });
+
+        const thinCCService = new ThinCCService();
+        await thinCCService.convertBook(pages);
+        // </shift the shape>
+
+        await this.finish(jobMsg);
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        log.error(`Job failed: ${errorMsg}`);
+        await this.setStatus(jobMsg.jobId, 'failed');
+      } finally {
+        // Always cleanup browser resources
+        await pdfService.cleanup();
+      }
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      log.error(`A fatal error occurred while running the job: ${errorMsg}`);
     }
-
-    const pages = await bookModel.discoverPages(bookID.lib, bookID.pageID);
-
-    // FIXME: will discoverPages need to be called again if the matter was just now created?
-    await bookModel.createMatter({ mode: 'Front', pageInfo: pages });
-    await bookModel.createMatter({ mode: 'Back', pageInfo: pages });
-
-    const pdfService = new PDFService();
-    await pdfService.convertBook({ bookID, pages });
-
-    const thinCCService = new ThinCCService();
-    await thinCCService.convertBook(pages);
-    // </shift the shape>
-
-    await this.finish(jobMsg);
   }
 
   public async setStatus(id: string, newStatus: JobStatus) {
