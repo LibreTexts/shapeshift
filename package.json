@@ -4,6 +4,8 @@
   "description": "Scalable, distributed system for extracting and transforming LibreTexts content into various export formats.",
   "main": "index.js",
   "scripts": {
+    "dev:api": "tsx watch src/workers/api.ts",
+    "dev:processor": "tsx watch src/workers/processor.ts",
     "build": "rimraf ./build && tsc",
     "lint": "eslint . --ext .ts",
     "lint-and-fix": "eslint . --ext .ts --fix",
@@ -45,7 +47,7 @@
     "@aws-sdk/client-ssm": "^3.523.0",
     "@aws-sdk/cloudfront-signer": "^3.916.0",
     "@aws-sdk/lib-storage": "^3.910.0",
-    "@libretexts/cxone-expert-node": "^1.1.2",
+    "@libretexts/cxone-expert-node": "^1.3.0",
     "axios": "^1.13.2",
     "chromiumly": "^4.2.0",
     "cors": "^2.8.5",

@@ -1,9 +1,5 @@
 import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';
-import { createHmac } from 'crypto';
-import axios, { AxiosResponse } from 'axios';
-import { getErrorMessage } from '../helpers';
 import Expert from '@libretexts/cxone-expert-node';
-import Auth from '@libretexts/cxone-expert-node/dist/modules/auth';
 import { Environment } from '../lib/environment';
 
 export type CXOneFetchPageParams = {
@@ -26,11 +22,6 @@ export type LibraryKeyPair = {
   secret: string;
 };
 
-export type LibraryAPIRequestHeaders = {
-  'X-Deki-Token': string;
-  'X-Requested-With': string;
-};
-
 type ConstructorParams = {
   lib: string;
   user?: string;
@@ -42,10 +33,8 @@ type ConstructorParams = {
  * @param {string} lib - The subdomain of the library to interact with.
  */
 export class LibraryService {
-  private expertAuthInstance: Auth | null = null;
   private expertClient: Expert | null = null;
   private ssmClient: LibrariesSSMClient | null = null;
-  private requestHeaders: LibraryAPIRequestHeaders | null = null;
   private keyPair: LibraryKeyPair | null = null;
   private readonly lib: string;
   private readonly logName = 'LibraryClient';
@@ -62,62 +51,28 @@ export class LibraryService {
   public async init() {
     this.ssmClient = this._generateLibrariesSSMClient();
     this.keyPair = await this._getLibraryTokenPair(this.lib);
-    this.requestHeaders = this._generateAPIRequestHeaders();
-    this.expertClient = new Expert(`https://${this.lib}.libretexts.org`);
+    this.expertClient = new Expert({
+      auth: {
+        type: 'server',
+        params: {
+          key: this.keyPair?.key ?? 'INVALID',
+          secret: this.keyPair?.secret ?? 'INVALID',
+          user: this.user,
+        },
+      },
+      tld: `${this.lib}.libretexts.org`,
+    });
+  }
+
+  private _ensureInitialized() {
+    if (!this.ssmClient || !this.keyPair || !this.expertClient) {
+      throw new Error(`[${this.logName}] Client not properly initialized. Please call init() before using the client.`);
+    }
   }
 
   public get api() {
-    if (!this.expertClient) {
-      this.expertClient = new Expert(`https://${this.lib}.libretexts.org`);
-    }
-    return this.expertClient;
-  }
-
-  public get auth() {
-    if (!this.keyPair || !this.user || !this.expertClient) {
-      throw new Error(`[${this.logName}] Cannot get auth instance: missing KeyPair, User, or Client instance!`);
-    }
-    this.expertAuthInstance = this.expertClient.auth.ServerToken({
-      key: this.keyPair?.key ?? 'INVALID',
-      secret: this.keyPair?.secret ?? 'INVALID',
-      user: this.user,
-    });
-    return this.expertAuthInstance.getHeader();
-  }
-
-  public get authToken(): string {
-    if (!this.keyPair || !this.user || !this.expertClient) {
-      throw new Error(`[${this.logName}] Cannot get token: missing KeyPair, User, or Client instance!`);
-    }
-    this.expertAuthInstance = this.expertClient.auth.ServerToken({
-      key: this.keyPair?.key ?? 'INVALID',
-      secret: this.keyPair?.secret ?? 'INVALID',
-      user: this.user,
-    });
-    return this.expertAuthInstance.getToken()!;
-  }
-
-  /**
-   * Generates the set of request headers required for interacting with a library's API,
-   * including the API token.
-   */
-  private _generateAPIRequestHeaders(): LibraryAPIRequestHeaders | null {
-    try {
-      if (!this.ssmClient || !this.keyPair) {
-        throw new Error('Error generating libraries client.');
-      }
-
-      const epoch = Math.floor(Date.now() / 1000);
-      const hmac = createHmac('sha256', this.keyPair.secret);
-      hmac.update(`${this.keyPair.key}${epoch}=${this.ssmClient.apiUsername}`);
-      return {
-        'X-Deki-Token': `${this.keyPair.key}_${epoch}_=${this.ssmClient.apiUsername}_${hmac.digest('hex')}`,
-        'X-Requested-With': 'XMLHttpRequest',
-      };
-    } catch (err) {
-      console.error('Error generating API request headers.');
-      return null;
-    }
+    this._ensureInitialized();
+    return this.expertClient!;
   }
 
   private _generateLibrariesSSMClient(): LibrariesSSMClient | null {
@@ -198,32 +153,31 @@ export class LibraryService {
    * @param {Object} [query={}] - optional query parameters that will be appended to the request url
    * @param {boolean} [silentFail=false] - if true, will not throw an error if the fetch fails
    */
-  public async fetch(params: CXOneFetchPageParams): Promise<AxiosResponse> {
-    try {
-      const { subdomain, options, query, silentFail } = params;
+  // public async fetch(params: CXOneFetchPageParams): Promise<AxiosResponse> {
+  //   try {
+  //     const { subdomain, options, query, silentFail } = params;
 
-      if (!this.requestHeaders) {
-        throw new Error('Error generating API request headers.');
-      }
-      const finalOptions = this._optionsMerge(this.requestHeaders, options);
+  //     if (!this.authHeader) {
+  //       throw new Error('Error generating API request headers.');
+  //     }
+  //     const finalOptions = this._optionsMerge({ 'X-Deki-Token': this.authHeader['X-Deki-Token'] || "" }, options);
 
-      const { path, api } = params;
-      const isNumber = !isNaN(Number(path));
-      const queryIsFirst = api.includes('?') ? false : true;
-      const url = `https://${subdomain}.libretexts.org/@api/deki/pages/${
-        isNumber ? '' : '='
-      }${encodeURIComponent(encodeURIComponent(path))}/${api}${this._parseQuery(query, queryIsFirst)}`;
+  //     const { path, api } = params;
+  //     const isNumber = !isNaN(Number(path));
+  //     const queryIsFirst = api.includes('?') ? false : true;
+  //     const url = `https://${subdomain}.libretexts.org/@api/deki/pages/${isNumber ? '' : '='
+  //       }${encodeURIComponent(encodeURIComponent(path))}/${api}${this._parseQuery(query, queryIsFirst)}`;
 
-      const res = await axios(url, finalOptions);
-      if (!res.data && !silentFail) {
-        throw new Error(`Error fetching page from ${subdomain}.`);
-      }
+  //     const res = await axios(url, finalOptions);
+  //     if (!res.data && !silentFail) {
+  //       throw new Error(`Error fetching page from ${subdomain}.`);
+  //     }
 
-      return res;
-    } catch (err: unknown) {
-      throw new Error(`Request failed: ${getErrorMessage(err)}`);
-    }
-  }
+  //     return res;
+  //   } catch (err: unknown) {
+  //     throw new Error(`Request failed: ${getErrorMessage(err)}`);
+  //   }
+  // }
 
   /**
    *
@@ -231,25 +185,25 @@ export class LibraryService {
    * @param {boolean} first - Whether or not this is the first query parameter (defaults to false)
    * @returns {string} - An encoded query string (e.g. '&key=value&key2=value2' or '?key=value&key2=value2' if first is true)
    */
-  private _parseQuery(query?: Record<string, string>, first = false) {
-    if (!query) return '';
+  // private _parseQuery(query?: Record<string, string>, first = false) {
+  //   if (!query) return '';
 
-    const searchParams = new URLSearchParams();
-    for (const key in query) {
-      searchParams.append(key, query[key]);
-    }
-    return `${first ? '?' : '&'}${searchParams.toString()}`;
-  }
+  //   const searchParams = new URLSearchParams();
+  //   for (const key in query) {
+  //     searchParams.append(key, query[key]);
+  //   }
+  //   return `${first ? '?' : '&'}${searchParams.toString()}`;
+  // }
 
-  private _optionsMerge(headers: Record<string, string>, options?: Record<string, string | object>) {
-    if (!options) {
-      return { headers };
-    }
-    if (!options.headers) {
-      options.headers = Object.assign(headers, options.headers);
-    } else {
-      options.headers = headers;
-    }
-    return options;
-  }
+  // private _optionsMerge(headers: Record<string, string>, options?: Record<string, string | object>) {
+  //   if (!options) {
+  //     return { headers };
+  //   }
+  //   if (!options.headers) {
+  //     options.headers = Object.assign(headers, options.headers);
+  //   } else {
+  //     options.headers = headers;
+  //   }
+  //   return options;
+  // }
 }

@@ -6,6 +6,7 @@ import { validateZod, validators } from './validators';
 import { DownloadController } from '../controllers/download';
 import zod from 'zod';
 import { ZodRequest } from '../helpers';
+import { QueueClient } from '../lib/queueClient';
 
 // <API routes>
 const router = express.Router();
@@ -34,4 +35,33 @@ router
 router.route('/job').post(validateZod(validators.job.create), (req, res) => jobController.create(req, res));
 router.route('/job/:jobID').get(validateZod(validators.job.get), (req, res) => jobController.get(req, res));
 
+router.route('/clear-queue').post(async (req, res) => {
+  if (Environment.getSystemEnvironment() !== 'DEVELOPMENT') {
+    return res.status(501).send({
+      msg: 'Clearing the queue is only allowed in development environment.',
+      status: 501,
+    });
+  }
+
+  const queueClient = new QueueClient();
+  await queueClient.clearQueue();
+  return res.status(200).send({
+    msg: 'Queue cleared successfully.',
+    status: 200,
+  });
+});
+
 export { router };
+
+// Extend Express Request type to include validated data
+declare global {
+  namespace Express {
+    interface Request {
+      validatedData?: {
+        body?: any;
+        query?: any;
+        params?: any;
+      };
+    }
+  }
+}

@@ -1,5 +1,4 @@
 import { JobService } from '../services/job';
-import { Environment } from '../lib/environment';
 import { QueueClient } from '../lib/queueClient';
 import zod from 'zod';
 import { Response } from 'express';
@@ -19,9 +18,8 @@ export class JobController {
   }
 
   public async create(req: ZodRequest<zod.infer<typeof validators.job.create>>, res: Response) {
-    const data = req.body;
+    const { isHighPriority = false, url } = req.validatedData?.body || {};
     const jobModel = new JobService();
-    const { isHighPriority, url } = data;
     const requesterIp = extractIPFromHeaders(req);
     const jobId = await jobModel.create({
       isHighPriority,
@@ -42,7 +40,7 @@ export class JobController {
   }
 
   public async get(req: ZodRequest<zod.infer<typeof validators.job.get>>, res: Response) {
-    const jobId = req.params.jobID;
+    const { jobId } = req.validatedData?.params || {}; 
     const jobModel = new JobService();
     const job = await jobModel.get(jobId);
     if (!job) {
