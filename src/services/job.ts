@@ -6,6 +6,7 @@ import { Job } from '../model';
 import { CreationAttributes } from 'sequelize';
 import { ThinCCService } from './thinCC';
 import { log } from '../lib/log';
+import { writeFile } from 'fs/promises';
 
 export type JobQueueMessageRawBody = {
   jobId: string;
@@ -51,10 +52,13 @@ export class JobService {
       const job = await this.get(jobMsg.jobId);
       if (!job?.url) return;
 
-      const pdfService = new PDFService();
+      const useLocalStorage =
+        Environment.getOptional(
+          'USE_LOCAL_STORAGE',
+          Environment.getSystemEnvironment() === 'DEVELOPMENT' ? 'true' : 'false',
+        ) === 'true';
 
       try {
-        // <shift the shape>
         const bookModel = new BookService();
         const bookID = await bookModel.getIDFromURL(job.url);
         if (!bookID) {
@@ -63,7 +67,15 @@ export class JobService {
           return;
         }
 
-        const initPages = await bookModel.discoverPages(bookID.lib, bookID.pageID);
+        const initPages = await bookModel.discoverPages(bookID.lib, bookID.pageNum, true);
+        log.debug(`Discovered ${initPages.length} pages for book ${bookID.lib}/${bookID.pageNum}`);
+        // write the initPages array to a JSON file for debugging
+        await writeFile(`./debug_${bookID.lib}_${bookID.pageNum}_initPages.json`, JSON.stringify(initPages, null, 2));
+
+        const coverPageInfo = initPages.find((page) => page.pageID.toString() === bookID.toString());
+        if (!coverPageInfo) {
+          throw new Error(`Cover page with ID ${bookID.toString()} not found in discovered pages.`);
+        }
 
         // Check for front/back matter and create if missing
         let didCreateMatter = false;
@@ -71,47 +83,39 @@ export class JobService {
         const backMatterExists = bookModel.checkMatterExists(initPages, 'Back');
 
         if (!frontMatterExists) {
-          log.warn(`Front matter is missing for book ${bookID.lib}/${bookID.pageID}. Creating front matter...`);
-          await bookModel.createMatter({ mode: 'Front', pageInfo: initPages });
+          log.warn(`Front matter is missing for book ${bookID.lib}/${bookID.pageNum}. Creating front matter...`);
+          await bookModel.createMatter({ mode: 'Front', coverPageInfo });
           didCreateMatter = true;
         }
 
         if (!backMatterExists) {
-          log.warn(`Back matter is missing for book ${bookID.lib}/${bookID.pageID}. Creating back matter...`);
-          await bookModel.createMatter({ mode: 'Back', pageInfo: initPages });
-          didCreateMatter = true;
+          // log.warn(
+          //   `Back matter is missing for book ${bookID.lib}/${bookID.pageNum}. Creating back matter...`,
+          // );
+          // await bookModel.createMatter({ mode: "Back", coverPageInfo });
+          // didCreateMatter = true;
         }
 
         // If we created matter, we need to re-discover pages to get updated structure
-        const pages = didCreateMatter
-          ? await bookModel.discoverPages(bookID.lib, bookID.pageID)
-          : initPages;
+        const pages = didCreateMatter ? await bookModel.discoverPages(bookID.lib, bookID.pageNum, true) : initPages;
 
+        // Get flat list of all pages and their HTML content
+        const bookContents = await bookModel.getBookContents(bookID, pages);
 
-        await pdfService.convertBook({
-          bookID,
-          pages,
-          options: {
-            forceRestart: false, // Set to true to clear checkpoints and start fresh
-            jobId: jobMsg.jobId,
-            onProgress: (progress) => {
-              log.info(`Progress: ${progress.current}/${progress.total} - ${progress.status}`);
-            },
-          },
-        });
+        // <generate pdf>
+        const pdfService = new PDFService(bookID, { useLocalStorage });
+        const pdfPath = await pdfService.convertBook(bookContents);
+        log.info(`PDF generated at path: ${pdfPath}`);
+        // </generate pdf>
 
-        const thinCCService = new ThinCCService();
-        await thinCCService.convertBook(pages);
-        // </shift the shape>
+        // const thinCCService = new ThinCCService();
+        // await thinCCService.convertBook(pages);
 
         await this.finish(jobMsg);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         log.error(`Job failed: ${errorMsg}`);
         await this.setStatus(jobMsg.jobId, 'failed');
-      } finally {
-        // Always cleanup browser resources
-        await pdfService.cleanup();
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
