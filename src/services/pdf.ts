@@ -1,7 +1,6 @@
 import fs from 'node:fs/promises';
 import { v4 as uuid } from 'uuid';
 import { join, resolve } from 'node:path';
-import puppeteer, { Browser, Dialog, Viewport, HTTPRequest, GoToOptions } from 'puppeteer';
 import { pdfIgnoreList } from '../util/ignoreLists';
 import {
   generatePDFBackCoverContent,
@@ -15,14 +14,18 @@ import {
 } from '../util/pdfHelpers';
 import { ImageConstants } from '../util/imageConstants';
 import { isNullOrUndefined, sleep } from '../helpers';
-import { log, log as logService } from '../lib/log';
-import { BookID, BookPageInfo } from './book';
+import { log as logService } from '../lib/log';
 import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
 import { PDFDocument } from 'pdf-lib';
 import { LogLayer } from 'loglayer';
 import { Environment } from '../lib/environment';
 import { StorageService } from '../lib/storageService';
 import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
+import Prince from 'prince';
+import { BookPageInfo, BookPageInfoWithContent } from '../types/book';
+import PageID from '../util/pageID';
+import { PDF_COVER_WIDTHS } from '../lib/constants';
+import * as cheerio from 'cheerio';
 
 export type PDFCoverOpts = {
   extraPadding?: boolean;
@@ -33,26 +36,13 @@ export type PDFCoverOpts = {
 const pdfCoverTypes = ['Amazon', 'CaseWrap', 'CoilBound', 'Main', 'PerfectBound'] as const;
 type PDFCoverType = (typeof pdfCoverTypes)[number];
 
-type ConversionCheckpoint = {
-  convertedPages: string[];
-  lastProcessedPageId: string;
-  totalPagesProcessed: number;
-  consecutiveFailures: number;
-  timestamp: Date;
-};
-
-type ConversionOptions = {
-  forceRestart?: boolean;
-  jobId?: string;
-  onProgress?: (progress: { current: number; total: number; status: string }) => void;
-};
-
 type ConversionTask = {
-  pageInfo: BookPageInfo;
+  _id: string;
+  pageID: PageID;
+  pageInfo: BookPageInfoWithContent;
   fileName: string;
   type: 'page' | 'toc';
-  id: string;
-}
+};
 
 const RETRY_CONFIG = {
   maxAttempts: 3,
@@ -62,27 +52,177 @@ const RETRY_CONFIG = {
 };
 
 const CIRCUIT_BREAKER_CONFIG = {
-  maxConsecutiveFailures: 3,
+  maxConsecutiveFailures: 5,
   maxJobDurationMs: 4 * 60 * 60 * 1000, // 4 hours
 };
 
-const BROWSER_RESTART_THRESHOLD = 50;
-
 export class PDFService {
-  private _browser: Browser | null = null;
-  private _pagesProcessedCount: number = 0;
+  private _bookID!: PageID;
+  private _useLocalStorage: boolean = false;
+  private _convertedPagePaths: string[] = [];
   private readonly logger: LogLayer;
   private readonly logName = 'PDFService';
-  private readonly pageLoadSettings: GoToOptions = {
-    timeout: 120000,
-    waitUntil: ['load', 'domcontentloaded', 'networkidle0'],
-  };
   private readonly storageService: StorageService;
-  private readonly viewportSettings: Viewport = { width: 975, height: 1000 };
 
-  constructor() {
+  constructor(bookID: PageID, opts: { useLocalStorage?: boolean } = {}) {
+    this._bookID = bookID;
+    this._useLocalStorage = opts.useLocalStorage ?? false;
+
+    if (!bookID || !(bookID instanceof PageID)) {
+      throw new Error('Book ID is required and must be a valid PageID instance');
+    }
+
     this.logger = logService.child().withContext({ logSource: this.logName });
     this.storageService = new StorageService();
+  }
+
+  /**
+   * Converts the HTML of a book to a PDF, including generating covers and front/back matter if missing.
+   * Implements retry logic with exponential backoff for robustness, and a circuit breaker to prevent runaway jobs. The conversion process is as follows:
+   * 1. Build a list of conversion tasks for each page, ensuring correct ordering and TOC placement.
+   * 2. For each task, attempt to convert the page to PDF with retries. If a task fails after all retries, the entire conversion process is aborted.
+   * 3. If all pages are converted succesfully, create the covers
+   * 4. Merge all converted pages and covers into a final PDF, which is then uploaded to storage or saved locally based on configuration.
+   * @param pages
+   * @returns
+   */
+  public async convertBook(pages: BookPageInfoWithContent[]): Promise<string> {
+    const startTime = Date.now();
+    const pagesMap = new Map(pages.map((c) => [c.pageID.toString(), c] as [string, BookPageInfoWithContent]));
+
+    try {
+      // Build conversion tasks with correct ordering and TOC placement
+      const conversionTasks = this.buildTaskList(pages);
+      this.logger.withMetadata({ totalTasks: conversionTasks.length }).info('Built conversion task list');
+
+      let processedPageCount = 0;
+      let consecutiveFailures = 0;
+
+      for (const task of conversionTasks) {
+        // Check job timeout
+        if (Date.now() - startTime > CIRCUIT_BREAKER_CONFIG.maxJobDurationMs) {
+          throw new Error('Job exceeded maximum duration (4 hours)');
+        }
+
+        if (consecutiveFailures >= CIRCUIT_BREAKER_CONFIG.maxConsecutiveFailures) {
+          throw new Error('Job failed due to too many consecutive page conversion failures');
+        }
+
+        this.logger
+          .withMetadata({
+            current: processedPageCount + 1,
+            total: pages.length,
+          })
+          .info('Processing page');
+
+        // Get the actual HTML content
+        const content = pagesMap.get(task.pageID.toString());
+        if (!content) {
+          // This should never happen since we built the task list from the same pages, but we check just in case
+          throw new Error(`Missing HTML content for pageID: ${task.pageID.toString()}`);
+        }
+
+        // Convert the page with retry logic
+        const convertFn = async () => {
+          if (task.type === 'toc') {
+            return await this.generateTableOfContents({
+              pageInfo: task.pageInfo,
+            });
+          } else {
+            return await this.convertPage({
+              pageID: task.pageID,
+              pageBodyHTML: task.pageInfo.body.join(''),
+            });
+          }
+        };
+
+        const result = await this.retryWithBackoff(convertFn, `Convert ${task.type}: ${task.pageInfo.url}`);
+
+        if (result.success) {
+          this._convertedPagePaths.push(result.result!);
+          processedPageCount++;
+          consecutiveFailures = 0; // reset on success
+        } else {
+          // If a task fails after all retries, increment the consecutive failure count
+          // if more tasks completely fail than the threshold allows, the circuit breaker will trip and abort the job completely
+          consecutiveFailures++;
+          this.logger.withMetadata({ error: result.error, pageID: task.pageID }).error('Task failed after all retries');
+        }
+      }
+
+      // All pages converted successfully, merge and generate covers
+      this.logger.info('All pages converted, merging content');
+      const contentFilePath = await this.mergeContentPagesAndWrite();
+
+      const numPages = await this.calculateNumPagesInPDFDocument(contentFilePath);
+
+      // Generate covers with retry
+      this.logger.info('Generating covers');
+      const coverConfigs = [
+        { coverType: 'Amazon' as PDFCoverType, numPages },
+        {
+          coverType: 'CaseWrap' as PDFCoverType,
+          numPages,
+          opt: { extraPadding: true, hardcover: true },
+        },
+        {
+          coverType: 'CoilBound' as PDFCoverType,
+          numPages,
+          opt: { extraPadding: true, thin: true },
+        },
+        { coverType: 'Main' as PDFCoverType, numPages: null },
+        {
+          coverType: 'PerfectBound' as PDFCoverType,
+          numPages,
+          opt: { extraPadding: true },
+        },
+      ];
+
+      // TODO: does pages contain the cover page or only true content pages?
+      const coverPageInfo = pagesMap.get(this._bookID.toString());
+
+      const coverResults = await Promise.allSettled(
+        coverConfigs.map(async (config) => {
+          const result = await this.retryWithBackoff(
+            async () =>
+              await this.generateCover({
+                bookInfo: coverPageInfo!,
+                coverType: config.coverType,
+                numPages: config.numPages,
+                opt: config.opt,
+              }),
+            `Generate cover: ${config.coverType}`,
+          );
+          if (!result.success) {
+            this.logger
+              .withMetadata({
+                coverType: config.coverType,
+                error: result.error,
+              })
+              .error('Cover generation failed after retries');
+          }
+          return result;
+        }),
+      );
+
+      const failedCovers = coverResults.filter((r) => r.status === 'rejected').length;
+
+      if (failedCovers > 0) {
+        throw new Error('One or more covers failed to generate after all retries');
+      }
+
+      this.logger
+        .withMetadata({
+          duration: Date.now() - startTime,
+          totalPages: pages.length,
+        })
+        .info('Book conversion completed successfully');
+
+      return contentFilePath;
+    } catch (error) {
+      this.logger.withMetadata({ error, duration: Date.now() - startTime }).error('Book conversion failed');
+      throw error;
+    }
   }
 
   private async retryWithBackoff<T>(
@@ -121,469 +261,97 @@ export class PDFService {
     return filePDF.getPageCount();
   }
 
-  private async getBrowser(): Promise<Browser> {
-    if (!this._browser) {
-      this._browser = await puppeteer.launch({
-        headless: true,
-        args: ['--font-render-hinting=none', '--force-color-profile=sRGB', '--no-sandbox'],
-      });
-      log.debug("Using Puppeteer executable at: " + puppeteer.executablePath());
-      log.debug("Puppeteer version: " + (await this._browser.version()));
-    }
-    return this._browser;
-  }
+  private async generateContentOutputFilePath() {
+    const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+    const basePath = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
+    const dirPath = join(basePath, 'workdir');
+    const filePath = join(dirPath, `content_${this._bookID.toString()}.pdf`);
 
-  private async restartBrowser(): Promise<void> {
-    this.logger.info('Restarting browser to prevent memory leaks');
-    if (this._browser) {
-      try {
-        await this._browser.close();
-      } catch (error) {
-        this.logger.withMetadata({ error }).warn('Error closing browser during restart');
-      }
-      this._browser = null;
-    }
-    this._pagesProcessedCount = 0;
-    await this.getBrowser();
-  }
-
-  private async ensureBrowserHealthy(): Promise<void> {
-    if (this._pagesProcessedCount >= BROWSER_RESTART_THRESHOLD) {
-      await this.restartBrowser();
-    }
-    try {
-      const browser = await this.getBrowser();
-      if (!browser.isConnected()) {
-        this.logger.warn('Browser disconnected, restarting');
-        await this.restartBrowser();
-      }
-    } catch (error) {
-      this.logger.withMetadata({ error }).error('Browser health check failed, restarting');
-      await this.restartBrowser();
-    }
-  }
-
-  public async cleanup(): Promise<void> {
-    this.logger.info('Cleaning up PDFService resources');
-    if (this._browser) {
-      try {
-        await this._browser.close();
-      } catch (error) {
-        this.logger.withMetadata({ error }).warn('Error closing browser during cleanup');
-      }
-      this._browser = null;
-    }
-  }
-
-  private async generatePageOutputFileName({
-    bookID,
-    outFileNameOverride,
-    preferLocalStorage = false,
-    useWorkdir = false,
-  }: {
-    bookID: BookID;
-    outFileNameOverride?: string;
-    preferLocalStorage?: boolean;
-    useWorkdir?: boolean;
-  }) {
-    const baseDir = preferLocalStorage ? Environment.getOptional('TMP_OUT_DIR', './.tmp') : '';
-    const basePath = resolve(`${baseDir}/pdf/${bookID.lib}-${bookID.pageID}`);
-    const dirPath = useWorkdir ? join(basePath, 'workdir') : basePath;
-    const fileName = outFileNameOverride ?? uuid();
-    const filePath = join(dirPath, `${fileName}.pdf`);
-    if (preferLocalStorage) await fs.mkdir(dirPath, { recursive: true });
+    // Ensure the dir exists before returning the file path
+    await fs.mkdir(dirPath, { recursive: true });
     return filePath;
   }
 
-  private async ensureCoversDirectory(bookID: BookID) {
-    const tmpDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
-    const dirPath = resolve(`${tmpDir}/pdf/${bookID.lib}-${bookID.pageID}/covers/`);
+  private async generatePageOutputFilePath(pageID: PageID) {
+    const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+    const basePath = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
+    const dirPath = join(basePath, 'workdir');
+    const filePath = join(dirPath, `${pageID.toString()}.pdf`);
+
+    // Ensure the dir exists before returning the file path
     await fs.mkdir(dirPath, { recursive: true });
-    return dirPath;
+
+    return filePath;
   }
 
-  private getCheckpointPath(bookID: BookID): string {
-    const tmpDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
-    return resolve(`${tmpDir}/pdf/${bookID.lib}-${bookID.pageID}/checkpoint.json`);
-  }
-
-  private async saveCheckpoint(bookID: BookID, checkpoint: ConversionCheckpoint): Promise<void> {
-    const checkpointPath = this.getCheckpointPath(bookID);
-    await fs.mkdir(resolve(checkpointPath, '..'), { recursive: true });
-    await fs.writeFile(checkpointPath, JSON.stringify(checkpoint, null, 2));
-    this.logger.withMetadata({ totalPagesProcessed: checkpoint.totalPagesProcessed }).debug('Checkpoint saved');
-  }
-
-  private async loadCheckpoint(bookID: BookID): Promise<ConversionCheckpoint | null> {
-    const checkpointPath = this.getCheckpointPath(bookID);
+  private async convertPage({ pageID, pageBodyHTML }: { pageID: PageID; pageBodyHTML: string }) {
     try {
-      const data = await fs.readFile(checkpointPath, 'utf-8');
-      const checkpoint = JSON.parse(data) as ConversionCheckpoint;
-      this.logger.withMetadata({ totalPagesProcessed: checkpoint.totalPagesProcessed }).info('Checkpoint loaded');
-      return checkpoint;
+      // const listing = await this.getLevel(pageInfo);
+      // if (listing) {
+      //   await page.evaluate(this.processDirectoryPage, {
+      //     listing,
+      //     tags: pageInfo.tags,
+      //     title: pageInfo.title,
+      //   });
+      //   await sleep(1000);
+      // }
+      // const foundPrefix = await page.evaluate(function (url) {
+      //   const title = document.getElementById("title");
+      //   if (!title) return "";
+      //   const color = window.getComputedStyle(title).color;
+      //   const innerText = title.innerText;
+      //   title.innerHTML = `<a style="color:${color}; text-decoration: none" href="${url}">${innerText}</a>`;
+      //   if (innerText?.includes(":")) {
+      //     return innerText.split(":")[0];
+      //   }
+      //   return "";
+      // }, pageInfo.url);
+      // const prefix = foundPrefix ? `${foundPrefix}.` : "";
+
+      // const showHeaders = !(
+      //   pageInfo.tags.includes("printoptions:no-header") ||
+      //   pageInfo.tags.includes("printoptions:no-header-title")
+      // );
+      // // TODO: re-evaluate
+      // if (pageInfo.tags.includes("hidetop:solutions")) {
+      //   await page.addStyleTag({
+      //     content: "dd, dl {display: none;} h3 {font-size: 160%}",
+      //   });
+      // }
+      // if (pageInfo.url.includes("Wakim_and_Grewal")) {
+      //   await page.addStyleTag({
+      //     content: `.mt-content-container {font-size: 93%}`,
+      //   });
+      // }
+      // await page.addStyleTag({
+      //   content: `
+      //   @page {
+      //     size: calc(8.5in - (0.75in + 0.9in)) calc(11in - 0.625in);
+      //     margin: ${showHeaders ? `${pdfPageMargins};` : "0.625in;"}
+      //     padding: 0;
+      //     print-color-adjust: exact;
+      //   }
+      //   #elm-main-content {
+      //     padding: 0 !important;
+      //   }
+      //   ${pdfTOCStyles}
+      // `,
+      // });
+
+      const inputPath = await this.createTempFile(pageBodyHTML);
+      const outputPath = await this.generatePageOutputFilePath(pageID);
+
+      const prince = new Prince();
+      await prince.inputs(inputPath).output(outputPath).execute();
+
+      await this.deleteTempFile(inputPath); // Cleanup the temp file after conversion
+
+      this.logger.withMetadata({ outputPath }).info('Converted page.');
+      return outputPath;
     } catch (error) {
-      if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
-        return null;
-      }
-      this.logger.withMetadata({ error }).warn('Error loading checkpoint');
-      return null;
-    }
-  }
-
-  private async clearCheckpoint(bookID: BookID): Promise<void> {
-    const checkpointPath = this.getCheckpointPath(bookID);
-    try {
-      await fs.unlink(checkpointPath);
-      this.logger.info('Checkpoint cleared');
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this.logger.withMetadata({ error }).warn('Error clearing checkpoint');
-      }
-    }
-  }
-
-  private async cleanupTempFiles(bookID: BookID): Promise<void> {
-    const tmpDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
-    const workdirPath = resolve(`${tmpDir}/pdf/${bookID.lib}-${bookID.pageID}/workdir`);
-    this.logger.withMetadata({ workdirPath }).info('Cleaning up workdir');
-
-    try {
-      await fs.rm(workdirPath, { recursive: true, force: true });
-    } catch (error) {
-      if ((error as NodeJS.ErrnoException).code !== 'ENOENT') {
-        this.logger.withMetadata({ error, workdirPath }).warn('Error deleting workdir');
-      }
-    }
-  }
-
-  private async detailsOpener(detailsElements: HTMLDetailsElement[]) {
-    for (const elem of detailsElements) {
-      elem.open = true;
-    }
-  }
-
-  private async dialogHandler(dialog: Dialog) {
-    await dialog.dismiss();
-  }
-
-  private async eagerImageLoader(imageElements: HTMLImageElement[]) {
-    for (const img of imageElements) {
-      img.loading = 'eager';
-    }
-  }
-
-  private async requestHandler(req: HTTPRequest) {
-    if (req.isInterceptResolutionHandled()) return;
-    if (pdfIgnoreList?.length) {
-      const url = req.url();
-      const foundMatch = pdfIgnoreList.find((u) => url.includes(u));
-      if (foundMatch) {
-        await req.abort();
-        return;
-      }
-    }
-    await req.continue();
-  }
-
-  public async convertBook({
-    bookID,
-    pages,
-    options = {},
-  }: {
-    bookID: BookID;
-    pages: BookPageInfo;
-    options?: ConversionOptions;
-  }): Promise<string> {
-    const startTime = Date.now();
-    let consecutiveFailures = 0;
-    const preferLocalStorage = Environment.getOptional('USE_LOCAL_STORAGE', 'false') === 'true';
-
-    try {
-      // Load or clear checkpoint
-      let checkpoint: ConversionCheckpoint | null = null;
-      if (options.forceRestart) {
-        this.logger.info('Force restart requested, clearing checkpoint and temp files');
-        await this.clearCheckpoint(bookID);
-        await this.cleanupTempFiles(bookID);
-      } else {
-        checkpoint = await this.loadCheckpoint(bookID);
-        if (checkpoint) {
-          consecutiveFailures = checkpoint.consecutiveFailures;
-          this.logger
-            .withMetadata({ resumeFrom: checkpoint.lastProcessedPageId })
-            .info('Resuming from checkpoint');
-        }
-      }
-
-      // Flatten book structure into conversion tasks
-      const conversionTasks = this.buildTaskList(pages);
-      this.logger.withMetadata({ totalTasks: conversionTasks.length }).info('Built conversion task list');
-
-      // Filter tasks based on checkpoint
-      const tasksToProcess = checkpoint
-        ? conversionTasks.filter((task) => !checkpoint?.convertedPages?.includes(task.fileName))
-        : conversionTasks;
-
-      const pagePaths: string[] = checkpoint ? [...checkpoint.convertedPages] : [];
-      let processedCount = checkpoint?.totalPagesProcessed || 0;
-
-      for (const task of tasksToProcess) {
-        // Check job timeout
-        if (Date.now() - startTime > CIRCUIT_BREAKER_CONFIG.maxJobDurationMs) {
-          throw new Error('Job exceeded maximum duration (4 hours)');
-        }
-
-        // Check circuit breaker
-        if (consecutiveFailures >= CIRCUIT_BREAKER_CONFIG.maxConsecutiveFailures) {
-          throw new Error(
-            `Circuit breaker triggered: ${consecutiveFailures} consecutive failures. Aborting job.`,
-          );
-        }
-
-        // Ensure browser is healthy before processing
-        await this.ensureBrowserHealthy();
-
-        this.logger
-          .withMetadata({
-            current: processedCount + 1,
-            total: tasksToProcess.length,
-            type: task.type,
-            title: task.pageInfo.title
-          })
-          .info('Processing page');
-
-        // Convert the page with retry logic
-        const convertFn = async () => {
-          if (task.type === 'toc') {
-            return await this.generateTableOfContents({
-              bookID,
-              pageInfo: task.pageInfo,
-              outFileNameOverride: task.fileName,
-            });
-          } else {
-            return await this.convertPage({
-              bookID,
-              pageInfo: task.pageInfo,
-              outFileNameOverride: task.fileName,
-            });
-          }
-        };
-
-        const result = await this.retryWithBackoff(convertFn, `Convert ${task.type}: ${task.pageInfo.url}`);
-
-        if (result.success) {
-          pagePaths.push(result.result!);
-          processedCount++;
-          consecutiveFailures = 0; // Reset on success
-
-          if (options.onProgress) {
-            options.onProgress({
-              current: processedCount,
-              total: conversionTasks.length,
-              status: `Converted ${task.type}: ${task.pageInfo.title}`,
-            });
-          }
-
-          // Save checkpoint after each successful conversion
-          await this.saveCheckpoint(bookID, {
-            convertedPages: pagePaths.slice(),
-            lastProcessedPageId: task.id,
-            totalPagesProcessed: processedCount,
-            consecutiveFailures,
-            timestamp: new Date(),
-          });
-        } else {
-          consecutiveFailures++;
-          this.logger
-            .withMetadata({ error: result.error, task: task.id })
-            .error('Task failed after retries');
-
-          // Save checkpoint even on failure
-          await this.saveCheckpoint(bookID, {
-            convertedPages: pagePaths.slice(),
-            lastProcessedPageId: task.id,
-            totalPagesProcessed: processedCount,
-            consecutiveFailures,
-            timestamp: new Date(),
-          });
-        }
-
-        this._pagesProcessedCount++;
-      }
-
-      // All pages converted successfully, merge and generate covers
-      this.logger.info('All pages converted, merging content');
-      const contentFilePath = await this.mergeContentPagesAndWrite({
-        bookID,
-        pages: pagePaths,
-        preferLocalStorage,
-      });
-      const numPages = await this.calculateNumPagesInPDFDocument(contentFilePath);
-
-      // Generate covers with retry
-      this.logger.info('Generating covers');
-      const coverConfigs = [
-        { coverType: 'Amazon' as PDFCoverType, numPages },
-        { coverType: 'CaseWrap' as PDFCoverType, numPages, opt: { extraPadding: true, hardcover: true } },
-        { coverType: 'CoilBound' as PDFCoverType, numPages, opt: { extraPadding: true, thin: true } },
-        { coverType: 'Main' as PDFCoverType, numPages: null },
-        { coverType: 'PerfectBound' as PDFCoverType, numPages, opt: { extraPadding: true } },
-      ];
-
-      const coverResults = await Promise.allSettled(
-        coverConfigs.map(async (config) => {
-          const result = await this.retryWithBackoff(
-            async () =>
-              await this.generateCover({
-                bookInfo: pages,
-                coverType: config.coverType,
-                numPages: config.numPages,
-                opt: config.opt,
-              }),
-            `Generate cover: ${config.coverType}`,
-          );
-          if (!result.success) {
-            this.logger
-              .withMetadata({ coverType: config.coverType, error: result.error })
-              .error('Cover generation failed after retries');
-          }
-          return result;
-        }),
-      );
-
-      const failedCovers = coverResults.filter((r) => r.status === 'rejected').length;
-      if (failedCovers > 0) {
-        this.logger.withMetadata({ failedCovers }).warn('Some covers failed to generate');
-      }
-
-      const finalPath = await this.mergeContentPagesAndWrite({
-        bookID,
-        pages: pagePaths,
-        preferLocalStorage,
-      });
-
-      this.logger
-        .withMetadata({ duration: Date.now() - startTime, totalPages: processedCount })
-        .info('Book conversion completed successfully');
-
-      // Success! Clear checkpoint and cleanup
-      await this.clearCheckpoint(bookID);
-      await this.cleanupTempFiles(bookID);
-
-      return finalPath;
-    } catch (error) {
-      this.logger.withMetadata({ error, duration: Date.now() - startTime }).error('Book conversion failed');
-      // Keep checkpoint and temp files for potential resume
+      this.logger.withMetadata({ error }).error('Page conversion failed');
       throw error;
     }
-  }
-
-  public async convertPage({
-    bookID,
-    outFileNameOverride,
-    pageInfo,
-  }: {
-    bookID?: BookID;
-    outFileNameOverride?: string;
-    pageInfo: BookPageInfo;
-    token?: string;
-  }) {
-    await CXOneRateLimiter.waitUntilAPIAvailable(2);
-    const browser = await this.getBrowser();
-    const page = await browser.newPage();
-
-    try {
-      await page.setViewport(this.viewportSettings);
-      await page.setRequestInterception(true);
-      page.on('dialog', this.dialogHandler);
-      page.on('request', this.requestHandler);
-      await page.goto(`${pageInfo.url}?no-cache`, this.pageLoadSettings);
-      await page.$$eval('img', this.eagerImageLoader);
-      await page.$$eval('details', this.detailsOpener);
-      await sleep(1000);
-
-      const listing = await this.getLevel(pageInfo);
-      if (listing) {
-        await page.evaluate(this.processDirectoryPage, { listing, tags: pageInfo.tags, title: pageInfo.title });
-        await sleep(1000);
-      }
-      const foundPrefix = await page.evaluate(function (url) {
-        const title = document.getElementById('title');
-        if (!title) return '';
-        const color = window.getComputedStyle(title).color;
-        const innerText = title.innerText;
-        title.innerHTML = `<a style="color:${color}; text-decoration: none" href="${url}">${innerText}</a>`;
-        if (innerText?.includes(':')) {
-          return innerText.split(':')[0];
-        }
-        return '';
-      }, pageInfo.url);
-      const prefix = foundPrefix ? `${foundPrefix}.` : '';
-
-      const showHeaders = !(
-        pageInfo.tags.includes('printoptions:no-header') || pageInfo.tags.includes('printoptions:no-header-title')
-      );
-      // TODO: re-evaluate
-      if (pageInfo.tags.includes('hidetop:solutions')) {
-        await page.addStyleTag({ content: 'dd, dl {display: none;} h3 {font-size: 160%}' });
-      }
-      if (pageInfo.url.includes('Wakim_and_Grewal')) {
-        await page.addStyleTag({ content: `.mt-content-container {font-size: 93%}` });
-      }
-      await page.addStyleTag({
-        content: `
-        @page {
-          size: calc(8.5in - (0.75in + 0.9in)) calc(11in - 0.625in);
-          margin: ${showHeaders ? `${pdfPageMargins};` : '0.625in;'}
-          padding: 0;
-          print-color-adjust: exact;
-        }
-        #elm-main-content {
-          padding: 0 !important;
-        }
-        ${pdfTOCStyles}
-      `,
-      });
-
-      const path = await this.generatePageOutputFileName({
-        bookID: bookID ?? {
-          lib: pageInfo.lib,
-          pageID: pageInfo.id,
-        },
-        outFileNameOverride,
-        preferLocalStorage: true,
-        useWorkdir: !!bookID,
-      });
-
-      await page.pdf({
-        // Letter Margin
-        path,
-        displayHeaderFooter: showHeaders,
-        headerTemplate: generatePDFHeader(ImageConstants['default']),
-        footerTemplate: generatePDFFooter({
-          currentPage: pageInfo,
-          mainColor: '#127BC4',
-          pageLicense: pageInfo.license,
-          prefix,
-        }),
-        printBackground: true,
-        preferCSSPageSize: true,
-        timeout: this.pageLoadSettings.timeout,
-      });
-      this.logger.withMetadata({ url: pageInfo.url, outFileNameOverride }).info('Converted page.');
-      return path;
-    } finally {
-      if (!page.isClosed()) await page.close();
-    }
-  }
-
-  public async convertPages(pages: BookPageInfo[]) {
-    const outPaths: string[] = [];
-    for (const page of pages) {
-      const path = await this.convertPage({ pageInfo: page });
-      outPaths.push(path);
-    }
-    return outPaths;
   }
 
   private async mergeFiles(
@@ -622,34 +390,28 @@ export class PDFService {
     return outputDocument.save();
   }
 
-  public async mergeContentPagesAndWrite({
-    bookID,
-    pages,
-    preferLocalStorage = false,
-  }: {
-    bookID: BookID;
-    pages: string[];
-    preferLocalStorage?: boolean;
-  }) {
+  private async mergeContentPagesAndWrite() {
     const extractFileName = (filePath: string) => {
       const split = filePath.split('/');
       return split[split.length - 1];
     };
+
     const isSplittable = (filePath: string) => !!filePath.split('/').length;
-    const sortedPages = pages
+    const sortedPages = this._convertedPagePaths
       .filter((p) => isSplittable(p))
       .sort((aRaw, bRaw) => {
         const a = extractFileName(aRaw);
         const b = extractFileName(bRaw);
-        return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+        return a.localeCompare(b, undefined, {
+          numeric: true,
+          sensitivity: 'base',
+        });
       });
+
     const mergedRaw = await this.mergeFiles(sortedPages);
-    const outPath = await this.generatePageOutputFileName({
-      bookID,
-      outFileNameOverride: 'Content',
-      preferLocalStorage,
-    });
-    if (!preferLocalStorage) {
+    const outPath = await this.generateContentOutputFilePath();
+
+    if (!this._useLocalStorage) {
       await this.storageService.uploadFile({
         contentType: 'application/pdf',
         data: Buffer.from(mergedRaw),
@@ -711,14 +473,29 @@ export class PDFService {
     return `<ul class='libre-print-list' ${twoColumn ? 'style="column-count: 2;"' : ''}>${inner}</ul>`;
   }
 
-  private async processDirectoryPage({ listing, tags, title }: { listing: string; tags: string[]; title: string }) {
-    const directory = document.querySelector('.mt-guide-content, .mt-category-container');
-    if (!directory) return;
-    const newDirectory = document.createElement('div');
-    newDirectory.innerHTML = listing;
-    newDirectory.classList.add('libre-print-directory');
+  private processDirectoryPage({
+    html,
+    listing,
+    tags,
+    title,
+  }: {
+    html: string;
+    listing: string;
+    tags: string[];
+    title: string;
+  }): string | null {
+    const $ = cheerio.load(html);
+
+    const directory = $('.mt-guide-content, .mt-category-container');
+    if (!directory) return null;
+
+    // Create a new directory element with the listing HTML and replace the existing directory content
+    const newDirectory = $('<div></div>');
+    newDirectory.html(listing);
+    newDirectory.addClass('libre-print-directory');
     directory.replaceWith(newDirectory);
-    if (!tags?.length) return;
+
+    if (!tags?.length) return null;
     const pageType =
       tags.includes('coverpage:yes') || tags.includes('coverpage:nocommons') || title?.includes('Table of Contents')
         ? 'Table of Contents' // server-side TOC generation (deprecated)
@@ -726,19 +503,25 @@ export class PDFService {
           ? 'Chapter Overview'
           : 'Section Overview';
 
-    const pageTitle = document.querySelector('#title');
-    const pageTitleParent = pageTitle?.parentNode;
-    if (!pageTitle || !pageTitleParent) return;
-    pageTitle.setAttribute('style', 'border-bottom: none !important');
-    const newTitle = document.createElement('h1');
-    newTitle.appendChild(document.createTextNode(pageType));
-    newTitle.id = 'libre-print-directory-header';
+    const pageTitle = $('#title');
 
-    const typeContainer = document.createElement('div');
-    typeContainer.id = 'libre-print-directory-header-container';
-    typeContainer.appendChild(newTitle);
-    pageTitleParent.insertBefore(typeContainer, pageTitle);
+    const pageTitleParent = pageTitle?.parent();
+    if (!pageTitle || !pageTitleParent) return null;
+    pageTitle.css('style', 'border-bottom: none !important');
+
+    const newTitle = $('<h1></h1>').text(pageType).attr('id', 'libre-print-directory-header');
+
+    const typeContainer = $('<div></div>').attr('id', 'libre-print-directory-header-container');
+    typeContainer.append(newTitle);
+
+    // insert pageTitleParent before the typeConatiner
+    // TODO: is this layout correct?
+    pageTitleParent.insertBefore(typeContainer);
+
     if (pageType === 'Table of Contents') pageTitle.remove();
+
+    // return the updated HTML
+    return $.html();
   }
 
   private async generateCover({
@@ -752,17 +535,19 @@ export class PDFService {
     numPages: number | null;
     opt?: PDFCoverOpts;
   }) {
-    const dirPath = await this.ensureCoversDirectory({ lib: bookInfo.lib, pageID: bookInfo.id });
-
-    const browser = await this.getBrowser();
-    const page = await browser.newPage();
-
     try {
+      const dirPath = await this.ensureCoversDirectory();
+
       const spineWidth = this.getCoverSpineWidth({ numPages, opt });
       const width = this.getCoverWidth({ numPages, opt });
       const frontContent = generatePDFFrontCoverContent(bookInfo);
       const backContent = generatePDFBackCoverContent(bookInfo);
-      const spine = generatePDFSpineContent({ currentPage: bookInfo, opt, spineWidth, width });
+      const spine = generatePDFSpineContent({
+        currentPage: bookInfo,
+        opt,
+        spineWidth,
+        width,
+      });
       const styles = generatePDFCoverStyles({ currentPage: bookInfo, opt });
 
       const baseContent = numPages
@@ -770,7 +555,8 @@ export class PDFService {
         : `${styles}${frontContent}`;
       const content = `
       ${baseContent}
-      ${opt?.extraPadding
+      ${
+        opt?.extraPadding
           ? `
           <style>
             #frontContainer, #backContainer {
@@ -781,57 +567,34 @@ export class PDFService {
             }
           </style>`
           : ''
-        }
+      }
     `;
-      await page.setContent(content, { waitUntil: ['load', 'domcontentloaded', 'networkidle0'] });
-      await page.pdf({
-        path: `${dirPath}/${coverType}.pdf`,
-        printBackground: true,
-        width: numPages ? `${this.getCoverWidth({ numPages, opt })} in` : '8.5 in',
-        height: numPages ? (opt?.hardcover ? '12.75 in' : '11.25 in') : '11 in',
-        timeout: this.pageLoadSettings.timeout,
-      });
+
+      //TODO: here's where we'll generate the full HTML of the cover, including spine if needed, and then convert that to PDF.
+      // This will likely involve creating a temporary HTML file and using Prince to convert to PDF
+      // with the correct dimensions based on the number of pages and cover type.
+
+      // await page.pdf({
+      //   path: `${dirPath}/${coverType}.pdf`,
+      //   printBackground: true,
+      //   width: numPages
+      //     ? `${this.getCoverWidth({ numPages, opt })} in`
+      //     : "8.5 in",
+      //   height: numPages ? (opt?.hardcover ? "12.75 in" : "11.25 in") : "11 in",
+      //   timeout: this.pageLoadSettings.timeout,
+      // });
       this.logger.withMetadata({ coverType, url: bookInfo.url }).info('Generated cover.');
-    } finally {
-      await page.close();
+    } catch (error) {
+      this.logger.withMetadata({ coverType, url: bookInfo.url, error }).error('Cover generation failed');
+      throw error;
     }
   }
 
   private getCoverSpineWidth({ numPages, opt }: { numPages: number | null; opt?: PDFCoverOpts }) {
-    const sizes: Record<string, number | null> = {
-      '0': null,
-      '24': 0.25,
-      '84': 0.5,
-      '140': 0.625,
-      '169': 0.6875,
-      '195': 0.75,
-      '223': 0.8125,
-      '251': 0.875,
-      '279': 0.9375,
-      '307': 1,
-      '335': 1.0625,
-      '361': 1.125,
-      '389': 1.1875,
-      '417': 1.25,
-      '445': 1.3125,
-      '473': 1.375,
-      '501': 1.4375,
-      '529': 1.5,
-      '557': 1.5625,
-      '582': 1.625,
-      '611': 1.6875,
-      '639': 1.75,
-      '667': 1.8125,
-      '695': 1.875,
-      '723': 1.9375,
-      '751': 2,
-      '779': 2.0625,
-      '800': 2.125,
-    };
     if (opt?.thin) return 0;
     if (opt && !opt.extraPadding && !isNullOrUndefined(numPages)) return numPages * 0.002252; // Amazon side
     if (opt?.hardcover && !isNullOrUndefined(numPages)) {
-      const res = Object.entries(sizes).reduce(
+      const res = Object.entries(PDF_COVER_WIDTHS).reduce(
         (acc, [k, v]) => {
           if (numPages > parseInt(k)) return v;
           return acc;
@@ -847,40 +610,10 @@ export class PDFService {
   }
 
   private getCoverWidth({ numPages, opt }: { numPages: number | null; opt?: PDFCoverOpts }) {
-    const sizes: Record<string, number | null> = {
-      '0': null,
-      '24': 0.25,
-      '84': 0.5,
-      '140': 0.625,
-      '169': 0.6875,
-      '195': 0.75,
-      '223': 0.8125,
-      '251': 0.875,
-      '279': 0.9375,
-      '307': 1,
-      '335': 1.0625,
-      '361': 1.125,
-      '388': 1.1875,
-      '417': 1.25,
-      '445': 1.3125,
-      '473': 1.375,
-      '501': 1.4375,
-      '529': 1.5,
-      '557': 1.5625,
-      '582': 1.625,
-      '611': 1.6875,
-      '639': 1.75,
-      '667': 1.8125,
-      '695': 1.875,
-      '723': 1.9375,
-      '751': 2,
-      '779': 2.0625,
-      '800': 2.125,
-    };
     if (opt?.thin) return 17.25;
     if (opt && !opt.extraPadding && !isNullOrUndefined(numPages)) return numPages * 0.002252 + 0.375 + 17; // Amazon size
     if (opt?.hardcover && !isNullOrUndefined(numPages)) {
-      const res = Object.entries(sizes).reduce(
+      const res = Object.entries(PDF_COVER_WIDTHS).reduce(
         (acc, [k, v]) => {
           if (numPages > parseInt(k)) return v;
           return acc;
@@ -895,94 +628,91 @@ export class PDFService {
     return Math.floor(baseWidth * 1000) / 1000;
   }
 
-  private async generateTableOfContents({
-    bookID,
-    pageInfo,
-    outFileNameOverride,
-  }: {
-    bookID?: BookID;
-    pageInfo: BookPageInfo;
-    outFileNameOverride?: string;
-  }) {
-    this.logger.withMetadata({ url: pageInfo.url }).info('Starting Table of Contents');
-    let pageURL = pageInfo.url;
-    const isMainTOC = pageInfo.tags.includes('coverpage:yes') || pageInfo.tags.includes('coverpage:nocommons');
-    if (isMainTOC) {
-      pageURL = `${pageURL}${pageURL.endsWith('/') ? '' : '/'}00:_Front_Matter/03:_Table_of_Contents`;
-      /*
-      TODO: create the toc here
-       */
-    }
-
-    await CXOneRateLimiter.waitUntilAPIAvailable(2);
-    const browser = await this.getBrowser();
-    const page = await browser.newPage();
-
+  private async generateTableOfContents({ pageInfo }: { pageInfo: BookPageInfoWithContent }) {
     try {
-      await page.setViewport(this.viewportSettings);
-      await page.setRequestInterception(true);
-      page.on('dialog', this.dialogHandler);
-      page.on('request', this.requestHandler);
-      await page.goto(`${pageURL}?no-cache`, this.pageLoadSettings);
-      await page.$$eval('img', this.eagerImageLoader);
-      await page.$$eval('details', this.detailsOpener);
-      await sleep(1000);
+      this.logger.withMetadata({ url: pageInfo.url }).info('Starting Table of Contents');
 
-      if (!isMainTOC) {
+      let pageURL = pageInfo.url;
+      const isMainTOC = pageInfo.tags.includes('coverpage:yes') || pageInfo.tags.includes('coverpage:nocommons');
+      if (isMainTOC) {
+        pageURL = `${pageURL}${pageURL.endsWith('/') ? '' : '/'}00:_Front_Matter/03:_Table_of_Contents`;
+        /*
+      TODO: create the maintoc here, write it to temp file, convert to PDF, and return the path.
+       */
+      } else {
         const listing = await this.getLevel(pageInfo);
-        await page.evaluate(this.processDirectoryPage, { listing, tags: pageInfo.tags, title: pageInfo.title });
-        await sleep(1000);
-      }
+        const updatedHTML = this.processDirectoryPage({
+          html: pageInfo.body.join(''),
+          listing,
+          tags: pageInfo.tags,
+          title: pageInfo.title,
+        });
 
-      const path = await this.generatePageOutputFileName({
-        bookID: bookID ?? {
-          lib: pageInfo.lib,
-          pageID: pageInfo.id,
-        },
-        outFileNameOverride,
-        preferLocalStorage: true,
-        useWorkdir: !!bookID,
-      });
-      const styleTag = `
-      @page {
-        size: letter portrait;
-        margin: ${pdfPageMargins};
-        padding: 0;
+        if (!updatedHTML) {
+          this.logger.withMetadata({ url: pageInfo.url }).warn('Failed to process directory page for TOC');
+
+          return null;
+        }
+
+        // Now we can just convert this page like normal since the HTML is updated with the listing content. The main difference is that we need to ensure the correct styles are applied for the TOC, which may involve including the pdfTOCStyles in the HTML.
+        const outputPath = await this.convertPage({
+          pageID: pageInfo.pageID,
+          pageBodyHTML: updatedHTML,
+        });
+
+        //FIXME: figure out how we're going to do this without puppeteer.
+        //We may need to create a temporary HTML file with the TOC content and then use Prince to convert it to PDF, similar to how we convert regular pages.
+        // The main difference is that we need to ensure the correct styles are applied for the TOC, which may involve including the pdfTOCStyles in the HTML.
+        //   const styleTag = `
+        //   @page {
+        //     size: letter portrait;
+        //     margin: ${pdfPageMargins};
+        //     padding: 0;
+        //   }
+        //   ${!isMainTOC ? pdfTOCStyles : ""}
+        // `;
+
+        //   await page.addStyleTag({ content: styleTag });
+        //   await page.pdf({
+        //     // Letter Margin
+        //     path,
+        //     displayHeaderFooter: true,
+        //     headerTemplate: generatePDFHeader(ImageConstants["default"]),
+        //     footerTemplate: generatePDFFooter({
+        //       currentPage: null,
+        //       mainColor: "#127BC4",
+        //       pageLicense: null,
+        //       prefix: "",
+        //     }),
+        //     printBackground: true,
+        //     preferCSSPageSize: true,
+        //     timeout: this.pageLoadSettings.timeout,
+        //   });
+
+        this.logger.withMetadata({ url: pageInfo.url }).info('Finished Table of Contents.');
+        return outputPath;
       }
-      ${!isMainTOC ? pdfTOCStyles : ''}
-    `;
-      await page.addStyleTag({ content: styleTag });
-      await page.pdf({
-        // Letter Margin
-        path,
-        displayHeaderFooter: true,
-        headerTemplate: generatePDFHeader(ImageConstants['default']),
-        footerTemplate: generatePDFFooter({
-          currentPage: null,
-          mainColor: '#127BC4',
-          pageLicense: null,
-          prefix: '',
-        }),
-        printBackground: true,
-        preferCSSPageSize: true,
-        timeout: this.pageLoadSettings.timeout,
-      });
-      this.logger.withMetadata({ url: pageInfo.url }).info('Finished Table of Contents.');
-      return path;
-    } finally {
-      if (!page.isClosed()) await page.close();
+    } catch (error) {
+      this.logger.withMetadata({ url: pageInfo.url, error }).error('Table of Contents generation failed');
+      throw error;
     }
   }
 
-  private buildTaskList(coverPage: BookPageInfo) {
+  /**
+   * Returns a flat list of conversion tasks in the correct order for PDF generation, including TOC placement.
+   * The TOC is placed before the first page that has more than 1 subpage and is tagged as either "article:topic-category" or "article:topic-guide",
+   * but after any front matter. Back matter pages are placed at the end. If there are no suitable pages for TOC placement, the TOC will be placed at the end before back matter.
+   * @param pages - The flat list of pages with content to be converted, which will be organized into a task list with correct ordering and TOC placement.
+   * @returns An array of conversion tasks in the correct order for PDF generation.
+   */
+  private buildTaskList(pages: BookPageInfoWithContent[]): Array<ConversionTask> {
     const conversionTasks: Array<ConversionTask> = [];
     let backMatterIdx = 0;
     let frontMatterIdx = 0;
 
-    // Depth-first traversal to build task list with correct ordering and TOC placement
-    const buildTaskListInner = (p: BookPageInfo) => {
+    // Process flat array with correct ordering and TOC placement
+    for (const p of pages) {
       const idx = `${conversionTasks.length + 1}`.padStart(4, '0');
-      const pageId = `${p.lib}-${p.id}`;
 
       if (
         Array.isArray(p.subpages) &&
@@ -991,10 +721,11 @@ export class PDFService {
         !['Back Matter', 'Front Matter'].some((t) => p.title.includes(t))
       ) {
         conversionTasks.push({
+          _id: `toc-${p.pageID}`,
+          pageID: p.pageID,
           pageInfo: p,
           fileName: `${idx}_TOC`,
           type: 'toc',
-          id: `toc-${pageId}`,
         });
       } else {
         let idxPrefix = idx;
@@ -1009,23 +740,43 @@ export class PDFService {
 
         if (!['Back Matter', 'Front Matter'].some((t) => p.title.includes(t))) {
           conversionTasks.push({
+            _id: `page-${p.pageID}`,
+            pageID: p.pageID,
             pageInfo: p,
-            fileName: `${idxPrefix}_${pageId}`,
+            fileName: `${idxPrefix}_${p.pageID}`,
             type: 'page',
-            id: `page-${pageId}`,
           });
         }
       }
+    }
 
-      if (Array.isArray(p.subpages)) {
-        for (const sub of p.subpages) {
-          buildTaskListInner(sub);
-        }
-      }
-    };
+    return conversionTasks.sort((a, b) => a.fileName.localeCompare(b.fileName, undefined, { numeric: true }));
+  }
 
-    buildTaskListInner(coverPage);
+  private async ensureCoversDirectory() {
+    // FIXME: are we storing cover in temp storage and handling final disposition in Job or
+    // should we upload directly to final storage here?
+    // If we upload here, we can stream the PDF generation directly to storage instead of writing to local disk first
+    const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+    const dirPath = resolve(`${baseDir}/pdf/${this._bookID.toString()}/covers`);
+    await fs.mkdir(dirPath, { recursive: true });
+    return dirPath;
+  }
 
-    return conversionTasks;
+  private async createTempFile(content: string) {
+    const id = uuid();
+    const tempDir = resolve('.tmp');
+    await fs.mkdir(tempDir, { recursive: true });
+    const tempFilePath = join(tempDir, `${id}.html`);
+    await fs.writeFile(tempFilePath, content);
+    return tempFilePath;
+  }
+
+  private async deleteTempFile(filePath: string) {
+    try {
+      await fs.unlink(filePath);
+    } catch (error) {
+      this.logger.withMetadata({ filePath, error }).warn('Failed to delete temp file. Was it already deleted?');
+    }
   }
 }

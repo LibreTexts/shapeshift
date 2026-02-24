@@ -40,7 +40,7 @@ export class JobController {
   }
 
   public async get(req: ZodRequest<zod.infer<typeof validators.job.get>>, res: Response) {
-    const { jobId } = req.validatedData?.params || {}; 
+    const { jobId } = req.validatedData?.params || {};
     const jobModel = new JobService();
     const job = await jobModel.get(jobId);
     if (!job) {

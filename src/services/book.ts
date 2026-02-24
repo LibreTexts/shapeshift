@@ -5,60 +5,48 @@ import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject,
 import { LibraryService } from './library';
 import { GetPagesResponse, PageExtended, Tags } from '@libretexts/cxone-expert-node';
 import { dynamicDetailedLicensingLayout, dynamicLicensingLayout, dynamicTOCLayout } from '../util/pageConstants';
-
-export type BookID = {
-  lib: string;
-  pageID: number;
-};
-
-export type BookMatterType = 'Back' | 'Front';
-
-export type BookPageProperty = {
-  name: string;
-  value: string;
-};
-
-export type BookPageInfo = {
-  authorTag?: string;
-  id: number;
-  lib: string;
-  license: LicenseInfo | null;
-  matterType?: BookMatterType;
-  printInfo: BookPrintInfo;
-  properties: BookPageProperty[];
-  subdomain: string;
-  subpages?: BookPageInfo[];
-  summary?: string;
-  tags: string[];
-  title: string;
-  url: string;
-};
-
-export type BookPrintInfo = {
-  attributionPrefix: string;
-  authorName: string;
-  companyName: string;
-  programName: string;
-  programURL: string;
-  spineTitle: string;
-  title: string;
-};
+import { BookPageInfoWithContent, BookPageProperty } from '../types/book';
+import { BookMatterType, BookPageInfo, BookPrintInfo } from '../types/book';
+import PageID from '../util/pageID';
+import { log as logService } from '../lib/log';
+import { LogLayer } from 'loglayer';
 
 export class BookService {
+  private readonly logger: LogLayer;
+  private readonly logName: 'BookService';
   private readonly DEFAULT_THUMBNAILS = {
     BACK_MATTER: 'https://cdn.libretexts.net/DefaultImages/Back%20matter.jpg',
     DEFAULT: 'https://cdn.libretexts.net/DefaultImages/default.png',
     FRONT_MATTER: 'https://cdn.libretexts.net/DefaultImages/Front%20Matter.jpg',
   };
 
-  public async createDefaultBackMatter({ createOnly, pageInfo }: { createOnly?: boolean; pageInfo: BookPageInfo }) {
-    const lib = new LibraryService({ lib: pageInfo.lib });
+  constructor() {
+    this.logName = 'BookService';
+    this.logger = logService.child().withContext({ logSource: this.logName });
+  }
+
+  /**
+   * Creates the default LibreTexts back matter pages (Index, Glossary, Detailed Licensing, etc.) as subpages of the given cover page.
+   * Provides an overwriteExisting option to control whether to only create pages if they don't already exist, or to overwrite existing pages,
+   * which is useful for ensuring the correct structure and content for PDF generation, but should be used with caution as some authors have customized their back matter pages.
+   * @param param0
+   */
+  public async createDefaultBackMatter({
+    coverPageInfo,
+    overwriteExisting = false,
+  }: {
+    coverPageInfo: BookPageInfo;
+    overwriteExisting?: boolean;
+  }) {
+    const lib = new LibraryService({ lib: coverPageInfo.pageID.lib });
     await lib.init();
     await CXOneRateLimiter.waitUntilAPIAvailable(2);
 
+    const basePath = this.getMatterRootPagePath(coverPageInfo.url, 'Back');
+
     // Index
     await lib.api.pages.postPageContents(
-      assembleUrl([pageInfo.url, 'Back_Matter', '10:_Index']),
+      assembleUrl([basePath, '10:_Index']),
       `
         <p class="mt-script-comment">Dynamic Index</p><pre class="script">template('DynamicIndex');</pre>
         <p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic</a><a href="#">showtoc:no</a><a href="#">printoptions:no-header</a><a href="#">columns:three</a></p>
@@ -66,18 +54,21 @@ export class BookService {
       {
         title: 'Index',
         edittime: 'now',
-        ...(!createOnly && { abort: 'exists' }),
+        ...(overwriteExisting ? {} : { abort: 'exists' }),
       },
     );
 
     // Dynamic Glossary
     const chemLib = new LibraryService({ lib: 'chem' });
     await chemLib.init();
-    const dynamicGlossary = (await chemLib.api.pages.getPageContents(279134, undefined, { mode: 'edit' }))
-      .body;
+    const dynamicGlossary = (
+      await chemLib.api.pages.getPageContents(279134, {
+        mode: 'edit',
+      })
+    ).body;
     if (dynamicGlossary) {
       await lib.api.pages.postPageContents(
-        assembleUrl([pageInfo.url, 'Back_Matter', '20:_Glossary']),
+        assembleUrl([basePath, '20:_Glossary']),
         `
         ${dynamicGlossary}
         \n<p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic</a><a href="#">showtoc:no</a><a href="#">printoptions:no-header</a><a href="#">columns:three</a></p>
@@ -85,61 +76,71 @@ export class BookService {
         {
           title: 'Glossary',
           edittime: 'now',
-          ...(!createOnly && { abort: 'exists' }),
+          ...(overwriteExisting ? {} : { abort: 'exists' }),
         },
       );
     }
 
     // Detailed Licensing
     await lib.api.pages.postPageContents(
-      assembleUrl([pageInfo.url, 'Back_Matter', '30:_Detailed_Licensing']),
+      assembleUrl([basePath, '30:_Detailed_Licensing']),
       dynamicDetailedLicensingLayout,
       {
         title: 'Detailed Licensing',
         edittime: 'now',
-        ...(!createOnly && { abort: 'exists' }),
+        ...(overwriteExisting ? {} : { abort: 'exists' }),
       },
     );
 
     // Set thumbnail
-    const thumbnailRes = await axios.get(this.DEFAULT_THUMBNAILS.BACK_MATTER, { responseType: 'arraybuffer' });
+    const thumbnailRes = await axios.get(this.DEFAULT_THUMBNAILS.BACK_MATTER, {
+      responseType: 'arraybuffer',
+    });
     const thumbnail = Buffer.from(thumbnailRes.data);
-    await lib.api.pages.putPageFileName(
-      assembleUrl([pageInfo.url, 'Back_Matter']),
-      '=mindtouch.page%2523thumbnail',
-      thumbnail,
-    );
+    await lib.api.pages.putPageFileName(basePath, '=mindtouch.page%2523thumbnail', thumbnail);
   }
 
-  public async createDefaultFrontMatter({ createOnly, pageInfo }: { createOnly?: boolean; pageInfo: BookPageInfo }) {
-    const lib = new LibraryService({ lib: pageInfo.lib });
+  /**
+   * Creates the default LibreTexts front matter pages (Title Page, Info Page, Table of Contents, Licensing, etc.)
+   * as subpages of the given cover page. Provides an overwriteExisting option to control whether to only create pages if they don't already exist, or to overwrite existing pages,
+   * which is useful for ensuring the correct structure and content for PDF generation, but should be used with caution as some authors have customized their front matter pages.
+   * @param param0
+   */
+  public async createDefaultFrontMatter({
+    coverPageInfo,
+    overwriteExisting = false,
+  }: {
+    coverPageInfo: BookPageInfo;
+    overwriteExisting?: boolean;
+  }) {
+    const lib = new LibraryService({ lib: coverPageInfo.pageID.lib });
     await lib.init();
     await CXOneRateLimiter.waitUntilAPIAvailable(2);
 
     // TitlePage
     const QRoptions = { errorCorrectionLevel: 'L', margin: 2, scale: 2 };
     await lib.api.pages.postPageContents(
-      assembleUrl([pageInfo.url, 'Front_Matter', '01:_TitlePage']),
+      assembleUrl([coverPageInfo.url, 'Front_Matter', '01:_TitlePage']),
       `
         <div style="height:95vh; display:flex; flex-direction: column; position: relative; align-items: center">
         <div style=" display:flex; flex:1; flex-direction: column; justify-content: center">
-        <p class="mt-align-center"><span class="mt-font-size-36">${pageInfo.printInfo.companyName || ''}</span></p>
-        <p class="mt-align-center"><span class="mt-font-size-36">${pageInfo.printInfo.title || ''}</span></p></div>
+        <p class="mt-align-center"><span class="mt-font-size-36">${coverPageInfo.printInfo.companyName || ''}</span></p>
+        <p class="mt-align-center"><span class="mt-font-size-36">${coverPageInfo.printInfo.title || ''}</span></p></div>
         <p style="position: absolute; bottom: 0; right: 0"><canvas id="canvas"></canvas></p>
-        <p class="mt-align-center" style="max-width: 70%"><span class="mt-font-size-24">${pageInfo.printInfo.authorName || ''}</span></p>
-        <script>QRCode.toCanvas(document.getElementById('canvas'), '${pageInfo.url}', ${JSON.stringify(QRoptions)})</script>
+        <p class="mt-align-center" style="max-width: 70%"><span class="mt-font-size-24">${coverPageInfo.printInfo.authorName || ''}</span></p>
+        <script>QRCode.toCanvas(document.getElementById('canvas'), '${coverPageInfo.url}', ${JSON.stringify(QRoptions)})</script>
         <p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic</a><a href="#">printoptions:no-header-title</a></p></div>
       `,
       {
         title: 'TitlePage',
         edittime: 'now',
-        ...(!createOnly && { abort: 'exists' }),
+        ...(overwriteExisting ? {} : { abort: 'exists' }),
       },
     );
 
     // InfoPage
     await lib.api.pages.postPageContents(
-      assembleUrl([pageInfo.url, 'Front_Matter', '02:_InfoPage']),
+      assembleUrl([coverPageInfo.url, 'Front_Matter', '02:_InfoPage']),
       `
         <p class=\\"mt-script-comment\\">Cross Library Transclusion</p><pre class=\\"script\\">template('CrossTransclude/Web',{'Library':'chem','PageID':170365});</pre>
         <p class=\\"template:tag-insert\\"><em>Tags recommended by the template: </em><a href=\\"#\\">article:topic</a><a href=\\"#\\">transcluded:yes</a><a href=\\"#\\">printoptions:no-header-title</a></p>
@@ -147,97 +148,146 @@ export class BookService {
       {
         title: 'InfoPage',
         edittime: 'now',
-        ...(!createOnly && { abort: 'exists' }),
+        ...(overwriteExisting ? {} : { abort: 'exists' }),
       },
     );
 
     // Table of Contents
     await lib.api.pages.postPageContents(
-      assembleUrl([pageInfo.url, 'Front_Matter', '03:_Table_of_Contents']),
+      assembleUrl([coverPageInfo.url, 'Front_Matter', '03:_Table_of_Contents']),
       dynamicTOCLayout,
       {
         title: 'Table of Contents',
         edittime: 'now',
-        ...(!createOnly && { abort: 'exists' }),
+        ...(overwriteExisting ? {} : { abort: 'exists' }),
       },
     );
 
     // Licensing
     await lib.api.pages.postPageContents(
-      assembleUrl([pageInfo.url, 'Front_Matter', '04:_Licensing']),
+      assembleUrl([coverPageInfo.url, 'Front_Matter', '04:_Licensing']),
       dynamicLicensingLayout,
       {
         title: 'Licensing',
         edittime: 'now',
-        ...(!createOnly && { abort: 'exists' }),
+        ...(overwriteExisting ? {} : { abort: 'exists' }),
       },
     );
 
     // Set thumbnail
-    const thumbnailRes = await axios.get(this.DEFAULT_THUMBNAILS.FRONT_MATTER, { responseType: 'arraybuffer' });
+    const thumbnailRes = await axios.get(this.DEFAULT_THUMBNAILS.FRONT_MATTER, {
+      responseType: 'arraybuffer',
+    });
     const thumbnail = Buffer.from(thumbnailRes.data);
     await lib.api.pages.putPageFileName(
-      assembleUrl([pageInfo.url, 'Front_Matter']),
+      assembleUrl([coverPageInfo.url, 'Front_Matter']),
       '=mindtouch.page%2523thumbnail',
       thumbnail,
     );
   }
 
+  /**
+   * Creates front or back matter pages for a book based on the provided cover page information.
+   * This is important for ensuring the correct structure and content for PDF generation. By default,
+   * this method will only create matter pages if they are missing, to avoid overwriting any customizations made by authors.
+   * However, this behavior can be overridden by setting overwriteExisting to true, which will force the creation of matter pages even if they already exist.
+   * Use with caution as some authors customize their matter pages.
+   * @param param0
+   */
   public async createMatter({
-    createOnly,
     mode,
-    pageInfo,
+    coverPageInfo,
+    overwriteExisting = false,
   }: {
-    createOnly?: boolean;
     mode: BookMatterType;
-    pageInfo: BookPageInfo;
+    coverPageInfo: BookPageInfo;
+    overwriteExisting?: boolean;
   }) {
-    const lib = new LibraryService({ lib: pageInfo.lib });
-    await lib.init();
-    await CXOneRateLimiter.waitUntilAPIAvailable(4);
-    await lib.api.pages.postPageContents(
-      pageInfo.id,
-      `<p>{{template.ShowOrg()}}</p><p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic-guide</a></p>`,
-      {
-        title: `${mode} Matter`,
-        edittime: 'now',
-        ...(!createOnly && { abort: 'exists' }),
-      },
-    );
-    await Promise.all(
-      [
-        { property: 'mindtouch.idf#guideDisplay', value: 'single' },
-        { property: 'mindtouch.page#welcomeHidden', value: 'true' },
+    try {
+      const lib = new LibraryService({ lib: coverPageInfo.pageID.lib });
+      await lib.init();
+
+      await CXOneRateLimiter.waitUntilAPIAvailable(4);
+
+      await lib.api.pages.postPageContents(
+        this.getMatterRootPagePath(coverPageInfo.url, mode),
+        `<p>{{template.ShowOrg()}}</p><p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic-guide</a></p>`,
         {
-          property: 'mindtouch#idf.guideTabs',
-          value:
-            '[{"templateKey":"Topic_hierarchy","templateTitle":"Topic hierarchy","templatePath":"MindTouch/IDF3/Views/Topic_hierarchy","guid":"fc488b5c-f7e1-1cad-1a9a-343d5c8641f5"}]',
+          title: `${mode} Matter`,
+          edittime: 'now',
+          ...(overwriteExisting ? {} : { abort: 'exists' }),
         },
-      ].map((p) => lib.api.pages.putPageProperties(pageInfo.id, p.property, p.value)),
-    );
-    mode === 'Front'
-      ? await this.createDefaultFrontMatter({ createOnly, pageInfo })
-      : await this.createDefaultBackMatter({ createOnly, pageInfo });
+      );
+
+      this.logger.debug(
+        `Created ${mode} matter page for book ${coverPageInfo.pageID.lib}/${coverPageInfo.pageID.pageNum}`,
+      );
+
+      // await Promise.all(
+      //   [
+      //     { property: "mindtouch.idf#guideDisplay", value: "single" },
+      //     { property: "mindtouch.page#welcomeHidden", value: "true" },
+      //     {
+      //       property: "mindtouch#idf.guideTabs",
+      //       value:
+      //         '[{"templateKey":"Topic_hierarchy","templateTitle":"Topic hierarchy","templatePath":"MindTouch/IDF3/Views/Topic_hierarchy","guid":"fc488b5c-f7e1-1cad-1a9a-343d5c8641f5"}]',
+      //     },
+      //   ].map((p) => {
+      //     this.logger.debug(
+      //       `Setting property ${p.property} for ${mode} matter page of book ${coverPageInfo.pageID.lib}/${coverPageInfo.pageID.pageID}`,
+      //     );
+      //     return lib.api.pages.putPageProperties(
+      //       this.getMatterRootPagePath(coverPageInfo.url, mode),
+      //       p.property,
+      //       p.value,
+      //     );
+      //   }),
+      // );
+
+      mode === 'Front'
+        ? await this.createDefaultFrontMatter({
+            overwriteExisting,
+            coverPageInfo,
+          })
+        : await this.createDefaultBackMatter({
+            overwriteExisting,
+            coverPageInfo,
+          });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error creating ${mode} matter: ${errorMsg}`);
+      throw error; // re-throw the error after logging it, so that the calling function can handle it appropriately (e.g. fail the job)
+    }
   }
 
-  public async checkMatterExists(pages: BookPageInfo, matterType: BookMatterType): Promise<boolean> {
-    // Recursively search for a page with 'Front_Matter' or 'Back_Matter' in the URL, depending on the matterType
+  /**
+   * Checks if front/back matter pages exist in the given list of book pages, based on the presence of "Front_Matter" or "Back_Matter" in the page URLs.
+   * @param pages - the flat array of BookPageInfo objects representing all pages in the book
+   * @param matterType - the type of matter to check for ("Front" or "Back")
+   * @returns a promise that resolves to true if the matter pages exist, false otherwise
+   */
+  public checkMatterExists(pages: BookPageInfo[], matterType: BookMatterType): boolean {
+    // Search for a page with 'Front_Matter' or 'Back_Matter' in the URL, depending on the matterType
     const searchTerm = matterType === 'Front' ? 'Front_Matter' : 'Back_Matter';
-    if (pages.url.includes(searchTerm)) {
-      return true;
-    }
-    if (!pages.subpages?.length) {
-      return false;
-    }
-    for (const subpage of pages.subpages) {
-      const found = await this.checkMatterExists(subpage, matterType);
-      if (found) {
+    for (const page of pages) {
+      if (page.url.includes(searchTerm)) {
         return true;
       }
     }
-    return false; 
+    return false;
   }
 
+  public getMatterRootPagePath(basePath: string, matterType: BookMatterType): string {
+    const rootPage = matterType === 'Front' ? '00:Front_Matter' : 'zz:Back_Matter';
+    return assembleUrl([basePath, rootPage]);
+  }
+
+  /**
+   * Discovers the page tree for a given book, starting from (and including) the root page. Can return either a nested structure or a flat array of pages.
+   * @param libName - the subdomain/library name
+   * @param pageID - the root page ID of the book
+   * @param flat - whether to return a flat array of pages or a nested structure (default: false)
+   */
   public async discoverPages(libName: string, pageID: number, flat: true): Promise<BookPageInfo[]>;
   public async discoverPages(libName: string, pageID: number, flat?: false): Promise<BookPageInfo>;
   public async discoverPages(
@@ -245,56 +295,122 @@ export class BookService {
     pageID: number,
     flat: boolean | undefined,
   ): Promise<BookPageInfo | BookPageInfo[] | null> {
-    const lib = new LibraryService({ lib: libName });
-    await lib.init();
-    await CXOneRateLimiter.waitUntilAPIAvailable(2);
-    const pagesRespRaw = await lib.api.pages.getPageTree(pageID);
-    const pagesRaw = pagesRespRaw.page;
-
-    const getPageInfo = async (p: GetPagesResponse): Promise<BookPageInfo> => {
+    try {
+      const lib = new LibraryService({ lib: libName });
+      await lib.init();
       await CXOneRateLimiter.waitUntilAPIAvailable(2);
-      const pageDetails = await lib.api.pages.getPage(Number(p['@id']));
-      const url = pageDetails['uri.ui']!;
-      const subpagesRaw = isNonNullCXOneObject(p.subpages) ? p.subpages : null;
-      const subpages = Array.isArray(subpagesRaw?.page)
-        ? subpagesRaw?.page
-        : typeof subpagesRaw?.page === 'object'
-          ? [subpagesRaw?.page]
-          : [];
-      const parsedProperties = this.parseProperties(pageDetails.properties!);
-      const summaryProp = parsedProperties.find((p) => p.name === 'mindtouch.page#overview');
-      const parsedTags = isNonNullCXOneObject(pageDetails.tags) ? this.parseTags(pageDetails.tags!) : [];
-      const authorTag = parsedTags.find((t) => t.startsWith('authorname:'))?.replace('authorname:', '');
-      const printInfo = await this.resolvePrintInfo({
-        authorTag,
-        lib: libName,
-        tags: parsedTags,
-      });
+      const pagesRespRaw = await lib.api.pages.getPageTree(pageID);
+      const pagesRaw = pagesRespRaw.page;
 
-      return {
-        ...(authorTag && { authorTag }),
-        id: Number(p['@id']),
-        lib: libName,
-        license: getLicense(parsedTags),
-        // FIXME: how to support non-English texts?
-        ...(['Back_Matter', 'Front_Matter'].some((s) => url.includes(s)) && {
-          matterType: url.includes('Back_Matter') ? 'Back' : 'Front',
-        }),
-        printInfo,
-        properties: parsedProperties,
-        subdomain: libName,
-        subpages: await Promise.all(subpages.map((s) => getPageInfo(s))),
-        summary: summaryProp?.value ?? '',
-        tags: parsedTags,
-        title: pageDetails.title?.trim() || '',
-        url,
-      };
-    };
-    const pages = await getPageInfo(pagesRaw);
-    return flat ? this.flattenPagesObj(pages) : pages;
+      const pages = await this.getPageInfo(libName, pagesRaw, lib);
+      return flat ? this.flattenPagesObj(pages) : pages;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error discovering pages for ${libName}/${pageID}: ${errorMsg}`);
+      throw error; // re-throw the error after logging it, so that the calling function can handle it appropriately (e.g. fail the job)
+    }
   }
 
-  public async getIDFromURL(urlRaw: string): Promise<BookID | null> {
+  /**
+   * Builds a list of URLs to convert for the book, in the correct order for conversion. This includes handling special cases for pages that
+   * should be treated as TOC entries, as well as ensuring front/back matter are indexed correctly.
+   * @param libName - the subdomain/library name
+   * @param p - the page object
+   * @param libService - Optional LibraryService instance to avoid re-initializing for each page. If not provided, a new instance will be created.
+   * @returns a Promise that resolves to a BookPageInfo object
+   */
+  public async getPageInfo(libName: string, p: GetPagesResponse, libService?: LibraryService): Promise<BookPageInfo> {
+    if (!libService) {
+      libService = new LibraryService({ lib: libName });
+      await libService.init();
+    }
+
+    await CXOneRateLimiter.waitUntilAPIAvailable(2);
+    const pageDetails = await libService.api.pages.getPage(Number(p['@id']));
+    const url = pageDetails['uri.ui']!;
+
+    const subpagesRaw = isNonNullCXOneObject(p.subpages) ? p.subpages : null;
+    const subpages = Array.isArray(subpagesRaw?.page)
+      ? subpagesRaw?.page
+      : typeof subpagesRaw?.page === 'object'
+        ? [subpagesRaw?.page]
+        : [];
+
+    const parsedProperties = this.parseProperties(pageDetails.properties!);
+    const summaryProp = parsedProperties.find((p) => p.name === 'mindtouch.page#overview');
+
+    const parsedTags = isNonNullCXOneObject(pageDetails.tags) ? this.parseTags(pageDetails.tags!) : [];
+
+    const authorTag = parsedTags.find((t) => t.startsWith('authorname:'))?.replace('authorname:', '');
+
+    const printInfo = await this.resolvePrintInfo({
+      authorTag,
+      lib: libName,
+      tags: parsedTags,
+    });
+
+    return {
+      ...(authorTag && { authorTag }),
+      pageID: new PageID({ lib: libName, pageNum: Number(p['@id']) }),
+      license: getLicense(parsedTags),
+      // FIXME: how to support non-English texts?
+      ...(['Back_Matter', 'Front_Matter'].some((s) => url.includes(s)) && {
+        matterType: url.includes('Back_Matter') ? 'Back' : 'Front',
+      }),
+      printInfo,
+      properties: parsedProperties,
+      subdomain: libName,
+      subpages: await Promise.all(subpages.map((s) => this.getPageInfo(libName, s, libService))),
+      summary: summaryProp?.value ?? '',
+      tags: parsedTags,
+      title: pageDetails.title?.trim() || '',
+      url,
+    };
+  }
+
+  /**
+   * For a given book ID (root page ID), discovers all pages in the book and retrieves their HTML content for conversion
+   * Returns an array of page content objects, each containing the full page details and its head, body, and tail HTML content segments.
+   * @param coverPageID - the PageID of the book's cover page (root page)
+   * @param pages - optional pre-discovered pages to use instead of discovering again. This can be used to avoid redundant discovery when we already have the page structure,
+   * such as when we're creating matter pages and then need to get contents for PDF generation.
+   * @returns a Promise that resolves to an array of BookPageInfoWithContent objects
+   */
+  public async getBookContents(coverPageID: PageID, pages: BookPageInfo[]): Promise<BookPageInfoWithContent[]> {
+    try {
+      const lib = new LibraryService({ lib: coverPageID.lib });
+      await lib.init();
+
+      const bookContents: BookPageInfoWithContent[] = [];
+
+      // TODO: Add error handling and retries for individual page content retrieval, so that a failure to retrieve one page doesn't cause the entire process to fail.
+      for (const page of pages) {
+        this.logger.debug(`Retrieving content for page ${page.pageID.lib}/${page.pageID.pageNum} (${page.url})...`);
+        const pageContent = await lib.api.pages.getPageContents(page.pageID.pageNum, {
+          mode: 'view',
+          format: 'html',
+        });
+
+        bookContents.push({
+          ...page,
+          head: pageContent.head || '',
+          body: pageContent.body || [],
+          tail: pageContent.tail || '',
+        });
+
+        // Delay between requests to avoid rate limits
+        await CXOneRateLimiter.waitUntilAPIAvailable(2);
+      }
+
+      return bookContents;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error getting book contents: ${errorMsg}`);
+      throw error; // re-throw the error after logging it, so that the calling function can handle it appropriately (e.g. fail the job)
+    }
+  }
+
+  public async getIDFromURL(urlRaw: string): Promise<PageID | null> {
     const lib = getSubdomainFromURL(urlRaw);
     const path = getPathFromURL(urlRaw);
     const libClient = new LibraryService({ lib });
@@ -304,10 +420,7 @@ export class BookService {
     if (!page) return null;
     if (Number.isNaN(Number(page['@id']))) return null;
 
-    return {
-      lib,
-      pageID: Number(page['@id']),
-    };
+    return new PageID({ lib, pageNum: Number(page['@id']) });
   }
 
   public flattenPagesObj(pagesRaw: BookPageInfo) {

@@ -15,6 +15,9 @@ export async function runProcess() {
   while (isActiveWorker) {
     const jobs = await queueClient.lookForJobs();
     for (const job of jobs) {
+      // Delete the message immediately to prevent multiple workers from processing the same job
+      // and/or if the job fails we don't want it to be retried indefinitely.
+      await queueClient.deleteJobMessage(job.receiptHandle);
       await jobModel.run(job);
     }
   }
