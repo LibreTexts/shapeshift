@@ -4,7 +4,7 @@ import { Handler } from 'aws-lambda';
 import { QueueClient } from '../lib/queueClient';
 import { Environment } from '../lib/environment';
 
-async function computeBacklogPerInstance() {
+async function computeBacklogPerInstance(isHighPriority: boolean) {
   const ecsClient = new ECSClient();
   const queueClient = new QueueClient();
   const numMessages = await queueClient.getNumberOfQueuedJobs();
@@ -12,17 +12,20 @@ async function computeBacklogPerInstance() {
   const tasks = await ecsClient.send(
     new ListTasksCommand({
       cluster: Environment.getRequired('ECS_CLUSTER_NAME'),
-      serviceName: Environment.getRequired('ECS_SERVICE_NAME'),
+      serviceName: Environment.getRequired(`ECS_SERVICE_NAME${isHighPriority ? '_HP' : ''}`),
     }),
   );
   const numTasks = tasks.taskArns?.length;
   if (typeof numTasks !== 'number') {
     throw new Error('Did not retrieve number of tasks from cluster');
   }
+  if (!numTasks) {
+    return 0;
+  }
   return numMessages / numTasks;
 }
 
-async function updateBacklogPerInstanceMetric(metricValue: number) {
+async function updateBacklogPerInstanceMetric(metricValue: number, isHighPriority: boolean) {
   const cloudwatchClient = new CloudWatchClient();
   await cloudwatchClient.send(
     new PutMetricDataCommand({
@@ -36,10 +39,10 @@ async function updateBacklogPerInstanceMetric(metricValue: number) {
             },
             {
               Name: 'ServiceName',
-              Value: Environment.getRequired('ECS_SERVICE_NAME'),
+              Value: Environment.getRequired(`ECS_SERVICE_NAME${isHighPriority ? '_HP' : ''}`),
             },
           ],
-          MetricName: Environment.getRequired('CLOUDWATCH_BPI_METRIC_NAME'),
+          MetricName: Environment.getRequired(`CLOUDWATCH_BPI_METRIC_NAME${isHighPriority ? '_HP' : ''}`),
           StorageResolution: 60,
           Timestamp: new Date(),
           Unit: 'Count',
@@ -54,8 +57,10 @@ async function updateBacklogPerInstanceMetric(metricValue: number) {
 export const runMetricUpdate: Handler = async () => {
   try {
     Environment.load();
-    const backlogPerInstance = await computeBacklogPerInstance();
-    await updateBacklogPerInstanceMetric(backlogPerInstance);
+    for (const isHighPriority of [false, true]) {
+      const backlogPerInstance = await computeBacklogPerInstance(isHighPriority);
+      await updateBacklogPerInstanceMetric(backlogPerInstance, isHighPriority);
+    }
     return { statusCode: 200 };
   } catch (e) {
     return {
