@@ -1,6 +1,8 @@
 import { LicenseInfo } from './licensing';
-import { BookPageInfo } from '../services/book';
+import { BookPageInfo } from '../types/book';
 import { PDFCoverOpts } from '../services/pdf';
+import { isNullOrUndefined } from '../helpers';
+import { PDF_COVER_WIDTHS } from '../lib/constants';
 
 export const pdfPageMargins = '0.75in 0.625in 0.9in'; // top, left/right, bottom
 
@@ -141,11 +143,10 @@ export function generatePDFFooter({
             </div>
       </div>
       <div class="footer-right">
-          ${
-            currentPage
-              ? `<a href="https://${currentPage.subdomain}.libretexts.org/@go/page/${currentPage.id}?pdf">https://${currentPage.subdomain}.libretexts.org/@go/page/${currentPage.id}</a>`
-              : ''
-          }
+          ${currentPage
+      ? `<a href="https://${currentPage.subdomain}.libretexts.org/@go/page/${currentPage.id}?pdf">https://${currentPage.subdomain}.libretexts.org/@go/page/${currentPage.id}</a>`
+      : ''
+    }
       </div>
     </div>
   `;
@@ -309,7 +310,62 @@ const pdfCoverStyles = `
   }
 `;
 
-export function generatePDFFrontCoverContent(currentPage: BookPageInfo) {
+const pdfExtraPaddingStyles = `
+  #frontContainer, #backContainer {
+    padding: 117px 50px;
+  }
+  #spine {
+    padding: 117px 0;
+  }
+`;
+
+export function generatePDFCoverContent({
+  bookInfo,
+  opt,
+  numPages
+}: {
+  bookInfo: BookPageInfo;
+  opt?: PDFCoverOpts;
+  numPages: number | null;
+}) {
+  const spineWidth = _getCoverSpineWidth({ numPages, opt });
+  const width = _getCoverWidth({ numPages, opt });
+
+  const frontContent = _generatePDFFrontCoverContent(bookInfo);
+  const backContent = _generatePDFBackCoverContent(bookInfo);
+  const spine = _generatePDFSpineContent({ currentPage: bookInfo, opt, spineWidth, width });
+  const styles = _generatePDFCoverStyles({ currentPage: bookInfo, opt });
+  const coverType = opt?.thin ? 'Thin' : 'Standard';
+
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <title>${coverType} Cover</title>
+        <style>
+          @page {
+            size: ${numPages ? `${width}in` : '8.5in'} 
+            ${numPages ? (opt?.hardcover ? '12.75in' : '11.25in') : '11in'};
+            margin: 0;
+          }
+          ${styles}
+          ${opt?.extraPadding ? pdfExtraPaddingStyles : ''}
+        </style>
+      </head>
+      <body>
+        ${numPages ? `${backContent}${spine}${frontContent}` : frontContent}
+      </body>
+    </html>
+  `;
+}
+
+/**
+ * Generating the HTML content for the front cover of the PDF,
+ * including the title and author information from the current page's printInfo.
+ */
+function _generatePDFFrontCoverContent(currentPage: BookPageInfo) {
   return `
     <div id="frontContainer">
       <div>
@@ -322,7 +378,13 @@ export function generatePDFFrontCoverContent(currentPage: BookPageInfo) {
   `;
 }
 
-export function generatePDFBackCoverContent(currentPage: BookPageInfo) {
+/**
+ * Generates the HTML content for the back cover of the PDF,
+ * including a logo (if specified in the page tags), an overview/summary of the page,
+ * and a QR code linking to the page URL. The layout and styling are designed to fit within the back cover dimensions,
+ * and the QR code is generated using the qrcode.js library.
+ */
+function _generatePDFBackCoverContent(currentPage: BookPageInfo) {
   let logoSrc = 'https://cdn.libretexts.net/shapeshift/pdf_back_logo.png';
   const logoTag = currentPage.tags.find((t) => t.startsWith('luluCover@'));
   if (logoTag) {
@@ -362,7 +424,11 @@ export function generatePDFBackCoverContent(currentPage: BookPageInfo) {
   `;
 }
 
-export function generatePDFSpineContent({
+/**
+ * Generates an HTML string containing the styles and elements needed for the PDF spine,
+ * including the background image based on the current page's subdomain and the provided options.
+ */
+function _generatePDFSpineContent({
   currentPage,
   opt,
   spineWidth,
@@ -388,7 +454,11 @@ export function generatePDFSpineContent({
   `;
 }
 
-export function generatePDFCoverStyles({ currentPage, opt }: { currentPage: BookPageInfo; opt?: PDFCoverOpts }) {
+/**
+ * Generates an HTML string containing the styles and elements needed for the PDF cover,
+ * including the background images for spine, front, and back based on the current page's subdomain and the provided options.
+ */
+export function _generatePDFCoverStyles({ currentPage, opt }: { currentPage: BookPageInfo; opt?: PDFCoverOpts }) {
   return `
     <style>${pdfCoverStyles}</style>
 		<link href="https://fonts.googleapis.com/css?family=Open+Sans:300,300i" rel="stylesheet" />
@@ -401,4 +471,42 @@ export function generatePDFCoverStyles({ currentPage, opt }: { currentPage: Book
       }
     </style>
   `;
+}
+
+function _getCoverSpineWidth({ numPages, opt }: { numPages: number | null; opt?: PDFCoverOpts }) {
+  if (opt?.thin) return 0;
+  if (opt && !opt.extraPadding && !isNullOrUndefined(numPages)) return numPages * 0.002252; // Amazon side
+  if (opt?.hardcover && !isNullOrUndefined(numPages)) {
+    const res = Object.entries(PDF_COVER_WIDTHS).reduce(
+      (acc, [k, v]) => {
+        if (numPages > parseInt(k)) return v;
+        return acc;
+      },
+      null as number | null,
+    );
+    if (res) return res;
+  }
+
+  if (isNullOrUndefined(numPages)) return 0;
+  const baseWidth = numPages / 444 + 0.06;
+  return Math.floor(baseWidth * 1000) / 1000;
+}
+
+function _getCoverWidth({ numPages, opt }: { numPages: number | null; opt?: PDFCoverOpts }) {
+  if (opt?.thin) return 17.25;
+  if (opt && !opt.extraPadding && !isNullOrUndefined(numPages)) return numPages * 0.002252 + 0.375 + 17; // Amazon size
+  if (opt?.hardcover && !isNullOrUndefined(numPages)) {
+    const res = Object.entries(PDF_COVER_WIDTHS).reduce(
+      (acc, [k, v]) => {
+        if (numPages > parseInt(k)) return v;
+        return acc;
+      },
+      null as number | null,
+    );
+    if (res) return res + 18.75;
+  }
+
+  if (isNullOrUndefined(numPages)) return 0;
+  const baseWidth = numPages / 444 + 0.06 + 17.25;
+  return Math.floor(baseWidth * 1000) / 1000;
 }
