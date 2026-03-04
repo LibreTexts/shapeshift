@@ -2,16 +2,7 @@ import fs from 'node:fs/promises';
 import { v4 as uuid } from 'uuid';
 import { join, resolve } from 'node:path';
 import { pdfIgnoreList } from '../util/ignoreLists';
-import {
-  generatePDFBackCoverContent,
-  generatePDFCoverStyles,
-  generatePDFFooter,
-  generatePDFFrontCoverContent,
-  generatePDFHeader,
-  generatePDFSpineContent,
-  pdfPageMargins,
-  pdfTOCStyles,
-} from '../util/pdfHelpers';
+import { generatePDFCoverContent, pdfTOCStyles } from '../util/pdfHelpers';
 import { ImageConstants } from '../util/imageConstants';
 import { isNullOrUndefined, sleep } from '../helpers';
 import { log as logService } from '../lib/log';
@@ -91,6 +82,11 @@ export class PDFService {
     const pagesMap = new Map(pages.map((c) => [c.pageID.toString(), c] as [string, BookPageInfoWithContent]));
 
     try {
+      const preflightOk = await this.runPreflightChecks();
+      if (!preflightOk) {
+        throw new Error('Preflight checks failed: Prince binary is not properly configured');
+      }
+
       // Build conversion tasks with correct ordering and TOC placement
       const conversionTasks = this.buildTaskList(pages);
       this.logger.withMetadata({ totalTasks: conversionTasks.length }).info('Built conversion task list');
@@ -194,10 +190,12 @@ export class PDFService {
             `Generate cover: ${config.coverType}`,
           );
           if (!result.success) {
+            const errorMessage = result.error instanceof Error ? result.error.message : JSON.stringify(result.error);
             this.logger
               .withMetadata({
                 coverType: config.coverType,
                 error: result.error,
+                errorMessage,
               })
               .error('Cover generation failed after retries');
           }
@@ -255,6 +253,33 @@ export class PDFService {
     return { success: false, error: lastError || new Error('Unknown error') };
   }
 
+  /**
+   * Checks that a Prince binary is accessible and executable at the specified path (either from environment variable or default location).
+   * This is a preflight check that should be run before attempting any conversions to fail fast if the binary is not properly configured.
+   * @returns True if a Prince binary is accessible and executable, false otherwise.
+   */
+  private async runPreflightChecks(): Promise<boolean> {
+    const princeBinaryLocalPath = Environment.getOptional('PRINCE_BINARY_PATH', '');
+    if (princeBinaryLocalPath) {
+      try {
+        await fs.access(princeBinaryLocalPath, fs.constants.X_OK);
+        return true;
+      } catch (error) {
+        this.logger.withMetadata({ path: princeBinaryLocalPath, error }).error("PRINCE_BINARY_PATH is set but the binary is not accessible or executable at the specified path.");
+        return false;
+      }
+    }
+
+    // check if prince binary at node_modules/prince/bin/prince exists and is executable
+    try {
+      await fs.access(princeBinaryLocalPath, fs.constants.X_OK);
+      return true;
+    } catch (error) {
+      this.logger.withMetadata({ path: princeBinaryLocalPath, error }).error(`Prince binary is not accessible or executable at path: ${princeBinaryLocalPath}`);
+      return false;
+    }
+  }
+
   private async calculateNumPagesInPDFDocument(filePath: string): Promise<number> {
     const file = await fs.readFile(filePath);
     const filePDF = await PDFDocument.load(file);
@@ -284,72 +309,78 @@ export class PDFService {
     return filePath;
   }
 
-  private async convertPage({ pageID, pageBodyHTML }: { pageID: PageID; pageBodyHTML: string }) {
+  private async convertPage({ pageID, pageBodyHTML, additionalCSS }: { pageID: PageID; pageBodyHTML: string; additionalCSS?: string }) {
     try {
-      // const listing = await this.getLevel(pageInfo);
-      // if (listing) {
-      //   await page.evaluate(this.processDirectoryPage, {
-      //     listing,
-      //     tags: pageInfo.tags,
-      //     title: pageInfo.title,
-      //   });
-      //   await sleep(1000);
-      // }
-      // const foundPrefix = await page.evaluate(function (url) {
-      //   const title = document.getElementById("title");
-      //   if (!title) return "";
-      //   const color = window.getComputedStyle(title).color;
-      //   const innerText = title.innerText;
-      //   title.innerHTML = `<a style="color:${color}; text-decoration: none" href="${url}">${innerText}</a>`;
-      //   if (innerText?.includes(":")) {
-      //     return innerText.split(":")[0];
-      //   }
-      //   return "";
-      // }, pageInfo.url);
-      // const prefix = foundPrefix ? `${foundPrefix}.` : "";
+      // Wrap the page content in a complete HTML document with proper CSS styling
+      const wrappedHTML = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>
+    @page {
+      size: calc(8.5in - (0.75in + 0.9in)) calc(11in - 0.625in);
+      margin: 0.625in;
+      padding: 0;
+      print-color-adjust: exact;
+    }
+    
+    html, body {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+    }
+    
+    #elm-main-content {
+      padding: 0 !important;
+    }
+    
+    * {
+      print-color-adjust: exact;
+    }
+    
+    ${additionalCSS || ''}
+  </style>
+</head>
+<body>
+${pageBodyHTML}
+</body>
+</html>
+      `.trim();
 
-      // const showHeaders = !(
-      //   pageInfo.tags.includes("printoptions:no-header") ||
-      //   pageInfo.tags.includes("printoptions:no-header-title")
-      // );
-      // // TODO: re-evaluate
-      // if (pageInfo.tags.includes("hidetop:solutions")) {
-      //   await page.addStyleTag({
-      //     content: "dd, dl {display: none;} h3 {font-size: 160%}",
-      //   });
-      // }
-      // if (pageInfo.url.includes("Wakim_and_Grewal")) {
-      //   await page.addStyleTag({
-      //     content: `.mt-content-container {font-size: 93%}`,
-      //   });
-      // }
-      // await page.addStyleTag({
-      //   content: `
-      //   @page {
-      //     size: calc(8.5in - (0.75in + 0.9in)) calc(11in - 0.625in);
-      //     margin: ${showHeaders ? `${pdfPageMargins};` : "0.625in;"}
-      //     padding: 0;
-      //     print-color-adjust: exact;
-      //   }
-      //   #elm-main-content {
-      //     padding: 0 !important;
-      //   }
-      //   ${pdfTOCStyles}
-      // `,
-      // });
-
-      const inputPath = await this.createTempFile(pageBodyHTML);
+      const inputPath = await this.createTempFile(wrappedHTML);
       const outputPath = await this.generatePageOutputFilePath(pageID);
 
-      const prince = new Prince();
-      await prince.inputs(inputPath).output(outputPath).execute();
+      await this.runPrinceConversion(inputPath, outputPath);
 
       await this.deleteTempFile(inputPath); // Cleanup the temp file after conversion
 
       this.logger.withMetadata({ outputPath }).info('Converted page.');
       return outputPath;
     } catch (error) {
-      this.logger.withMetadata({ error }).error('Page conversion failed');
+      const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      this.logger.withMetadata({ error, errorMessage }).error('Page conversion failed');
+      throw error;
+    }
+  }
+
+  /**
+   * Wrapper function to run Prince conversion with the configured binary path.
+   * Allows us to abstract Prince initilization and execution in one place.
+   * @param inputPath - path to the input HTML file to be converted
+   * @param outputPath - desired path for the output PDF file
+   */
+  private async runPrinceConversion(inputPath: string, outputPath: string) {
+    try {
+      const prince = new Prince({
+        binary: Environment.getOptional('PRINCE_BINARY_PATH', '') || undefined,
+      });
+
+      await prince.inputs(inputPath).output(outputPath).execute();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      this.logger.withMetadata({ inputPath, outputPath, error, errorMessage }).error('Prince conversion failed');
       throw error;
     }
   }
@@ -537,42 +568,17 @@ export class PDFService {
   }) {
     try {
       const dirPath = await this.ensureCoversDirectory();
-
-      const spineWidth = this.getCoverSpineWidth({ numPages, opt });
-      const width = this.getCoverWidth({ numPages, opt });
-      const frontContent = generatePDFFrontCoverContent(bookInfo);
-      const backContent = generatePDFBackCoverContent(bookInfo);
-      const spine = generatePDFSpineContent({
-        currentPage: bookInfo,
+      const content = generatePDFCoverContent({
+        bookInfo,
         opt,
-        spineWidth,
-        width,
-      });
-      const styles = generatePDFCoverStyles({ currentPage: bookInfo, opt });
+        numPages,
+      })
 
-      const baseContent = numPages
-        ? `${styles}${backContent}${opt?.thin ? '' : spine}${frontContent}`
-        : `${styles}${frontContent}`;
-      const content = `
-      ${baseContent}
-      ${
-        opt?.extraPadding
-          ? `
-          <style>
-            #frontContainer, #backContainer {
-              padding: 117px 50px;
-            }
-            #spine {
-              padding: 117px 0;
-            }
-          </style>`
-          : ''
-      }
-    `;
+      const inputPath = await this.createTempFile(content)
+      const outputPath = `${dirPath}/${coverType}.pdf`;
 
-      //TODO: here's where we'll generate the full HTML of the cover, including spine if needed, and then convert that to PDF.
-      // This will likely involve creating a temporary HTML file and using Prince to convert to PDF
-      // with the correct dimensions based on the number of pages and cover type.
+      this.logger.withMetadata({ coverType, url: bookInfo.url, inputPath, outputPath }).info('Generating cover...');
+      await this.runPrinceConversion(inputPath, outputPath);
 
       // await page.pdf({
       //   path: `${dirPath}/${coverType}.pdf`,
@@ -583,49 +589,12 @@ export class PDFService {
       //   height: numPages ? (opt?.hardcover ? "12.75 in" : "11.25 in") : "11 in",
       //   timeout: this.pageLoadSettings.timeout,
       // });
-      this.logger.withMetadata({ coverType, url: bookInfo.url }).info('Generated cover.');
+      this.logger.withMetadata({ coverType, url: bookInfo.url, inputPath, outputPath }).info('Generated cover.');
     } catch (error) {
-      this.logger.withMetadata({ coverType, url: bookInfo.url, error }).error('Cover generation failed');
+      const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      this.logger.withMetadata({ coverType, url: bookInfo.url, error, errorMessage }).error('Cover generation failed');
       throw error;
     }
-  }
-
-  private getCoverSpineWidth({ numPages, opt }: { numPages: number | null; opt?: PDFCoverOpts }) {
-    if (opt?.thin) return 0;
-    if (opt && !opt.extraPadding && !isNullOrUndefined(numPages)) return numPages * 0.002252; // Amazon side
-    if (opt?.hardcover && !isNullOrUndefined(numPages)) {
-      const res = Object.entries(PDF_COVER_WIDTHS).reduce(
-        (acc, [k, v]) => {
-          if (numPages > parseInt(k)) return v;
-          return acc;
-        },
-        null as number | null,
-      );
-      if (res) return res;
-    }
-
-    if (isNullOrUndefined(numPages)) return 0;
-    const baseWidth = numPages / 444 + 0.06;
-    return Math.floor(baseWidth * 1000) / 1000;
-  }
-
-  private getCoverWidth({ numPages, opt }: { numPages: number | null; opt?: PDFCoverOpts }) {
-    if (opt?.thin) return 17.25;
-    if (opt && !opt.extraPadding && !isNullOrUndefined(numPages)) return numPages * 0.002252 + 0.375 + 17; // Amazon size
-    if (opt?.hardcover && !isNullOrUndefined(numPages)) {
-      const res = Object.entries(PDF_COVER_WIDTHS).reduce(
-        (acc, [k, v]) => {
-          if (numPages > parseInt(k)) return v;
-          return acc;
-        },
-        null as number | null,
-      );
-      if (res) return res + 18.75;
-    }
-
-    if (isNullOrUndefined(numPages)) return 0;
-    const baseWidth = numPages / 444 + 0.06 + 17.25;
-    return Math.floor(baseWidth * 1000) / 1000;
   }
 
   private async generateTableOfContents({ pageInfo }: { pageInfo: BookPageInfoWithContent }) {
@@ -658,6 +627,7 @@ export class PDFService {
         const outputPath = await this.convertPage({
           pageID: pageInfo.pageID,
           pageBodyHTML: updatedHTML,
+          additionalCSS: pdfTOCStyles,
         });
 
         //FIXME: figure out how we're going to do this without puppeteer.
@@ -763,11 +733,11 @@ export class PDFService {
     return dirPath;
   }
 
-  private async createTempFile(content: string) {
+  private async createTempFile(content: string, fileName?: string) {
     const id = uuid();
     const tempDir = resolve('.tmp');
     await fs.mkdir(tempDir, { recursive: true });
-    const tempFilePath = join(tempDir, `${id}.html`);
+    const tempFilePath = join(tempDir, fileName || `${id}.html`);
     await fs.writeFile(tempFilePath, content);
     return tempFilePath;
   }

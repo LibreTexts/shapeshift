@@ -48,8 +48,11 @@ export class JobService {
 
   public async run(jobMsg: JobQueueMessage) {
     try {
+      log.debug(`Starting job with ID ${jobMsg.jobId}`);
       await this.setStatus(jobMsg.jobId, 'inprogress');
+      
       const job = await this.get(jobMsg.jobId);
+      log.debug(`Running job with ID ${jobMsg.jobId} and URL ${job?.url}`);
       if (!job?.url) return;
 
       const useLocalStorage =
@@ -57,10 +60,12 @@ export class JobService {
           'USE_LOCAL_STORAGE',
           Environment.getSystemEnvironment() === 'DEVELOPMENT' ? 'true' : 'false',
         ) === 'true';
+      log.debug(`USE_LOCAL_STORAGE is set to ${useLocalStorage}`);
 
       try {
         const bookModel = new BookService();
         const bookID = await bookModel.getIDFromURL(job.url);
+        log.debug(`Extracted book ID: ${bookID?.toString()}`);
         if (!bookID) {
           await this.setStatus(jobMsg.jobId, 'failed');
           await this.finish(jobMsg);
