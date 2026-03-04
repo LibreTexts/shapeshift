@@ -1,5 +1,4 @@
 import { JobService } from '../services/job';
-import { Environment } from '../lib/environment';
 import { QueueClient } from '../lib/queueClient';
 import zod from 'zod';
 import { Response } from 'express';

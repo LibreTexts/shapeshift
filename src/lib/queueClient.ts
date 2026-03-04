@@ -23,7 +23,7 @@ export class QueueClient {
       const config: any = {
         region: Environment.getRequired('AWS_REGION'),
       };
-      
+
       // Extract endpoint from queue URL for local development
       const queueUrl = this.getQueueUrl();
       try {
@@ -36,7 +36,7 @@ export class QueueClient {
       } catch (err) {
         // If URL parsing fails, proceed without custom endpoint
       }
-      
+
       this._instance = new SQSClient(config);
     }
     return this._instance;
