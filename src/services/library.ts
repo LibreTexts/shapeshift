@@ -1,7 +1,6 @@
 import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';
 import Expert from '@libretexts/cxone-expert-node';
 import { Environment } from '../lib/environment';
-import { sleep } from '../helpers';
 
 export type CXOneFetchPageParams = {
   subdomain: string;

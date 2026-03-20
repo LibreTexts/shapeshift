@@ -43,6 +43,25 @@ export class StorageService {
     }
   }
 
+  public createStreamUploader({ contentType, key, stream }: { contentType: string; key: string; stream: Readable }) {
+    try {
+      return new Upload({
+        client: this.client,
+        queueSize: 4,
+        leavePartsOnError: false,
+        params: {
+          Bucket: this.bucket,
+          Body: stream,
+          ContentType: contentType,
+          Key: key,
+        },
+      });
+    } catch (err) {
+      const errString = (err as Error).message;
+      this.logger.error(errString);
+    }
+  }
+
   public async readFileAsBuffer(key: string): Promise<Buffer | null> {
     try {
       const res = await this.client.send(

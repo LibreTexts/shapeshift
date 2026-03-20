@@ -143,10 +143,11 @@ export function generatePDFFooter({
             </div>
       </div>
       <div class="footer-right">
-          ${currentPage
-      ? `<a href="https://${currentPage.subdomain}.libretexts.org/@go/page/${currentPage.id}?pdf">https://${currentPage.subdomain}.libretexts.org/@go/page/${currentPage.id}</a>`
-      : ''
-    }
+          ${
+            currentPage
+              ? `<a href="https://${currentPage.subdomain}.libretexts.org/@go/page/${currentPage.pageID.pageNum}?pdf">https://${currentPage.subdomain}.libretexts.org/@go/page/${currentPage.pageID.pageNum}</a>`
+              : ''
+          }
       </div>
     </div>
   `;
@@ -322,7 +323,7 @@ const pdfExtraPaddingStyles = `
 export function generatePDFCoverContent({
   bookInfo,
   opt,
-  numPages
+  numPages,
 }: {
   bookInfo: BookPageInfo;
   opt?: PDFCoverOpts;
