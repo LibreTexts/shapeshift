@@ -1,9 +1,17 @@
 import fs from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { v4 as uuid } from 'uuid';
 import { join, resolve } from 'node:path';
-// import { pdfIgnoreList } from '../util/ignoreLists';
-import { generatePDFCoverContent, pdfTOCStyles } from '../util/pdfHelpers';
-// import { ImageConstants } from '../util/imageConstants';
+import {
+  generatePDFCoverHTML,
+  generatePDFHeader,
+  generatePDFFooter,
+  PDF_COVER_TYPES,
+  pdfTOCStyles,
+  pdfHeaderCSS,
+  pdfFooterCSS,
+} from '../util/pdfHelpers';
+import { ImageConstants } from '../util/imageConstants';
 import { sleep } from '../helpers';
 import { log as logService } from '../lib/log';
 // import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
@@ -17,15 +25,26 @@ import { BookPageInfo, BookPages } from '../types/book';
 import PageID from '../util/pageID';
 // import { PDF_COVER_WIDTHS } from '../lib/constants';
 import * as cheerio from 'cheerio';
+import { PDFCoverOpts, PDFCoverType } from '../types/pdf';
+import { prerenderMath, stripMathJaxScripts } from '../util/mathjax';
 
-export type PDFCoverOpts = {
-  extraPadding?: boolean;
-  hardcover?: boolean;
-  thin?: boolean;
+// CSS loaded at module init and inlined into HTML sent to Prince.
+// Note: changes to this file require a server restart in development.
+const pdfPageCSS = readFileSync(join(__dirname, '../styles/pdf-page.css'), 'utf-8');
+
+/**
+ * Canonical configuration for each cover type.
+ * `opt` contains the styling flags passed to the cover generator.
+ * `usesPageCount` indicates whether the cover dimensions depend on the content page count
+ * (false only for 'Main', which is a single front-only cover at a fixed size).
+ */
+export const COVER_TYPE_CONFIG: Record<PDFCoverType, { opt?: PDFCoverOpts; usesPageCount: boolean }> = {
+  Amazon: { usesPageCount: true },
+  CaseWrap: { opt: { extraPadding: true, hardcover: true }, usesPageCount: true },
+  CoilBound: { opt: { extraPadding: true, thin: true }, usesPageCount: true },
+  Main: { usesPageCount: false },
+  PerfectBound: { opt: { extraPadding: true }, usesPageCount: true },
 };
-
-const pdfCoverTypes = ['Amazon', 'CaseWrap', 'CoilBound', 'Main', 'PerfectBound'] as const;
-type PDFCoverType = (typeof pdfCoverTypes)[number];
 
 type ConversionTask = {
   _id: string;
@@ -129,7 +148,10 @@ export class PDFService {
           } else {
             return await this.convertPage({
               pageID: task.pageID,
+              pageInfo: task.pageInfo,
               pageBodyHTML: task.pageInfo.body.join(''),
+              pageHeadHTML: task.pageInfo.head,
+              pageTailHTML: task.pageInfo.tail,
             });
           }
         };
@@ -156,25 +178,11 @@ export class PDFService {
 
       // Generate covers with retry
       this.logger.info('Generating covers');
-      const coverConfigs = [
-        { coverType: 'Amazon' as PDFCoverType, numPages },
-        {
-          coverType: 'CaseWrap' as PDFCoverType,
-          numPages,
-          opt: { extraPadding: true, hardcover: true },
-        },
-        {
-          coverType: 'CoilBound' as PDFCoverType,
-          numPages,
-          opt: { extraPadding: true, thin: true },
-        },
-        { coverType: 'Main' as PDFCoverType, numPages: null },
-        {
-          coverType: 'PerfectBound' as PDFCoverType,
-          numPages,
-          opt: { extraPadding: true },
-        },
-      ];
+      const coverConfigs = PDF_COVER_TYPES.map((coverType) => ({
+        coverType,
+        numPages: COVER_TYPE_CONFIG[coverType].usesPageCount ? numPages : null,
+        opt: COVER_TYPE_CONFIG[coverType].opt,
+      }));
 
       // TODO: does pages contain the cover page or only true content pages?
       const coverPageInfo = pagesMap.get(this._bookID.toString());
@@ -317,58 +325,63 @@ export class PDFService {
 
   private async convertPage({
     pageID,
+    pageInfo,
     pageBodyHTML,
+    pageHeadHTML = '',
+    pageTailHTML = '',
     additionalCSS,
+    mainColor = '#127BC4',
   }: {
     pageID: PageID;
+    pageInfo: BookPageInfo;
     pageBodyHTML: string;
+    pageHeadHTML?: string;
+    pageTailHTML?: string;
     additionalCSS?: string;
+    mainColor?: string;
   }) {
     try {
-      // Wrap the page content in a complete HTML document with proper CSS styling
+      // Pre-render TeX math to inline SVG so Prince doesn't need to execute MathJax JS.
+      // Strip CMS-provided MathJax <script> tags from head since they're now unnecessary.
+      const renderedBodyHTML = await prerenderMath(pageBodyHTML);
+      const cleanedHeadHTML = stripMathJaxScripts(pageHeadHTML);
+
+      const headerHTML = generatePDFHeader(ImageConstants['default']);
+      const footerHTML = generatePDFFooter({
+        currentPage: pageInfo,
+        mainColor,
+        pageLicense: pageInfo.license,
+        prefix: '',
+      });
+
+      // Wrap the page content in a complete HTML document with header/footer running elements.
+      // Prince's running element CSS (in pdf-page.css) pulls #libre-pdf-header and
+      // #libre-pdf-footer out of body flow and places them in the @page margin boxes.
+      // pageTailHTML includes post-body scripts that must run after the content is in the DOM.
       const wrappedHTML = `
 <!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
-  <style>
-    @page {
-      size: calc(8.5in - (0.75in + 0.9in)) calc(11in - 0.625in);
-      margin: 0.625in;
-      padding: 0;
-      print-color-adjust: exact;
-    }
-    
-    html, body {
-      margin: 0;
-      padding: 0;
-      width: 100%;
-      height: 100%;
-    }
-    
-    #elm-main-content {
-      padding: 0 !important;
-    }
-    
-    * {
-      print-color-adjust: exact;
-    }
-    
-    ${additionalCSS || ''}
-  </style>
+  <style>${pdfPageCSS}</style>
+  <style>${pdfHeaderCSS}</style>
+  <style>:root { --pdf-main-color: ${mainColor}; }</style>
+  <style>${pdfFooterCSS}</style>
+  ${additionalCSS ? `<style>${additionalCSS}</style>` : ''}
+  ${cleanedHeadHTML}
 </head>
 <body>
-${pageBodyHTML}
+${headerHTML}
+${footerHTML}
+${renderedBodyHTML}
+${pageTailHTML}
 </body>
 </html>
       `.trim();
 
-      const inputPath = await this.createTempFile(wrappedHTML);
       const outputPath = await this.generatePageOutputFilePath(pageID);
 
-      await this.runPrinceConversion(inputPath, outputPath);
-
-      await this.deleteTempFile(inputPath); // Cleanup the temp file after conversion
+      await this.withTempFile(wrappedHTML, (inputPath) => this.runPrinceConversion(inputPath, outputPath));
 
       this.logger.withMetadata({ outputPath }).info('Converted page.');
       return outputPath;
@@ -391,11 +404,32 @@ ${pageBodyHTML}
         binary: Environment.getOptional('PRINCE_BINARY_PATH', '') || undefined,
       });
 
-      await prince.inputs(inputPath).output(outputPath).execute();
+      const result = await prince
+        .option('verbose', true)
+        .option('javascript', true)
+        .inputs(inputPath)
+        .output(outputPath)
+        .execute();
+
+      // Prince writes warnings and info messages to stderr even on success
+      const stderr = result?.stderr?.toString?.()?.trim();
+      if (stderr) {
+        this.logger.withMetadata({ inputPath, outputPath, princeOutput: stderr }).debug('Prince output');
+      }
     } catch (error) {
-      const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-      this.logger.withMetadata({ inputPath, outputPath, error, errorMessage }).error('Prince conversion failed');
-      throw error;
+      // The prince npm wrapper rejects with { error, stdout, stderr }
+      const princeError = error as { error?: unknown; stdout?: Buffer; stderr?: Buffer };
+      const stderr = princeError?.stderr?.toString?.()?.trim();
+      const errorMessage =
+        princeError?.error instanceof Error
+          ? princeError.error.message
+          : typeof princeError?.error === 'string'
+            ? princeError.error
+            : JSON.stringify(error);
+      this.logger
+        .withMetadata({ inputPath, outputPath, errorMessage, princeOutput: stderr || undefined })
+        .error('Prince conversion failed');
+      throw new Error(`Prince conversion failed: ${errorMessage}`);
     }
   }
 
@@ -582,28 +616,21 @@ ${pageBodyHTML}
   }) {
     try {
       const dirPath = await this.ensureCoversDirectory();
-      const content = generatePDFCoverContent({
+      const content = generatePDFCoverHTML({
         bookInfo,
+        coverType,
         opt,
         numPages,
       });
 
-      const inputPath = await this.createTempFile(content);
       const outputPath = `${dirPath}/${coverType}.pdf`;
 
-      this.logger.withMetadata({ coverType, url: bookInfo.url, inputPath, outputPath }).info('Generating cover...');
-      await this.runPrinceConversion(inputPath, outputPath);
+      await this.withTempFile(content, async (inputPath) => {
+        this.logger.withMetadata({ coverType, url: bookInfo.url, inputPath, outputPath }).info('Generating cover...');
+        await this.runPrinceConversion(inputPath, outputPath);
+      });
 
-      // await page.pdf({
-      //   path: `${dirPath}/${coverType}.pdf`,
-      //   printBackground: true,
-      //   width: numPages
-      //     ? `${this.getCoverWidth({ numPages, opt })} in`
-      //     : "8.5 in",
-      //   height: numPages ? (opt?.hardcover ? "12.75 in" : "11.25 in") : "11 in",
-      //   timeout: this.pageLoadSettings.timeout,
-      // });
-      this.logger.withMetadata({ coverType, url: bookInfo.url, inputPath, outputPath }).info('Generated cover.');
+      this.logger.withMetadata({ coverType, url: bookInfo.url, outputPath }).info('Generated cover.');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
       this.logger.withMetadata({ coverType, url: bookInfo.url, error, errorMessage }).error('Cover generation failed');
@@ -641,7 +668,10 @@ ${pageBodyHTML}
         // Now we can just convert this page like normal since the HTML is updated with the listing content. The main difference is that we need to ensure the correct styles are applied for the TOC, which may involve including the pdfTOCStyles in the HTML.
         const outputPath = await this.convertPage({
           pageID: pageInfo.pageID,
+          pageInfo,
           pageBodyHTML: updatedHTML,
+          pageHeadHTML: pageInfo.head,
+          pageTailHTML: pageInfo.tail,
           additionalCSS: pdfTOCStyles,
         });
 
@@ -748,7 +778,16 @@ ${pageBodyHTML}
     return dirPath;
   }
 
-  private async createTempFile(content: string, fileName?: string) {
+  private async withTempFile<T>(content: string, fn: (path: string) => Promise<T>): Promise<T> {
+    const path = await this._createTempFile(content);
+    try {
+      return await fn(path);
+    } finally {
+      await this._deleteTempFile(path);
+    }
+  }
+
+  private async _createTempFile(content: string, fileName?: string) {
     const id = uuid();
     const tempDir = resolve('.tmp');
     await fs.mkdir(tempDir, { recursive: true });
@@ -757,7 +796,7 @@ ${pageBodyHTML}
     return tempFilePath;
   }
 
-  private async deleteTempFile(filePath: string) {
+  private async _deleteTempFile(filePath: string) {
     try {
       await fs.unlink(filePath);
     } catch (error) {

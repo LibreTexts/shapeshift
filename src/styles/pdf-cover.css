@@ -1,0 +1,106 @@
+body {
+  margin: 0;
+  height: 100vh;
+  width: 100vw;
+  display: flex;
+  background-color: #127bc4;
+  font-family: 'Open Sans', sans-serif;
+  align-content: stretch;
+}
+
+* {
+  white-space: pre-wrap;
+  box-sizing: border-box;
+  /*border: 1px solid black;*/
+  print-color-adjust: exact;
+}
+
+#frontContainer, #backContainer {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: space-evenly;
+  /*width: 800px;*/
+  color: white;
+  padding: 80px 50px;
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+}
+
+#spine {
+  display: flex;
+  /*border: 1px dashed black;*/
+  writing-mode: vertical-rl;
+  padding: 80px 0;
+  align-items: center;
+  background-repeat: no-repeat;
+  background-size: 100% 100%;
+  overflow: hidden;
+  color: white;
+}
+
+#spineCite > img {
+  max-width: 100%;
+  max-height: 6vh;
+  /*margin-top: 20px;*/
+}
+
+#spine > div {
+  flex: 1;
+  width: 100%;
+  display: flex;
+  align-items: center;
+}
+
+#frontContainer > div, #backContainer > div {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  flex: 1;
+  margin-right: 190px;
+}
+
+#backContainer > div {
+  align-items: center;
+}
+
+#spine > div:first-child {
+  margin-bottom: 70px;
+}
+
+#backContainer > div {
+  margin-left: 190px;
+  margin-right: unset;
+}
+
+#frontTitle {
+  font-size: 50px;
+  text-transform: uppercase;
+}
+
+#frontCite {
+  font-size: 28px;
+}
+
+#backLogo {
+  max-height: 70%;
+  max-width: 80%;
+  object-fit: contain;
+}
+
+div#backOverview {
+  flex: 1;
+  margin: 20px;
+  text-align: justify;
+  display: flex;
+  justify-content: center;
+  flex-direction: column;
+}
+
+#canvas {
+  align-self: flex-end;
+}
+
+#spineCite {
+  font-size: 80%;
+}

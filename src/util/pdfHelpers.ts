@@ -1,46 +1,148 @@
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 import { LicenseInfo } from './licensing';
 import { BookPageInfo } from '../types/book';
-import { PDFCoverOpts } from '../services/pdf';
-import { isNullOrUndefined } from '../helpers';
-import { PDF_COVER_WIDTHS } from '../lib/constants';
+import { PDFCoverOpts, PDFCoverType, PDFCoverDimensions } from '../types/pdf';
 
-export const pdfPageMargins = '0.75in 0.625in 0.9in'; // top, left/right, bottom
+export const PDF_COVER_TYPES = ['Amazon', 'CaseWrap', 'CoilBound', 'Main', 'PerfectBound'] as const;
 
+// CSS loaded at module init and inlined into HTML sent to Prince.
+// Note: changes to these files require a server restart in development.
+export const pdfHeaderCSS = readFileSync(join(__dirname, '../styles/pdf-header.css'), 'utf-8');
+export const pdfFooterCSS = readFileSync(join(__dirname, '../styles/pdf-footer.css'), 'utf-8');
+const pdfCoverCSS = readFileSync(join(__dirname, '../styles/pdf-cover.css'), 'utf-8');
+const pdfCoverExtraPaddingCSS = readFileSync(join(__dirname, '../styles/pdf-cover-extra-padding.css'), 'utf-8');
+export const pdfTOCStyles = readFileSync(join(__dirname, '../styles/pdf-toc.css'), 'utf-8');
+
+// --- Page dimension constants (letter size) ---
+export const PDF_PAGE_WIDTH_IN = 8.5;
+export const PDF_PAGE_HEIGHT_IN = 11;
+export const PDF_PAGE_MARGIN_TOP_IN = 0.75;
+export const PDF_PAGE_MARGIN_HORIZONTAL_IN = 0.625;
+export const PDF_PAGE_MARGIN_BOTTOM_IN = 0.9;
+
+// --- Cover sizing constants ---
+/** Amazon KDP black-and-white paper thickness per page, in inches */
+const AMAZON_PAGE_THICKNESS_IN = 0.002252;
+/** Amazon binding and bleed allowance added to spine and panels, in inches */
+const AMAZON_BINDING_ALLOWANCE_IN = 0.375;
+/** Combined front + back panel width for standard (non-hardcover) covers, in inches */
+const STANDARD_COVER_PANELS_WIDTH_IN = 17;
+/** Combined front + back panel width for hardcover/CaseWrap covers, in inches */
+const CASEWRAP_COVER_PANELS_WIDTH_IN = 18.75;
+/** Total cover width for thin/CoilBound covers (independent of page count), in inches */
+const COILBOUND_TOTAL_COVER_WIDTH_IN = 17.25;
+/** Pages-per-inch divisor used for PerfectBound spine width calculation */
+const PERFECTBOUND_PAGES_PER_INCH = 444;
+/** Minimum spine padding for PerfectBound covers, in inches */
+const PERFECTBOUND_MIN_SPINE_IN = 0.06;
+/** Standard paperback cover height including bleed, in inches */
+const COVER_PAPERBACK_HEIGHT_IN = 11.25;
+/** Hardcover/CaseWrap cover height including bleed, in inches */
+const COVER_HARDCOVER_HEIGHT_IN = 12.75;
+/**  */
+const PDF_COVER_WIDTHS: Record<string, number | null> = {
+  '0': null,
+  '24': 0.25,
+  '84': 0.5,
+  '140': 0.625,
+  '169': 0.6875,
+  '195': 0.75,
+  '223': 0.8125,
+  '251': 0.875,
+  '279': 0.9375,
+  '307': 1,
+  '335': 1.0625,
+  '361': 1.125,
+  '389': 1.1875,
+  '417': 1.25,
+  '445': 1.3125,
+  '473': 1.375,
+  '501': 1.4375,
+  '529': 1.5,
+  '557': 1.5625,
+  '582': 1.625,
+  '611': 1.6875,
+  '639': 1.75,
+  '667': 1.8125,
+  '695': 1.875,
+  '723': 1.9375,
+  '751': 2,
+  '779': 2.0625,
+  '800': 2.125,
+};
+
+export const pdfPageMargins = `${PDF_PAGE_MARGIN_TOP_IN}in ${PDF_PAGE_MARGIN_HORIZONTAL_IN}in ${PDF_PAGE_MARGIN_BOTTOM_IN}in`; // top, left/right, bottom
+
+/**
+ * Returns the physical dimensions for a given cover type and page count.
+ * All values are in inches. This is the single source of truth for cover sizing logic.
+ */
+export function getCoverDimensions(coverType: PDFCoverType, numPages: number | null): PDFCoverDimensions {
+  const pages = numPages ?? 0;
+
+  switch (coverType) {
+    case 'Main':
+      return { spineWidth: 0, totalWidth: PDF_PAGE_WIDTH_IN, height: PDF_PAGE_HEIGHT_IN };
+
+    case 'Amazon': {
+      const spineWidth = pages * AMAZON_PAGE_THICKNESS_IN;
+      return {
+        spineWidth,
+        totalWidth: spineWidth + AMAZON_BINDING_ALLOWANCE_IN + STANDARD_COVER_PANELS_WIDTH_IN,
+        height: COVER_PAPERBACK_HEIGHT_IN,
+      };
+    }
+
+    case 'CoilBound':
+      return { spineWidth: 0, totalWidth: COILBOUND_TOTAL_COVER_WIDTH_IN, height: COVER_PAPERBACK_HEIGHT_IN };
+
+    case 'CaseWrap': {
+      const spineWidth =
+        Object.entries(PDF_COVER_WIDTHS).reduce<number | null>(
+          (acc, [k, v]) => (pages > parseInt(k) ? v : acc),
+          null,
+        ) ?? 0;
+      return {
+        spineWidth,
+        totalWidth: spineWidth + CASEWRAP_COVER_PANELS_WIDTH_IN,
+        height: COVER_HARDCOVER_HEIGHT_IN,
+      };
+    }
+
+    case 'PerfectBound': {
+      const spineWidth = Math.floor((pages / PERFECTBOUND_PAGES_PER_INCH + PERFECTBOUND_MIN_SPINE_IN) * 1000) / 1000;
+      return {
+        spineWidth,
+        totalWidth: spineWidth + COILBOUND_TOTAL_COVER_WIDTH_IN,
+        height: COVER_PAPERBACK_HEIGHT_IN,
+      };
+    }
+  }
+}
+
+/**
+ * Returns the header HTML for a content page, wrapped in a Prince running element container.
+ * Must be placed in the <body> — Prince's `position: running(pageHeader)` (in pdf-page.css)
+ * removes it from flow and places it in the @page @top margin box.
+ */
 export function generatePDFHeader(headerImg: string) {
   return `
-    <style>
-      * {
-        print-color-adjust: exact;
-      }
-      #header {
-          padding: 0 !important;
-          margin: 0 !important;
-      }
-      #libreHeader {
-          height: 100%;
-          display: flex;
-          align-items: center;
-          margin: 0;
-          margin-left: 0.4in;
-          width: 100vw;
-          padding-top: 1%;
-      }
-      #libreHeader img {
-          height: 25px;
-          margin: 0;
-          padding: 0;
-      }
-      #libreHeader a {
-          margin: 0;
-          padding: 0;
-      }
-    </style>
-    <div id="libreHeader">
-      <a href="https://libretexts.org"><img src="data:image/png;base64,${headerImg}" /></a>
+    <div id="libre-pdf-header">
+      <div id="libreHeader">
+        <a href="https://libretexts.org"><img src="data:image/png;base64,${headerImg}" /></a>
+      </div>
     </div>
   `;
 }
 
+/**
+ * Returns the footer HTML for a content page, wrapped in a Prince running element container.
+ * Must be placed in the <body> — Prince's `position: running(pageFooter)` (in pdf-page.css)
+ * removes it from flow and places it in the @page @bottom margin box.
+ *
+ * The `--pdf-main-color` CSS custom property must be set in the document <head> for theming.
+ */
 export function generatePDFFooter({
   currentPage,
   mainColor,
@@ -153,190 +255,23 @@ export function generatePDFFooter({
   `;
 }
 
-export const pdfTOCStyles = `
-  #libre-print-directory-header {
-    color: white !important;
-    font-size: 1.6em !important;
-    font-family: "Lato", Arial, serif !important;
-    text-transform: uppercase;
-    font-weight: bold;
-    margin: 0 0 0 1% !important;
-    padding: 1% 0 !important;
-    letter-spacing: .05em !important;
-  }
-  #libre-print-directory-header-container {
-    display: flex;
-    background: #127BC4;
-    margin: 0 0 2%;
-    padding: 0;
-    width: 100%;
-    align-items: center;
-  }
-  .nobreak {
-    page-break-inside: avoid;
-  }
-  .indent0 {
-    margin-left: 6px !important;
-  }
-  .indent1 {
-    margin-left: 12px !important;
-  }
-  .indent2 {
-    margin-left: 18px !important;
-  }
-  .indent3 {
-    margin-left: 24px !important;
-  }
-  .indent4 {
-    margin-left: 30px !important;
-  }
-  .libre-print-directory {
-    margin: 0;
-    padding: 0 0 2%;
-  }
-  .libre-print-list {
-    list-style-type: none;
-    margin: 0 !important;
-    padding: 0 !important;
-    font-size: 12px;
-  }
-  .libre-print-list li {
-    padding-bottom: 2px;
-  }
-  .libre-print-sublisting0 {
-    padding-bottom: 8px;
-  }
-  .libre-print-sublisting1 {
-    padding-bottom: 4px;
-  }
-  .libre-print-sublisting2 {
-    padding-bottom: 2px;
-  }
-  .libre-print-list h2::before {
-    content: none !important; // MT default styling
-  }
-`;
-
-const pdfCoverStyles = `
-  body {
-    margin: 0;
-    height: 100vh;
-    width: 100vw;
-    display: flex;
-    background-color: #127bc4;
-    font-family: 'Open Sans', sans-serif;
-    align-content: stretch;
-  }
-  * {
-    white-space: pre-wrap;
-    box-sizing: border-box;
-    /*border: 1px solid black;*/
-    print-color-adjust: exact;
-  }
-  #frontContainer, #backContainer {
-    display: flex;
-    flex: 1;
-    flex-direction: column;
-    justify-content: space-evenly;
-    /*width: 800px;*/
-    color: white;
-    padding: 80px 50px;
-    background-size: 100% 100%;
-    background-repeat: no-repeat;
-  }
-  #spine {
-    display: flex;
-    /*border: 1px dashed black;*/
-    writing-mode: vertical-rl;
-    padding: 80px 0;
-    align-items: center;
-    background-repeat: no-repeat;
-    background-size: 100% 100%;
-    overflow: hidden;
-    color: white;
-  }
-  #spineCite > img {
-    max-width: 100%;
-    max-height: 6vh;
-    /*margin-top: 20px;*/
-  }
-  #spine > div {
-    flex: 1;
-    width: 100%;
-    display: flex;
-    align-items: center;
-  }
-  #frontContainer > div, #backContainer > div {
-    display: flex;
-    flex-direction: column;
-    justify-content: center;
-    flex: 1;
-    margin-right: 190px;
-  }
-  #backContainer > div {
-    align-items: center;
-  }
-  #spine > div:first-child {
-    margin-bottom: 70px;
-  }
-  #backContainer > div {
-    margin-left: 190px;
-    margin-right: unset;
-  }
-  #frontTitle {
-    font-size: 50px;
-    text-transform: uppercase;
-  }
-  #frontCite {
-    font-size: 28px;
-  }
-  #backLogo {
-    max-height: 70%;
-    max-width: 80%;
-    object-fit: contain;
-  }
-  div#backOverview {
-    flex: 1;
-    margin: 20px;
-    text-align: justify;
-    display: flex;
-    justify-content: center;
-    flex-direction: column;
-  }
-  #canvas {
-    align-self: flex-end;
-  }
-  #spineCite {
-    font-size: 80%;
-  }
-`;
-
-const pdfExtraPaddingStyles = `
-  #frontContainer, #backContainer {
-    padding: 117px 50px;
-  }
-  #spine {
-    padding: 117px 0;
-  }
-`;
-
-export function generatePDFCoverContent({
+export function generatePDFCoverHTML({
   bookInfo,
+  coverType,
   opt,
   numPages,
 }: {
   bookInfo: BookPageInfo;
+  coverType: PDFCoverType;
   opt?: PDFCoverOpts;
   numPages: number | null;
 }) {
-  const spineWidth = _getCoverSpineWidth({ numPages, opt });
-  const width = _getCoverWidth({ numPages, opt });
+  const dimensions = getCoverDimensions(coverType, numPages);
 
   const frontContent = _generatePDFFrontCoverContent(bookInfo);
   const backContent = _generatePDFBackCoverContent(bookInfo);
-  const spine = _generatePDFSpineContent({ currentPage: bookInfo, opt, spineWidth, width });
-  const styles = _generatePDFCoverStyles({ currentPage: bookInfo, opt });
-  const coverType = opt?.thin ? 'Thin' : 'Standard';
+  const spine = _generatePDFSpineContent({ currentPage: bookInfo, opt, dimensions });
+  const headStyles = _generatePDFCoverHeadStyles({ currentPage: bookInfo, opt, dimensions });
 
   return `
     <!DOCTYPE html>
@@ -345,18 +280,10 @@ export function generatePDFCoverContent({
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <title>${coverType} Cover</title>
-        <style>
-          @page {
-            size: ${numPages ? `${width}in` : '8.5in'} 
-            ${numPages ? (opt?.hardcover ? '12.75in' : '11.25in') : '11in'};
-            margin: 0;
-          }
-          ${styles}
-          ${opt?.extraPadding ? pdfExtraPaddingStyles : ''}
-        </style>
+        ${headStyles}
       </head>
       <body>
-        ${numPages ? `${backContent}${spine}${frontContent}` : frontContent}
+        ${coverType !== 'Main' ? `${backContent}${spine}${frontContent}` : frontContent}
       </body>
     </html>
   `;
@@ -432,82 +359,62 @@ function _generatePDFBackCoverContent(currentPage: BookPageInfo) {
 function _generatePDFSpineContent({
   currentPage,
   opt,
-  spineWidth,
-  width,
+  dimensions,
 }: {
   currentPage: BookPageInfo;
   opt?: PDFCoverOpts;
-  spineWidth: number;
-  width: number;
+  dimensions: PDFCoverDimensions;
 }) {
+  const spinePercent = (dimensions.spineWidth / dimensions.totalWidth) * 100;
+  const spineFontSize = Math.min((dimensions.spineWidth / dimensions.totalWidth) * 500, 40);
   return `
     <div id="spine">
-      <div>${currentPage.printInfo.spineTitle || currentPage.printInfo.title || currentPage.printInfo.title || ''}</div>
+      <div>${currentPage.printInfo.spineTitle || currentPage.printInfo.title || ''}</div>
       <div id="spineCite"><b style="flex:1; text-align: center">${currentPage.printInfo.authorName || ''}</b><img src="https://cdn.libretexts.net/shapeshift/stacked_logo.png" /></div>
     </div>
     <style>
       #spine {
         background-image: url("https://cdn.libretexts.net/shapeshift/SpineImages/${opt?.extraPadding ? 'LuluSpine' : 'NormalSpine'}/${currentPage.subdomain}.png");
-        width: ${(spineWidth / width) * 100}%;
-        font-size: ${Math.min((spineWidth / width) * 500, 40)}px;
+        width: ${spinePercent}%;
+        font-size: ${spineFontSize}px;
       }
     </style>
   `;
 }
 
 /**
- * Generates an HTML string containing the styles and elements needed for the PDF cover,
+ * Generates an HTML string containing the <head> styles and elements needed for the PDF cover,
  * including the background images for spine, front, and back based on the current page's subdomain and the provided options.
  */
-export function _generatePDFCoverStyles({ currentPage, opt }: { currentPage: BookPageInfo; opt?: PDFCoverOpts }) {
+export function _generatePDFCoverHeadStyles({
+  currentPage,
+  opt,
+  dimensions,
+}: {
+  currentPage: BookPageInfo;
+  opt?: PDFCoverOpts;
+  dimensions: PDFCoverDimensions;
+}) {
+  const pageWidth = `${dimensions.totalWidth}in`;
+  const pageHeight = `${dimensions.height}in`;
+
   return `
-    <style>${pdfCoverStyles}</style>
-		<link href="https://fonts.googleapis.com/css?family=Open+Sans:300,300i" rel="stylesheet" />
     <style>
-      #frontContainer{
-        background-image: url("https://cdn.libretexts.net/shapeshift/CoverImages/${opt?.extraPadding ? 'LuluFront' : 'NormalFront'}/${currentPage.subdomain}.png");
-      }
-      #backContainer{
-        background-image: url("https://cdn.libretexts.net/shapeshift/CoverImages/${opt?.extraPadding ? 'LuluBack' : 'NormalBack'}/${currentPage.subdomain}.png");
+      @page {
+        size: ${pageWidth} ${pageHeight};
+        margin: 0;
       }
     </style>
+    <style>${pdfCoverCSS}</style>
+    <link href="https://fonts.googleapis.com/css?family=Open+Sans:300,300i" rel="stylesheet" />
+    <style>
+      #frontContainer {
+        background-image: url("https://cdn.libretexts.net/shapeshift/CoverImages/${opt?.extraPadding ? 'LuluFront' : 'NormalFront'}/${currentPage.subdomain}.png");
+      }
+      #backContainer {
+        background-image: url("https://cdn.libretexts.net/shapeshift/CoverImages/${opt?.extraPadding ? 'LuluBack' : 'NormalBack'}/${currentPage.subdomain}.png");
+      }
+      ${opt?.extraPadding ? pdfCoverExtraPaddingCSS : ''}
+    </style>
   `;
-}
-
-function _getCoverSpineWidth({ numPages, opt }: { numPages: number | null; opt?: PDFCoverOpts }) {
-  if (opt?.thin) return 0;
-  if (opt && !opt.extraPadding && !isNullOrUndefined(numPages)) return numPages * 0.002252; // Amazon side
-  if (opt?.hardcover && !isNullOrUndefined(numPages)) {
-    const res = Object.entries(PDF_COVER_WIDTHS).reduce(
-      (acc, [k, v]) => {
-        if (numPages > parseInt(k)) return v;
-        return acc;
-      },
-      null as number | null,
-    );
-    if (res) return res;
-  }
-
-  if (isNullOrUndefined(numPages)) return 0;
-  const baseWidth = numPages / 444 + 0.06;
-  return Math.floor(baseWidth * 1000) / 1000;
-}
-
-function _getCoverWidth({ numPages, opt }: { numPages: number | null; opt?: PDFCoverOpts }) {
-  if (opt?.thin) return 17.25;
-  if (opt && !opt.extraPadding && !isNullOrUndefined(numPages)) return numPages * 0.002252 + 0.375 + 17; // Amazon size
-  if (opt?.hardcover && !isNullOrUndefined(numPages)) {
-    const res = Object.entries(PDF_COVER_WIDTHS).reduce(
-      (acc, [k, v]) => {
-        if (numPages > parseInt(k)) return v;
-        return acc;
-      },
-      null as number | null,
-    );
-    if (res) return res + 18.75;
-  }
-
-  if (isNullOrUndefined(numPages)) return 0;
-  const baseWidth = numPages / 444 + 0.06 + 17.25;
-  return Math.floor(baseWidth * 1000) / 1000;
 }
