@@ -110,6 +110,7 @@ export class QueueClient {
   public async clearQueue() {
     const queueUrl = QueueClient.getQueueUrl();
     const client = QueueClient.getClient();
+    // eslint-disable-next-line no-constant-condition
     while (true) {
       const messages = await client.send(
         new ReceiveMessageCommand({

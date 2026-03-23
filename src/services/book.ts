@@ -1,11 +1,11 @@
 import axios from 'axios';
 import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
-import { getLicense, LicenseInfo } from '../util/licensing';
+import { getLicense } from '../util/licensing';
 import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject, omit } from '../helpers';
 import { LibraryService } from './library';
 import { GetPagesResponse, PageExtended, Tags } from '@libretexts/cxone-expert-node';
 import { dynamicDetailedLicensingLayout, dynamicLicensingLayout, dynamicTOCLayout } from '../util/pageConstants';
-import { BookPageInfoWithContent, BookPageProperty } from '../types/book';
+import { BookPageProperty, BookPages } from '../types/book';
 import { BookMatterType, BookPageInfo, BookPrintInfo } from '../types/book';
 import PageID from '../util/pageID';
 import { log as logService } from '../lib/log';
@@ -266,10 +266,10 @@ export class BookService {
    * @param matterType - the type of matter to check for ("Front" or "Back")
    * @returns a promise that resolves to true if the matter pages exist, false otherwise
    */
-  public checkMatterExists(pages: BookPageInfo[], matterType: BookMatterType): boolean {
+  public checkMatterExists(pages: BookPages, matterType: BookMatterType): boolean {
     // Search for a page with 'Front_Matter' or 'Back_Matter' in the URL, depending on the matterType
     const searchTerm = matterType === 'Front' ? 'Front_Matter' : 'Back_Matter';
-    for (const page of pages) {
+    for (const page of pages.flat) {
       if (page.url.includes(searchTerm)) {
         return true;
       }
@@ -288,13 +288,7 @@ export class BookService {
    * @param pageID - the root page ID of the book
    * @param flat - whether to return a flat array of pages or a nested structure (default: false)
    */
-  public async discoverPages(libName: string, pageID: number, flat: true): Promise<BookPageInfo[]>;
-  public async discoverPages(libName: string, pageID: number, flat?: false): Promise<BookPageInfo>;
-  public async discoverPages(
-    libName: string,
-    pageID: number,
-    flat: boolean | undefined,
-  ): Promise<BookPageInfo | BookPageInfo[] | null> {
+  public async discoverPages(libName: string, pageID: number): Promise<BookPages> {
     try {
       const lib = new LibraryService({ lib: libName });
       await lib.init();
@@ -303,7 +297,10 @@ export class BookService {
       const pagesRaw = pagesRespRaw.page;
 
       const pages = await this.getPageInfo(libName, pagesRaw, lib);
-      return flat ? this.flattenPagesObj(pages) : pages;
+      return {
+        flat: this.flattenPagesObj(pages),
+        tree: pages,
+      };
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error discovering pages for ${libName}/${pageID}: ${errorMsg}`);
@@ -326,7 +323,11 @@ export class BookService {
     }
 
     await CXOneRateLimiter.waitUntilAPIAvailable(2);
-    const pageDetails = await libService.api.pages.getPage(Number(p['@id']));
+    const pageDetails = await libService.api.pages.getPage(Number(p['@id']), {
+      format: 'html',
+      include: 'contents',
+      mode: 'view',
+    });
     const url = pageDetails['uri.ui']!;
 
     const subpagesRaw = isNonNullCXOneObject(p.subpages) ? p.subpages : null;
@@ -351,8 +352,12 @@ export class BookService {
 
     return {
       ...(authorTag && { authorTag }),
-      pageID: new PageID({ lib: libName, pageNum: Number(p['@id']) }),
+      // @ts-expect-error needs fix upstream in cxone sdk
+      body: pageDetails.content?.body ?? [],
+      // @ts-expect-error needs fix upstream in cxone sdk
+      head: pageDetails.content?.head ?? '',
       license: getLicense(parsedTags),
+      pageID: new PageID({ lib: libName, pageNum: Number(p['@id']) }),
       // FIXME: how to support non-English texts?
       ...(['Back_Matter', 'Front_Matter'].some((s) => url.includes(s)) && {
         matterType: url.includes('Back_Matter') ? 'Back' : 'Front',
@@ -362,52 +367,12 @@ export class BookService {
       subdomain: libName,
       subpages: await Promise.all(subpages.map((s) => this.getPageInfo(libName, s, libService))),
       summary: summaryProp?.value ?? '',
+      // @ts-expect-error needs fix upstream in cxone sdk
+      tail: pageDetails.content?.tail ?? '',
       tags: parsedTags,
       title: pageDetails.title?.trim() || '',
       url,
     };
-  }
-
-  /**
-   * For a given book ID (root page ID), discovers all pages in the book and retrieves their HTML content for conversion
-   * Returns an array of page content objects, each containing the full page details and its head, body, and tail HTML content segments.
-   * @param coverPageID - the PageID of the book's cover page (root page)
-   * @param pages - optional pre-discovered pages to use instead of discovering again. This can be used to avoid redundant discovery when we already have the page structure,
-   * such as when we're creating matter pages and then need to get contents for PDF generation.
-   * @returns a Promise that resolves to an array of BookPageInfoWithContent objects
-   */
-  public async getBookContents(coverPageID: PageID, pages: BookPageInfo[]): Promise<BookPageInfoWithContent[]> {
-    try {
-      const lib = new LibraryService({ lib: coverPageID.lib });
-      await lib.init();
-
-      const bookContents: BookPageInfoWithContent[] = [];
-
-      // TODO: Add error handling and retries for individual page content retrieval, so that a failure to retrieve one page doesn't cause the entire process to fail.
-      for (const page of pages) {
-        this.logger.debug(`Retrieving content for page ${page.pageID.lib}/${page.pageID.pageNum} (${page.url})...`);
-        const pageContent = await lib.api.pages.getPageContents(page.pageID.pageNum, {
-          mode: 'view',
-          format: 'html',
-        });
-
-        bookContents.push({
-          ...page,
-          head: pageContent.head || '',
-          body: pageContent.body || [],
-          tail: pageContent.tail || '',
-        });
-
-        // Delay between requests to avoid rate limits
-        await CXOneRateLimiter.waitUntilAPIAvailable(2);
-      }
-
-      return bookContents;
-    } catch (error) {
-      const errorMsg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Error getting book contents: ${errorMsg}`);
-      throw error; // re-throw the error after logging it, so that the calling function can handle it appropriately (e.g. fail the job)
-    }
   }
 
   public async getIDFromURL(urlRaw: string): Promise<PageID | null> {
@@ -424,7 +389,7 @@ export class BookService {
   }
 
   public flattenPagesObj(pagesRaw: BookPageInfo) {
-    if (!pagesRaw) return null;
+    if (!pagesRaw) return [];
 
     const recurse = (subpages: BookPageInfo[]) => {
       const pages: BookPageInfo[] = [];
