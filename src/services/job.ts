@@ -4,9 +4,10 @@ import { Environment } from '../lib/environment';
 import { PDFService } from './pdf';
 import { Job } from '../model';
 import { CreationAttributes } from 'sequelize';
-import { ThinCCService } from './thinCC';
+// import { ThinCCService } from './thinCC';
 import { log } from '../lib/log';
 import { writeFile } from 'fs/promises';
+import { EPUBService } from './epub';
 
 export type JobQueueMessageRawBody = {
   jobId: string;
@@ -50,7 +51,7 @@ export class JobService {
     try {
       log.debug(`Starting job with ID ${jobMsg.jobId}`);
       await this.setStatus(jobMsg.jobId, 'inprogress');
-      
+
       const job = await this.get(jobMsg.jobId);
       log.debug(`Running job with ID ${jobMsg.jobId} and URL ${job?.url}`);
       if (!job?.url) return;
@@ -72,12 +73,15 @@ export class JobService {
           return;
         }
 
-        const initPages = await bookModel.discoverPages(bookID.lib, bookID.pageNum, true);
-        log.debug(`Discovered ${initPages.length} pages for book ${bookID.lib}/${bookID.pageNum}`);
+        const initPages = await bookModel.discoverPages(bookID.lib, bookID.pageNum);
+        log.debug(`Discovered ${initPages.flat.length} pages for book ${bookID.lib}/${bookID.pageNum}`);
         // write the initPages array to a JSON file for debugging
-        await writeFile(`./debug_${bookID.lib}_${bookID.pageNum}_initPages.json`, JSON.stringify(initPages, null, 2));
+        await writeFile(
+          `./debug_${bookID.lib}_${bookID.pageNum}_initPages.json`,
+          JSON.stringify(initPages.flat, null, 2),
+        );
 
-        const coverPageInfo = initPages.find((page) => page.pageID.toString() === bookID.toString());
+        const coverPageInfo = initPages.flat.find((page) => page.pageID.toString() === bookID.toString());
         if (!coverPageInfo) {
           throw new Error(`Cover page with ID ${bookID.toString()} not found in discovered pages.`);
         }
@@ -102,16 +106,19 @@ export class JobService {
         }
 
         // If we created matter, we need to re-discover pages to get updated structure
-        const pages = didCreateMatter ? await bookModel.discoverPages(bookID.lib, bookID.pageNum, true) : initPages;
-
-        // Get flat list of all pages and their HTML content
-        const bookContents = await bookModel.getBookContents(bookID, pages);
+        const pages = didCreateMatter ? await bookModel.discoverPages(bookID.lib, bookID.pageNum) : initPages;
 
         // <generate pdf>
         const pdfService = new PDFService(bookID, { useLocalStorage });
-        const pdfPath = await pdfService.convertBook(bookContents);
+        const pdfPath = await pdfService.convertBook(pages);
         log.info(`PDF generated at path: ${pdfPath}`);
         // </generate pdf>
+
+        // <generate epub>
+        const epubService = new EPUBService();
+        const epubPath = await epubService.convertBook(pages, { useLocalStorage });
+        if (epubPath) log.info(`EPUB generated at path: ${epubPath}`);
+        // </generate epub>
 
         // const thinCCService = new ThinCCService();
         // await thinCCService.convertBook(pages);

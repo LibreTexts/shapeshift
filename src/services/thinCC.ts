@@ -1,11 +1,12 @@
 import { log as logService } from '../lib/log';
 import { LogLayer } from 'loglayer';
-import { BookID, BookPageInfo } from './book';
+import { BookPageInfo } from '../types/book';
 import JSZip from 'jszip';
 import { resolve } from 'node:path';
 import fs from 'node:fs/promises';
 import formatXml from 'xml-formatter';
 import { Environment } from '../lib/environment';
+import PageID from '../util/pageID';
 
 type ThinCCTopicPageData = { title: string; url: string };
 
@@ -88,10 +89,7 @@ export class ThinCCService {
     zip.file('imsmanifest.xml', xml);
     const result = await zip.generateAsync({ type: 'nodebuffer' });
     const outPath = await this.generateFinalOutputFileName({
-      bookID: {
-        lib: pageInfo.lib,
-        pageID: pageInfo.id,
-      },
+      bookID: pageInfo.pageID,
     });
     await fs.writeFile(outPath, result);
     this.logger.withMetadata({ url: pageInfo.url }).info('Finished ThinCC conversion.');
@@ -102,11 +100,11 @@ export class ThinCCService {
     bookID,
     outFileNameOverride,
   }: {
-    bookID: BookID;
+    bookID: PageID;
     outFileNameOverride?: string;
   }) {
     const tmpDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
-    const dirPath = resolve(`${tmpDir}/out/${bookID.lib}-${bookID.pageID}`);
+    const dirPath = resolve(`${tmpDir}/out/${bookID.lib}-${bookID.pageNum}`);
     const fileName = outFileNameOverride ?? 'LibreText';
     const filePath = `${dirPath}/${fileName}.imscc`;
     await fs.mkdir(dirPath, { recursive: true });

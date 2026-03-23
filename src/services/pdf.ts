@@ -1,21 +1,21 @@
 import fs from 'node:fs/promises';
 import { v4 as uuid } from 'uuid';
 import { join, resolve } from 'node:path';
-import { pdfIgnoreList } from '../util/ignoreLists';
+// import { pdfIgnoreList } from '../util/ignoreLists';
 import { generatePDFCoverContent, pdfTOCStyles } from '../util/pdfHelpers';
-import { ImageConstants } from '../util/imageConstants';
-import { isNullOrUndefined, sleep } from '../helpers';
+// import { ImageConstants } from '../util/imageConstants';
+import { sleep } from '../helpers';
 import { log as logService } from '../lib/log';
-import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
+// import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
 import { PDFDocument } from 'pdf-lib';
 import { LogLayer } from 'loglayer';
 import { Environment } from '../lib/environment';
 import { StorageService } from '../lib/storageService';
 import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
 import Prince from 'prince';
-import { BookPageInfo, BookPageInfoWithContent } from '../types/book';
+import { BookPageInfo, BookPages } from '../types/book';
 import PageID from '../util/pageID';
-import { PDF_COVER_WIDTHS } from '../lib/constants';
+// import { PDF_COVER_WIDTHS } from '../lib/constants';
 import * as cheerio from 'cheerio';
 
 export type PDFCoverOpts = {
@@ -30,7 +30,7 @@ type PDFCoverType = (typeof pdfCoverTypes)[number];
 type ConversionTask = {
   _id: string;
   pageID: PageID;
-  pageInfo: BookPageInfoWithContent;
+  pageInfo: BookPageInfo;
   fileName: string;
   type: 'page' | 'toc';
 };
@@ -77,9 +77,11 @@ export class PDFService {
    * @param pages
    * @returns
    */
-  public async convertBook(pages: BookPageInfoWithContent[]): Promise<string> {
+  public async convertBook(pagesInput: BookPages): Promise<string | null> {
+    if (!pagesInput?.flat?.length) return null;
+    const { flat: pages } = pagesInput;
     const startTime = Date.now();
-    const pagesMap = new Map(pages.map((c) => [c.pageID.toString(), c] as [string, BookPageInfoWithContent]));
+    const pagesMap = new Map(pages.map((c) => [c.pageID.toString(), c] as [string, BookPageInfo]));
 
     try {
       const preflightOk = await this.runPreflightChecks();
@@ -265,7 +267,9 @@ export class PDFService {
         await fs.access(princeBinaryLocalPath, fs.constants.X_OK);
         return true;
       } catch (error) {
-        this.logger.withMetadata({ path: princeBinaryLocalPath, error }).error("PRINCE_BINARY_PATH is set but the binary is not accessible or executable at the specified path.");
+        this.logger
+          .withMetadata({ path: princeBinaryLocalPath, error })
+          .error('PRINCE_BINARY_PATH is set but the binary is not accessible or executable at the specified path.');
         return false;
       }
     }
@@ -275,7 +279,9 @@ export class PDFService {
       await fs.access(princeBinaryLocalPath, fs.constants.X_OK);
       return true;
     } catch (error) {
-      this.logger.withMetadata({ path: princeBinaryLocalPath, error }).error(`Prince binary is not accessible or executable at path: ${princeBinaryLocalPath}`);
+      this.logger
+        .withMetadata({ path: princeBinaryLocalPath, error })
+        .error(`Prince binary is not accessible or executable at path: ${princeBinaryLocalPath}`);
       return false;
     }
   }
@@ -309,7 +315,15 @@ export class PDFService {
     return filePath;
   }
 
-  private async convertPage({ pageID, pageBodyHTML, additionalCSS }: { pageID: PageID; pageBodyHTML: string; additionalCSS?: string }) {
+  private async convertPage({
+    pageID,
+    pageBodyHTML,
+    additionalCSS,
+  }: {
+    pageID: PageID;
+    pageBodyHTML: string;
+    additionalCSS?: string;
+  }) {
     try {
       // Wrap the page content in a complete HTML document with proper CSS styling
       const wrappedHTML = `
@@ -572,9 +586,9 @@ ${pageBodyHTML}
         bookInfo,
         opt,
         numPages,
-      })
+      });
 
-      const inputPath = await this.createTempFile(content)
+      const inputPath = await this.createTempFile(content);
       const outputPath = `${dirPath}/${coverType}.pdf`;
 
       this.logger.withMetadata({ coverType, url: bookInfo.url, inputPath, outputPath }).info('Generating cover...');
@@ -597,13 +611,14 @@ ${pageBodyHTML}
     }
   }
 
-  private async generateTableOfContents({ pageInfo }: { pageInfo: BookPageInfoWithContent }) {
+  private async generateTableOfContents({ pageInfo }: { pageInfo: BookPageInfo }) {
     try {
       this.logger.withMetadata({ url: pageInfo.url }).info('Starting Table of Contents');
 
       let pageURL = pageInfo.url;
       const isMainTOC = pageInfo.tags.includes('coverpage:yes') || pageInfo.tags.includes('coverpage:nocommons');
       if (isMainTOC) {
+        // eslint-disable-next-line @typescript-eslint/no-unused-vars
         pageURL = `${pageURL}${pageURL.endsWith('/') ? '' : '/'}00:_Front_Matter/03:_Table_of_Contents`;
         /*
       TODO: create the maintoc here, write it to temp file, convert to PDF, and return the path.
@@ -675,7 +690,7 @@ ${pageBodyHTML}
    * @param pages - The flat list of pages with content to be converted, which will be organized into a task list with correct ordering and TOC placement.
    * @returns An array of conversion tasks in the correct order for PDF generation.
    */
-  private buildTaskList(pages: BookPageInfoWithContent[]): Array<ConversionTask> {
+  private buildTaskList(pages: BookPageInfo[]): Array<ConversionTask> {
     const conversionTasks: Array<ConversionTask> = [];
     let backMatterIdx = 0;
     let frontMatterIdx = 0;
