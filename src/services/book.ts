@@ -1,3 +1,5 @@
+import fs from 'node:fs/promises';
+import { join, resolve } from 'node:path';
 import axios from 'axios';
 import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
 import { getLicense } from '../util/licensing';
@@ -5,11 +7,12 @@ import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject,
 import { LibraryService } from './library';
 import { GetPagesResponse, PageExtended, Tags } from '@libretexts/cxone-expert-node';
 import { dynamicDetailedLicensingLayout, dynamicLicensingLayout, dynamicTOCLayout } from '../util/pageConstants';
-import { BookPageProperty, BookPages } from '../types/book';
+import { BookPageInfoWithContent, BookPageProperty, BookPages } from '../types/book';
 import { BookMatterType, BookPageInfo, BookPrintInfo } from '../types/book';
 import PageID from '../util/pageID';
 import { log as logService } from '../lib/log';
 import { LogLayer } from 'loglayer';
+import { Environment } from '../lib/environment';
 
 export class BookService {
   private readonly logger: LogLayer;
@@ -373,6 +376,81 @@ export class BookService {
       title: pageDetails.title?.trim() || '',
       url,
     };
+  }
+
+  /**
+   * For a given book ID (root page ID), discovers all pages in the book and retrieves their HTML content for conversion
+   * Returns an array of page content objects, each containing the full page details and its head, body, and tail HTML content segments.
+   * @param coverPageID - the PageID of the book's cover page (root page)
+   * @param pages - optional pre-discovered pages to use instead of discovering again. This can be used to avoid redundant discovery when we already have the page structure,
+   * such as when we're creating matter pages and then need to get contents for PDF generation.
+   * @returns a Promise that resolves to an array of BookPageInfoWithContent objects
+   */
+  public async getBookContents(coverPageID: PageID, pages: BookPageInfo[]): Promise<BookPageInfoWithContent[]> {
+    try {
+      const lib = new LibraryService({ lib: coverPageID.lib });
+      await lib.init();
+
+      const bookContents: BookPageInfoWithContent[] = [];
+      const htmlCacheDir = Environment.getOptional('HTML_CACHE_DIR');
+
+      if (htmlCacheDir) {
+        this.logger.withMetadata({ htmlCacheDir }).info('HTML caching enabled — cache hits will skip remote API calls');
+      }
+
+      // TODO: Add error handling and retries for individual page content retrieval, so that a failure to retrieve one page doesn't cause the entire process to fail.
+      for (const page of pages) {
+        const cacheKey = htmlCacheDir
+          ? resolve(join(htmlCacheDir, `${page.pageID.lib}-${page.pageID.pageNum}.json`))
+          : null;
+
+        let pageContent: { head?: string; body?: string | string[]; tail?: string | string[] } | null = null;
+
+        if (cacheKey) {
+          try {
+            const cached = await fs.readFile(cacheKey, 'utf-8');
+            pageContent = JSON.parse(cached);
+            this.logger.debug(`Cache hit for page ${page.pageID.lib}/${page.pageID.pageNum}`);
+          } catch {
+            // Cache miss — fall through to API
+          }
+        }
+
+        if (!pageContent) {
+          this.logger.debug(`Retrieving content for page ${page.pageID.lib}/${page.pageID.pageNum} (${page.url})...`);
+          pageContent = await lib.api.pages.getPageContents(page.pageID.pageNum, {
+            mode: 'view',
+            format: 'html',
+          });
+
+          if (cacheKey) {
+            try {
+              await fs.mkdir(htmlCacheDir!, { recursive: true });
+              await fs.writeFile(cacheKey, JSON.stringify(pageContent));
+              this.logger.debug(`Cached page content for ${page.pageID.lib}/${page.pageID.pageNum}`);
+            } catch (err) {
+              this.logger.withMetadata({ err, cacheKey }).warn('Failed to write page content to HTML cache');
+            }
+          }
+
+          // Delay between requests to avoid rate limits (only when hitting the API)
+          await CXOneRateLimiter.waitUntilAPIAvailable(2);
+        }
+
+        bookContents.push({
+          ...page,
+          head: pageContent.head || '',
+          body: Array.isArray(pageContent.body) ? pageContent.body : [pageContent.body || ''],
+          tail: Array.isArray(pageContent.tail) ? pageContent.tail.join('') : pageContent.tail || '',
+        });
+      }
+
+      return bookContents;
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger.error(`Error getting book contents: ${errorMsg}`);
+      throw error; // re-throw the error after logging it, so that the calling function can handle it appropriately (e.g. fail the job)
+    }
   }
 
   public async getIDFromURL(urlRaw: string): Promise<PageID | null> {

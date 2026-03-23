@@ -40,3 +40,9 @@ export type BookPrintInfo = {
   spineTitle: string;
   title: string;
 };
+
+export type BookPageInfoWithContent = BookPageInfo & {
+  head: string;
+  body: string[];
+  tail: string;
+};

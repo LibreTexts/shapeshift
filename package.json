@@ -7,7 +7,7 @@
   "scripts": {
     "dev:api": "tsx watch --clear-screen=false src/workers/api.ts",
     "dev:processor": "tsx watch --clear-screen=false src/workers/processor.ts",
-    "build": "rimraf ./build && tsc",
+    "build": "rimraf ./build && tsc && cp -r src/styles build/styles",
     "lint": "eslint . --ext .ts",
     "lint-and-fix": "eslint . --ext .ts --fix",
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -51,6 +51,7 @@
     "@aws-sdk/cloudfront-signer": "^3.916.0",
     "@aws-sdk/lib-storage": "^3.910.0",
     "@libretexts/cxone-expert-node": "^1.4.0",
+    "@mathjax/src": "^4.1.1",
     "archiver": "^7.0.1",
     "axios": "^1.13.2",
     "cheerio": "^1.2.0",

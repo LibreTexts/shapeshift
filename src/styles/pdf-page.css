@@ -1,0 +1,55 @@
+@page {
+  size: 8.5in 11in;
+  margin: 0.75in 0.625in 0.9in; /* top, horizontal, bottom */
+  padding: 0;
+  print-color-adjust: exact;
+
+  @top {
+    content: element(pageHeader);
+  }
+
+  @bottom {
+    content: element(pageFooter);
+  }
+}
+
+/* Running elements — pulled from body flow into @page margin boxes by Prince */
+#libre-pdf-header {
+  position: running(pageHeader);
+}
+
+#libre-pdf-footer {
+  position: running(pageFooter);
+}
+
+/* Prince page counter */
+.pageNumber::after {
+  content: counter(page);
+}
+
+html, body {
+  margin: 0;
+  padding: 0;
+  width: 100%;
+  height: 100%;
+}
+
+#elm-main-content {
+  padding: 0 !important;
+}
+
+* {
+  print-color-adjust: exact;
+}
+
+/* MathJax v4 pre-rendered SVG layout */
+mjx-container[jax="SVG"][display="true"] {
+  display: block;
+  text-align: center;
+  margin: 0.7em 0;
+}
+
+mjx-container svg {
+  max-width: 100%;
+  height: auto;
+}
