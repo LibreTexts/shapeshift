@@ -11,9 +11,11 @@ a {
 
 #libreFooter {
   display: flex;
-  width: 100vw;
+  width: calc(100% + 0.75in);
   height: 20px;
-  margin: 0 4%;
+  margin-left: -0.375in;
+  padding: 0 0.375in;
+  box-sizing: border-box;
   border-radius: 10px;
   font-size: 7px;
   justify-content: center;
@@ -64,6 +66,10 @@ a {
   justify-content: flex-end;
   color: #F5F5F5;
   padding: 1%;
+}
+
+.footer-right a {
+  color: #fff !important;
 }
 
 .date, .pageNumber {

@@ -184,7 +184,6 @@ export function generatePDFHeader(headerImg: string) {
  */
 export function generatePDFFooter({
   currentPage,
-  mainColor,
   pageLicense,
   prefix,
 }: {
@@ -201,78 +200,7 @@ export function generatePDFFooter({
     }
   }
   return `
-    <style>
-      * {
-        print-color-adjust: exact;
-      }
-      a {
-          text-decoration:none;
-          color: white;
-      }
-      #libreFooter {
-          display: flex;
-          width: 100vw;
-          height: 20px;
-          margin: 0 4%;
-          border-radius: 10px;
-          font-size: 7px;
-          justify-content: center;
-          background-color: ${mainColor};
-      }
-      #libreFooter > a {
-          display: block;
-      }
-      .footer-left {
-          display: inline-flex;
-          flex: 1;
-          align-items: center;
-          justify-content: space-between;
-          color: #F5F5F5;
-          padding: 1%;
-      }
-      .footer-left img {
-          vertical-align: middle;
-          height: 15px;
-          display: inline-block;
-          padding-right: 1px;
-      }
-      .footer-center {
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-      }
-      .footer-pagenum {
-        background-color: white;
-        border: 1px solid ${mainColor};
-        color: ${mainColor};
-        padding: 2px;
-        border-radius: 10px;
-        min-width: 10px;
-        text-align: center;
-        font-size: 8px;
-      }
-      .footer-right {
-          display: inline-flex;
-          flex: 1;
-          align-items: center;
-          justify-content: flex-end;
-          color: #F5F5F5;
-          padding: 1%;
-      }
-      .date, .pageNumber {
-          display: inline-block;
-      }
-      #footer {
-          display: flex;
-          align-items: center;
-          padding: 0 !important;
-          margin: 0 !important;
-      }
-      .added {
-          padding: 0 4px;
-      }
-    </style>
-    <div id="libreFooter">
+    <div id="libre-pdf-footer"><div id="libreFooter">
       <div class="footer-left">
           <a href="${pageLicense ? pageLicense.link : ''}">${pageLicense ? pageLicense.label : ''}</a>
           ${programLink ? `<div>${programLink}</div>` : ''}
@@ -290,7 +218,7 @@ export function generatePDFFooter({
               : ''
           }
       </div>
-    </div>
+    </div></div>
   `;
 }
 
