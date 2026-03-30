@@ -355,8 +355,11 @@ export class BookService {
 
     return {
       ...(authorTag && { authorTag }),
-      // @ts-expect-error needs fix upstream in cxone sdk
-      body: pageDetails.content?.body ?? [],
+      body: Array.isArray((pageDetails as any).content?.body)
+        ? ((pageDetails as any).content.body as any[]).filter((item): item is string => typeof item === 'string')
+        : (pageDetails as any).content?.body
+          ? [(pageDetails as any).content.body as string]
+          : [],
       // @ts-expect-error needs fix upstream in cxone sdk
       head: pageDetails.content?.head ?? '',
       license: getLicense(parsedTags),
@@ -440,7 +443,9 @@ export class BookService {
         bookContents.push({
           ...page,
           head: pageContent.head || '',
-          body: Array.isArray(pageContent.body) ? pageContent.body : [pageContent.body || ''],
+          body: Array.isArray(pageContent.body)
+            ? pageContent.body.filter((item): item is string => typeof item === 'string')
+            : [pageContent.body || ''],
           tail: Array.isArray(pageContent.tail) ? pageContent.tail.join('') : pageContent.tail || '',
         });
       }
