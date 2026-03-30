@@ -27,6 +27,10 @@ import PageID from '../util/pageID';
 import * as cheerio from 'cheerio';
 import { PDFCoverOpts, PDFCoverType } from '../types/pdf';
 import { prerenderMath, stripMathJaxScripts } from '../util/mathjax';
+import { dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // CSS loaded at module init and inlined into HTML sent to Prince.
 // Note: changes to this file require a server restart in development.
@@ -343,7 +347,8 @@ export class PDFService {
     try {
       // Pre-render TeX math to inline SVG so Prince doesn't need to execute MathJax JS.
       // Strip CMS-provided MathJax <script> tags from head since they're now unnecessary.
-      const renderedBodyHTML = await prerenderMath(pageBodyHTML);
+      // Pass pageInfo to configure equation numbering based on page title (e.g., "4.2.1" for section 4.2)
+      const renderedBodyHTML = await prerenderMath(pageBodyHTML, pageInfo);
       const cleanedHeadHTML = stripMathJaxScripts(pageHeadHTML);
 
       const headerHTML = generatePDFHeader(ImageConstants['default']);

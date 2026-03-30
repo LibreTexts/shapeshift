@@ -35,3 +35,12 @@ declare module '@mathjax/src' {
 
   export default MathJax;
 }
+
+/**
+ * Module declarations for MathJax v4 component bundles.
+ * These JavaScript files configure and initialize the global MathJax object.
+ */
+declare module '@mathjax/src/bundle/tex-chtml.js';
+declare module '@mathjax/src/bundle/tex-svg.js';
+declare module '@mathjax/src/bundle/tex-mml-svg.js';
+declare module '@mathjax/src/bundle/startup.js';
