@@ -57,6 +57,8 @@ type ConversionTask = {
   pageID: PageID;
   pageInfo: BookPageInfo;
   fileName: string;
+  sortKey: string;
+  subtype?: 'main-toc';
   type: 'page' | 'toc';
 };
 
@@ -150,6 +152,8 @@ export class PDFService {
           if (task.type === 'toc') {
             return await this.generateTableOfContents({
               pageInfo: task.pageInfo,
+              isMainTOC: task.subtype === 'main-toc',
+              sortKey: task.sortKey,
             });
           } else {
             return await this.convertPage({
@@ -158,6 +162,7 @@ export class PDFService {
               pageBodyHTML: task.pageInfo.body.join(''),
               pageHeadHTML: task.pageInfo.head,
               pageTailHTML: task.pageInfo.tail,
+              sortKey: task.sortKey,
             });
           }
         };
@@ -317,11 +322,11 @@ export class PDFService {
     return filePath;
   }
 
-  private async generatePageOutputFilePath(pageID: PageID) {
+  private async generatePageOutputFilePath(pageID: PageID, sortKey: string) {
     const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
     const basePath = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
     const dirPath = join(basePath, 'workdir');
-    const filePath = join(dirPath, `${pageID.toString()}.pdf`);
+    const filePath = join(dirPath, `${sortKey}_${pageID.toString()}.pdf`);
 
     // Ensure the dir exists before returning the file path
     await fs.mkdir(dirPath, { recursive: true });
@@ -337,6 +342,7 @@ export class PDFService {
     pageTailHTML = '',
     additionalCSS,
     mainColor = '#127BC4',
+    sortKey,
   }: {
     pageID: PageID;
     pageInfo: BookPageInfo;
@@ -345,6 +351,7 @@ export class PDFService {
     pageTailHTML?: string;
     additionalCSS?: string;
     mainColor?: string;
+    sortKey: string;
   }) {
     try {
       // Pre-render TeX math to inline SVG so Prince doesn't need to execute MathJax JS.
@@ -387,7 +394,7 @@ ${pageTailHTML}
 </html>
       `.trim();
 
-      const outputPath = await this.generatePageOutputFilePath(pageID);
+      const outputPath = await this.generatePageOutputFilePath(pageID, sortKey);
 
       await this.withTempFile(wrappedHTML, (inputPath) => this.runPrinceConversion(inputPath, outputPath));
 
@@ -646,11 +653,18 @@ ${pageTailHTML}
     }
   }
 
-  private async generateTableOfContents({ pageInfo }: { pageInfo: BookPageInfo }) {
+  private async generateTableOfContents({
+    pageInfo,
+    isMainTOC = false,
+    sortKey,
+  }: {
+    pageInfo: BookPageInfo;
+    isMainTOC?: boolean;
+    sortKey: string;
+  }) {
     try {
       this.logger.withMetadata({ url: pageInfo.url }).info('Starting Table of Contents');
 
-      const isMainTOC = pageInfo.tags.includes('coverpage:yes') || pageInfo.tags.includes('coverpage:nocommons');
       if (isMainTOC) {
         const listing = await this.getLevel(pageInfo);
         if (!listing) {
@@ -672,6 +686,7 @@ ${pageTailHTML}
           pageInfo,
           pageBodyHTML: tocBodyHTML,
           additionalCSS: pdfTOCStyles,
+          sortKey,
         });
 
         this.logger.withMetadata({ url: pageInfo.url }).info('Finished Main Table of Contents.');
@@ -697,6 +712,7 @@ ${pageTailHTML}
           pageHeadHTML: pageInfo.head,
           pageTailHTML: pageInfo.tail,
           additionalCSS: pdfTOCStyles,
+          sortKey,
         });
 
         this.logger.withMetadata({ url: pageInfo.url }).info('Finished Table of Contents.');
@@ -732,40 +748,46 @@ ${pageTailHTML}
     // Process flat array with correct ordering and TOC placement
     for (const p of pages) {
       const idx = `${conversionTasks.length + 1}`.padStart(4, '0');
-      const treeNode = treeMap.get(p.pageID.toString());
+      //const treeNode = treeMap.get(p.pageID.toString());
 
       // The front matter "Table of Contents" page uses the root book hierarchy to generate
       // a full-book TOC. It outputs at the front matter position, replacing the CXOne template placeholder.
       if (p.matterType === 'Front' && p.title === 'Table of Contents') {
         frontMatterIdx += 1;
+        const tocFileName = `0000:${frontMatterIdx}`;
         conversionTasks.push({
           _id: `toc-main`,
           pageID: p.pageID,
           pageInfo: tree, // root node carries the full hierarchy needed by getLevel()
-          fileName: `0000:${frontMatterIdx}`,
+          fileName: tocFileName,
+          sortKey: tocFileName,
+          subtype: 'main-toc',
           type: 'toc',
         });
         continue;
       }
 
-      // Chapter/section directory pages (topic-category or topic-guide with multiple subpages)
-      // get replaced by a generated TOC listing instead of rendering their raw CMS content.
-      if (
-        treeNode &&
-        Array.isArray(treeNode.subpages) &&
-        treeNode.subpages.length > 1 &&
-        (p.tags.includes('article:topic-category') || p.tags.includes('article:topic-guide')) &&
-        !['Back Matter', 'Front Matter'].some((t) => p.title.includes(t))
-      ) {
-        conversionTasks.push({
-          _id: `toc-${p.pageID}`,
-          pageID: p.pageID,
-          pageInfo: treeNode, // tree node retains subpages for getLevel()
-          fileName: `${idx}_TOC`,
-          type: 'toc',
-        });
-        continue;
-      }
+      // TODO: Re-enable chapter/section TOC generation once main TOC placement is stable.
+      // Chapter/section directory pages will eventually get their own TOC page at the start of each chapter.
+      // if (
+      //   treeNode &&
+      //   Array.isArray(treeNode.subpages) &&
+      //   treeNode.subpages.length > 1 &&
+      //   (p.tags.includes('article:topic-category') || p.tags.includes('article:topic-guide')) &&
+      //   !['Back Matter', 'Front Matter'].some((t) => p.title.includes(t)) &&
+      //   p.pageID.toString() !== tree.pageID.toString() // guard: root book page TOC is handled by toc-main
+      // ) {
+      //   const chapterFileName = `${idx}_TOC`;
+      //   conversionTasks.push({
+      //     _id: `toc-${p.pageID}`,
+      //     pageID: p.pageID,
+      //     pageInfo: treeNode, // tree node retains subpages for getLevel()
+      //     fileName: chapterFileName,
+      //     sortKey: chapterFileName,
+      //     type: 'toc',
+      //   });
+      //   continue;
+      // }
 
       let idxPrefix = idx;
       if (p.matterType === 'Front') {
@@ -778,11 +800,13 @@ ${pageTailHTML}
       }
 
       if (!['Back Matter', 'Front Matter'].some((t) => p.title.includes(t))) {
+        const pageFileName = `${idxPrefix}_${p.pageID}`;
         conversionTasks.push({
           _id: `page-${p.pageID}`,
           pageID: p.pageID,
           pageInfo: p,
-          fileName: `${idxPrefix}_${p.pageID}`,
+          fileName: pageFileName,
+          sortKey: pageFileName,
           type: 'page',
         });
       }
