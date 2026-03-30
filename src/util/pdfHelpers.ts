@@ -1,6 +1,6 @@
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 import { LicenseInfo } from './licensing';
@@ -8,6 +8,42 @@ import { BookPageInfo } from '../types/book';
 import { PDFCoverOpts, PDFCoverType, PDFCoverDimensions } from '../types/pdf';
 
 export const PDF_COVER_TYPES = ['Amazon', 'CaseWrap', 'CoilBound', 'Main', 'PerfectBound'] as const;
+
+/**
+ * Generates @font-face CSS for Atkinson Hyperlegible using absolute file:// URLs.
+ * Required because CSS is inlined into HTML with no base URL, so Prince cannot
+ * resolve relative paths from within an inline <style> block.
+ */
+export function generateFontCSS(): string {
+  const fontsDir = join(__dirname, '../styles/fonts');
+  const toURL = (file: string) => pathToFileURL(join(fontsDir, file)).href;
+  return `
+    @font-face {
+      font-family: 'Atkinson Hyperlegible';
+      font-style: normal;
+      font-weight: 400;
+      src: url('${toURL('atkinson-hyperlegible-400.ttf')}') format('truetype');
+    }
+    @font-face {
+      font-family: 'Atkinson Hyperlegible';
+      font-style: normal;
+      font-weight: 700;
+      src: url('${toURL('atkinson-hyperlegible-700.ttf')}') format('truetype');
+    }
+    @font-face {
+      font-family: 'Atkinson Hyperlegible';
+      font-style: italic;
+      font-weight: 400;
+      src: url('${toURL('atkinson-hyperlegible-400i.ttf')}') format('truetype');
+    }
+    @font-face {
+      font-family: 'Atkinson Hyperlegible';
+      font-style: italic;
+      font-weight: 700;
+      src: url('${toURL('atkinson-hyperlegible-700i.ttf')}') format('truetype');
+    }
+  `;
+}
 
 // CSS loaded at module init and inlined into HTML sent to Prince.
 // Note: changes to these files require a server restart in development.
@@ -409,7 +445,7 @@ export function _generatePDFCoverHeadStyles({
       }
     </style>
     <style>${pdfCoverCSS}</style>
-    <link href="https://fonts.googleapis.com/css?family=Open+Sans:300,300i" rel="stylesheet" />
+    <style>${generateFontCSS()}</style>
     <style>
       #frontContainer {
         background-image: url("https://cdn.libretexts.net/shapeshift/CoverImages/${opt?.extraPadding ? 'LuluFront' : 'NormalFront'}/${currentPage.subdomain}.png");
