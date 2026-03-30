@@ -6,7 +6,6 @@ import { Job } from '../model';
 import { CreationAttributes } from 'sequelize';
 // import { ThinCCService } from './thinCC';
 import { log } from '../lib/log';
-import { writeFile } from 'fs/promises';
 import { EPUBService } from './epub';
 
 export type JobQueueMessageRawBody = {
@@ -75,11 +74,6 @@ export class JobService {
 
         const initPages = await bookModel.discoverPages(bookID.lib, bookID.pageNum);
         log.debug(`Discovered ${initPages.flat.length} pages for book ${bookID.lib}/${bookID.pageNum}`);
-        // write the initPages array to a JSON file for debugging
-        await writeFile(
-          `./debug_${bookID.lib}_${bookID.pageNum}_initPages.json`,
-          JSON.stringify(initPages.flat, null, 2),
-        );
 
         const coverPageInfo = initPages.flat.find((page) => page.pageID.toString() === bookID.toString());
         if (!coverPageInfo) {

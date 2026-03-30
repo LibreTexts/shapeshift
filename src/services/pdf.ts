@@ -113,7 +113,7 @@ export class PDFService {
       }
 
       // Build conversion tasks with correct ordering and TOC placement
-      const conversionTasks = this.buildTaskList(pages);
+      const conversionTasks = this.buildTaskList(pagesInput);
       this.logger.withMetadata({ totalTasks: conversionTasks.length }).info('Built conversion task list');
 
       let processedPageCount = 0;
@@ -541,7 +541,7 @@ ${pageTailHTML}
       pageInfo.tags?.includes('columns:two') &&
       (pageInfo.tags?.includes('coverpage:yes') || pageInfo.tags?.includes('coverpage:nocommons')) &&
       level === 2;
-    const prefix = level === 2 ? 'h2' : 'h';
+    const prefix = level === 2 ? 'h2' : 'span';
     // Get subtitles
     const innerRaw = await Promise.all(
       pages.map(async (elem) => {
@@ -647,14 +647,32 @@ ${pageTailHTML}
     try {
       this.logger.withMetadata({ url: pageInfo.url }).info('Starting Table of Contents');
 
-      let pageURL = pageInfo.url;
       const isMainTOC = pageInfo.tags.includes('coverpage:yes') || pageInfo.tags.includes('coverpage:nocommons');
       if (isMainTOC) {
-        // eslint-disable-next-line @typescript-eslint/no-unused-vars
-        pageURL = `${pageURL}${pageURL.endsWith('/') ? '' : '/'}00:_Front_Matter/03:_Table_of_Contents`;
-        /*
-      TODO: create the maintoc here, write it to temp file, convert to PDF, and return the path.
-       */
+        const listing = await this.getLevel(pageInfo);
+        if (!listing) {
+          this.logger.withMetadata({ url: pageInfo.url }).warn('Main TOC listing is empty, skipping conversion');
+          return null;
+        }
+
+        const tocBodyHTML = `
+          <div id="libre-print-directory-header-container">
+            <h1 id="libre-print-directory-header">Table of Contents</h1>
+          </div>
+          <div class="libre-print-directory">
+            ${listing}
+          </div>
+        `;
+
+        const outputPath = await this.convertPage({
+          pageID: pageInfo.pageID,
+          pageInfo,
+          pageBodyHTML: tocBodyHTML,
+          additionalCSS: pdfTOCStyles,
+        });
+
+        this.logger.withMetadata({ url: pageInfo.url }).info('Finished Main Table of Contents.');
+        return outputPath;
       } else {
         const listing = await this.getLevel(pageInfo);
         const updatedHTML = this.processDirectoryPage({
@@ -666,11 +684,9 @@ ${pageTailHTML}
 
         if (!updatedHTML) {
           this.logger.withMetadata({ url: pageInfo.url }).warn('Failed to process directory page for TOC');
-
           return null;
         }
 
-        // Now we can just convert this page like normal since the HTML is updated with the listing content. The main difference is that we need to ensure the correct styles are applied for the TOC, which may involve including the pdfTOCStyles in the HTML.
         const outputPath = await this.convertPage({
           pageID: pageInfo.pageID,
           pageInfo,
@@ -679,35 +695,6 @@ ${pageTailHTML}
           pageTailHTML: pageInfo.tail,
           additionalCSS: pdfTOCStyles,
         });
-
-        //FIXME: figure out how we're going to do this without puppeteer.
-        //We may need to create a temporary HTML file with the TOC content and then use Prince to convert it to PDF, similar to how we convert regular pages.
-        // The main difference is that we need to ensure the correct styles are applied for the TOC, which may involve including the pdfTOCStyles in the HTML.
-        //   const styleTag = `
-        //   @page {
-        //     size: letter portrait;
-        //     margin: ${pdfPageMargins};
-        //     padding: 0;
-        //   }
-        //   ${!isMainTOC ? pdfTOCStyles : ""}
-        // `;
-
-        //   await page.addStyleTag({ content: styleTag });
-        //   await page.pdf({
-        //     // Letter Margin
-        //     path,
-        //     displayHeaderFooter: true,
-        //     headerTemplate: generatePDFHeader(ImageConstants["default"]),
-        //     footerTemplate: generatePDFFooter({
-        //       currentPage: null,
-        //       mainColor: "#127BC4",
-        //       pageLicense: null,
-        //       prefix: "",
-        //     }),
-        //     printBackground: true,
-        //     preferCSSPageSize: true,
-        //     timeout: this.pageLoadSettings.timeout,
-        //   });
 
         this.logger.withMetadata({ url: pageInfo.url }).info('Finished Table of Contents.');
         return outputPath;
@@ -725,48 +712,76 @@ ${pageTailHTML}
    * @param pages - The flat list of pages with content to be converted, which will be organized into a task list with correct ordering and TOC placement.
    * @returns An array of conversion tasks in the correct order for PDF generation.
    */
-  private buildTaskList(pages: BookPageInfo[]): Array<ConversionTask> {
+  private buildTaskList({ flat: pages, tree }: BookPages): Array<ConversionTask> {
     const conversionTasks: Array<ConversionTask> = [];
     let backMatterIdx = 0;
     let frontMatterIdx = 0;
 
+    // Build a map from pageID → tree node so we can access subpages, which are stripped
+    // from the flat array by flattenPagesObj.
+    const treeMap = new Map<string, BookPageInfo>();
+    const buildTreeMap = (node: BookPageInfo) => {
+      treeMap.set(node.pageID.toString(), node);
+      node.subpages?.forEach(buildTreeMap);
+    };
+    buildTreeMap(tree);
+
     // Process flat array with correct ordering and TOC placement
     for (const p of pages) {
       const idx = `${conversionTasks.length + 1}`.padStart(4, '0');
+      const treeNode = treeMap.get(p.pageID.toString());
 
+      // The front matter "Table of Contents" page uses the root book hierarchy to generate
+      // a full-book TOC. It outputs at the front matter position, replacing the CXOne template placeholder.
+      if (p.matterType === 'Front' && p.title === 'Table of Contents') {
+        frontMatterIdx += 1;
+        conversionTasks.push({
+          _id: `toc-main`,
+          pageID: p.pageID,
+          pageInfo: tree, // root node carries the full hierarchy needed by getLevel()
+          fileName: `0000:${frontMatterIdx}`,
+          type: 'toc',
+        });
+        continue;
+      }
+
+      // Chapter/section directory pages (topic-category or topic-guide with multiple subpages)
+      // get replaced by a generated TOC listing instead of rendering their raw CMS content.
       if (
-        Array.isArray(p.subpages) &&
-        p.subpages.length > 1 &&
+        treeNode &&
+        Array.isArray(treeNode.subpages) &&
+        treeNode.subpages.length > 1 &&
         (p.tags.includes('article:topic-category') || p.tags.includes('article:topic-guide')) &&
         !['Back Matter', 'Front Matter'].some((t) => p.title.includes(t))
       ) {
         conversionTasks.push({
           _id: `toc-${p.pageID}`,
           pageID: p.pageID,
-          pageInfo: p,
+          pageInfo: treeNode, // tree node retains subpages for getLevel()
           fileName: `${idx}_TOC`,
           type: 'toc',
         });
-      } else {
-        let idxPrefix = idx;
-        if (p.matterType === 'Front') {
-          frontMatterIdx += 1;
-          idxPrefix = `0000:${frontMatterIdx}`;
-        }
-        if (p.matterType === 'Back') {
-          backMatterIdx += 1;
-          idxPrefix = `9999:${backMatterIdx}`;
-        }
+        continue;
+      }
 
-        if (!['Back Matter', 'Front Matter'].some((t) => p.title.includes(t))) {
-          conversionTasks.push({
-            _id: `page-${p.pageID}`,
-            pageID: p.pageID,
-            pageInfo: p,
-            fileName: `${idxPrefix}_${p.pageID}`,
-            type: 'page',
-          });
-        }
+      let idxPrefix = idx;
+      if (p.matterType === 'Front') {
+        frontMatterIdx += 1;
+        idxPrefix = `0000:${frontMatterIdx}`;
+      }
+      if (p.matterType === 'Back') {
+        backMatterIdx += 1;
+        idxPrefix = `9999:${backMatterIdx}`;
+      }
+
+      if (!['Back Matter', 'Front Matter'].some((t) => p.title.includes(t))) {
+        conversionTasks.push({
+          _id: `page-${p.pageID}`,
+          pageID: p.pageID,
+          pageInfo: p,
+          fileName: `${idxPrefix}_${p.pageID}`,
+          type: 'page',
+        });
       }
     }
 

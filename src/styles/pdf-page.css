@@ -42,6 +42,12 @@ html, body {
   print-color-adjust: exact;
 }
 
+/* Override CMS theme stylesheets which set link colors to white for site navigation */
+a, a:visited {
+  color: #1a6496 !important;
+  text-decoration: none;
+}
+
 /* MathJax v4 pre-rendered SVG layout */
 mjx-container[jax="SVG"][display="true"] {
   display: block;
