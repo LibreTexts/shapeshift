@@ -9,9 +9,11 @@ import {
   generateFontCSS,
   PDF_COVER_TYPES,
   pdfTOCStyles,
+  pdfIndexStyles,
   pdfHeaderCSS,
   pdfFooterCSS,
 } from '../util/pdfHelpers';
+import { buildTagIndex, generateIndexHTML } from '../util/indexHelpers';
 import { ImageConstants } from '../util/imageConstants';
 import { sleep } from '../helpers';
 import { log as logService } from '../lib/log';
@@ -59,7 +61,7 @@ type ConversionTask = {
   fileName: string;
   sortKey: string;
   subtype?: 'main-toc';
-  type: 'page' | 'toc';
+  type: 'page' | 'toc' | 'index';
 };
 
 const RETRY_CONFIG = {
@@ -153,6 +155,12 @@ export class PDFService {
             return await this.generateTableOfContents({
               pageInfo: task.pageInfo,
               isMainTOC: task.subtype === 'main-toc',
+              sortKey: task.sortKey,
+            });
+          } else if (task.type === 'index') {
+            return await this.generateIndex({
+              pageInfo: task.pageInfo,
+              allPages: pages,
               sortKey: task.sortKey,
             });
           } else {
@@ -725,6 +733,56 @@ ${pageTailHTML}
   }
 
   /**
+   * Generates the back-matter Index page for PDF output.
+   *
+   * Replaces the CXOne placeholder (a page whose body calls `template('DynamicIndex')`)
+   * with a server-side alphabetised index built from all content-page tags.
+   * Only pages without a `matterType` contribute terms — front/back matter
+   * infrastructure pages are excluded since they carry system metadata tags rather
+   * than human-assigned index terms.
+   *
+   * Tag filtering mirrors the legacy DynamicIndex.old.js exclusion rules, with one
+   * fix: leading-article trimming ("a ", "an ", "the ") now works correctly.
+   */
+  private async generateIndex({
+    pageInfo,
+    allPages,
+    sortKey,
+  }: {
+    pageInfo: BookPageInfo;
+    allPages: BookPageInfo[];
+    sortKey: string;
+  }) {
+    try {
+      this.logger.withMetadata({ url: pageInfo.url }).info('Starting Index generation');
+
+      const indexData = buildTagIndex(allPages);
+      const indexBodyHTML = `
+        <div id="libre-print-directory-header-container">
+          <h1 id="libre-print-directory-header">Index</h1>
+        </div>
+        <div id="libre-index">
+          ${generateIndexHTML(indexData)}
+        </div>
+      `;
+
+      const outputPath = await this.convertPage({
+        pageID: pageInfo.pageID,
+        pageInfo,
+        pageBodyHTML: indexBodyHTML,
+        additionalCSS: pdfIndexStyles,
+        sortKey,
+      });
+
+      this.logger.withMetadata({ url: pageInfo.url }).info('Finished Index generation.');
+      return outputPath;
+    } catch (error) {
+      this.logger.withMetadata({ url: pageInfo.url, error }).error('Index generation failed');
+      throw error;
+    }
+  }
+
+  /**
    * Returns a flat list of conversion tasks in the correct order for PDF generation, including TOC placement.
    * The TOC is placed before the first page that has more than 1 subpage and is tagged as either "article:topic-category" or "article:topic-guide",
    * but after any front matter. Back matter pages are placed at the end. If there are no suitable pages for TOC placement, the TOC will be placed at the end before back matter.
@@ -763,6 +821,22 @@ ${pageTailHTML}
           sortKey: tocFileName,
           subtype: 'main-toc',
           type: 'toc',
+        });
+        continue;
+      }
+
+      // The back matter "Index" page is replaced server-side by a generated alphabetical
+      // term index built from all content-page tags.
+      if (p.matterType === 'Back' && p.title === 'Index') {
+        backMatterIdx += 1;
+        const idxFileName = `9999:${backMatterIdx}`;
+        conversionTasks.push({
+          _id: 'index-main',
+          pageID: p.pageID,
+          pageInfo: p,
+          fileName: idxFileName,
+          sortKey: idxFileName,
+          type: 'index',
         });
         continue;
       }
@@ -810,6 +884,25 @@ ${pageTailHTML}
           type: 'page',
         });
       }
+    }
+
+    // Always emit an index task at the end of back matter, regardless of whether the
+    // book has a CXOne Index placeholder page.  Server-side index generation doesn't
+    // need a CXOne page to exist — it derives terms directly from content page tags.
+    // When a real CXOne Index page was found above, the task was already pushed and
+    // the check below is a no-op.
+    const hasIndexTask = conversionTasks.some((t) => t.type === 'index');
+    if (!hasIndexTask) {
+      backMatterIdx += 1;
+      const idxFileName = `9999:${backMatterIdx}`;
+      conversionTasks.push({
+        _id: 'index-main',
+        pageID: tree.pageID,
+        pageInfo: tree,
+        fileName: idxFileName,
+        sortKey: idxFileName,
+        type: 'index',
+      });
     }
 
     return conversionTasks.sort((a, b) => a.fileName.localeCompare(b.fileName, undefined, { numeric: true }));

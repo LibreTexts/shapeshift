@@ -1,0 +1,80 @@
+/* -----------------------------------------------------------------------
+ * Index page styles for Prince XML PDF output.
+ * Mirrors the legacy "columns:three" layout produced by the browser-side
+ * DynamicIndex template.  Uses CSS multi-column so Prince reflows content
+ * into three balanced columns automatically.
+ * ----------------------------------------------------------------------- */
+
+/* Letter-jump navigation bar */
+#libre-index-nav {
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif;
+  font-size: 12px;
+  margin-bottom: 1em;
+  padding-bottom: 0.4em;
+  border-bottom: 1px solid #ccc;
+}
+
+#libre-index-nav a {
+  color: var(--pdf-main-color, #127BC4);
+  text-decoration: none;
+  font-weight: bold;
+}
+
+/* Three-column index body */
+#libre-index-table {
+  column-count: 3;
+  column-gap: 1.4em;
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif;
+  font-size: 10.5px;
+}
+
+/* Keep each letter group from splitting mid-column where possible */
+.libre-index-letter-group {
+  break-inside: avoid-column;
+  margin-bottom: 1em;
+}
+
+/* Letter heading */
+.libre-index-letter {
+  font-size: 1.1em !important;
+  font-weight: bold !important;
+  color: var(--pdf-main-color, #127BC4) !important;
+  border-bottom: 1px solid var(--pdf-main-color, #127BC4);
+  margin: 0 0 0.4em 0 !important;
+  padding: 0 !important;
+  line-height: 1.4 !important;
+}
+
+/* Suppress any MindTouch-injected heading counters */
+.libre-index-letter::before {
+  content: none !important;
+}
+
+/* Individual term */
+.libre-index-term {
+  margin-bottom: 0.35em;
+}
+
+.libre-index-term-name {
+  font-weight: bold;
+  margin: 0 !important;
+  padding: 0 !important;
+  line-height: 1.3;
+}
+
+/* Page links indented under the term name */
+.libre-index-term-pages {
+  padding-left: 0.75em;
+  line-height: 1.5;
+}
+
+.libre-index-page-link {
+  color: var(--pdf-main-color, #127BC4);
+  text-decoration: none;
+}
+
+/* Fallback message when no index terms are found */
+.libre-index-empty {
+  font-style: italic;
+  color: #666;
+}
