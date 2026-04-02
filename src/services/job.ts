@@ -92,11 +92,9 @@ export class JobService {
         }
 
         if (!backMatterExists) {
-          // log.warn(
-          //   `Back matter is missing for book ${bookID.lib}/${bookID.pageNum}. Creating back matter...`,
-          // );
-          // await bookModel.createMatter({ mode: "Back", coverPageInfo });
-          // didCreateMatter = true;
+          log.warn(`Back matter is missing for book ${bookID.lib}/${bookID.pageNum}. Creating back matter...`);
+          await bookModel.createMatter({ mode: 'Back', coverPageInfo });
+          didCreateMatter = true;
         }
 
         // If we created matter, we need to re-discover pages to get updated structure
