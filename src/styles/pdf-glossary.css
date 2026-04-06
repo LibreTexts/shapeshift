@@ -1,0 +1,74 @@
+/* -----------------------------------------------------------------------
+ * Glossary page styles for Prince XML PDF output.
+ * Single-column definition-list layout.
+ * Mirrors the visual conventions of pdf-index.css.
+ * ----------------------------------------------------------------------- */
+
+/* Letter-jump navigation bar */
+#libre-glossary-nav {
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif;
+  font-size: 12px;
+  margin-bottom: 1em;
+  padding-bottom: 0.4em;
+  border-bottom: 1px solid #ccc;
+}
+
+#libre-glossary-nav a {
+  color: var(--pdf-main-color, #127BC4);
+  text-decoration: none;
+  font-weight: bold;
+}
+
+/* Single-column glossary body */
+#libre-glossary-table {
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif;
+  font-size: 11px;
+}
+
+/* Keep each letter group from splitting at a bad page break */
+.libre-glossary-letter-group {
+  break-inside: avoid;
+  margin-bottom: 1.2em;
+}
+
+/* Letter heading */
+.libre-glossary-letter {
+  font-size: 1.1em !important;
+  font-weight: bold !important;
+  color: var(--pdf-main-color, #127BC4) !important;
+  border-bottom: 1px solid var(--pdf-main-color, #127BC4);
+  margin: 0 0 0.5em 0 !important;
+  padding: 0 !important;
+  line-height: 1.4 !important;
+}
+
+/* Suppress any MindTouch-injected heading counters */
+.libre-glossary-letter::before {
+  content: none !important;
+}
+
+/* Individual entry: "Term | Definition" on one line, wrapping if long */
+.libre-glossary-entry {
+  margin-bottom: 0.4em;
+  line-height: 1.4;
+}
+
+.libre-glossary-term {
+  font-weight: bold;
+}
+
+.libre-glossary-separator {
+  color: #555;
+  padding: 0 0.1em;
+}
+
+.libre-glossary-definition-link {
+  color: var(--pdf-main-color, #127BC4);
+  text-decoration: none;
+}
+
+/* Fallback message when no entries are found or table cannot be parsed */
+.libre-glossary-empty {
+  font-style: italic;
+  color: #666;
+}

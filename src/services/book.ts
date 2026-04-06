@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import pLimit from 'p-limit';
 import { join, resolve } from 'node:path';
-import axios from 'axios';
+import axios, { AxiosError } from 'axios';
 import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
 import { getLicense } from '../util/licensing';
 import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject, omit } from '../helpers';
@@ -38,6 +38,19 @@ export class BookService {
   }
 
   /**
+   * Helper to check if an error is a 409 Conflict (page already exists when using abort='exists').
+   * This is actually a success case when we're trying to create pages only if they don't exist.
+   */
+  private is409Conflict(error: unknown): boolean {
+    if (error instanceof AxiosError) {
+      return error.response?.status === 409 || error.status === 409;
+    }
+    // Fallback for errors wrapped by the CXOne library
+    const err = error as any;
+    return err?.status === 409 || err?.response?.status === 409;
+  }
+
+  /**
    * Creates the default LibreTexts back matter pages (Index, Glossary, Detailed Licensing, etc.) as subpages of the given cover page.
    * Provides an overwriteExisting option to control whether to only create pages if they don't already exist, or to overwrite existing pages,
    * which is useful for ensuring the correct structure and content for PDF generation, but should be used with caution as some authors have customized their back matter pages.
@@ -57,18 +70,25 @@ export class BookService {
     const basePath = this.getMatterRootPagePath(coverPageInfo.url, 'Back');
 
     // Index
-    await lib.api.pages.postPageContents(
-      assembleUrl([basePath, '10:_Index']),
-      `
+    try {
+      await lib.api.pages.postPageContents(
+        assembleUrl([basePath, '10%3A_Index']),
+        `
         <p class="mt-script-comment">Dynamic Index</p><pre class="script">template('DynamicIndex');</pre>
         <p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic</a><a href="#">showtoc:no</a><a href="#">printoptions:no-header</a><a href="#">columns:three</a></p>
       `,
-      {
-        title: 'Index',
-        edittime: 'now',
-        ...(overwriteExisting ? {} : { abort: 'exists' }),
-      },
-    );
+        {
+          title: 'Index',
+          edittime: 'now',
+          ...(overwriteExisting ? {} : { abort: 'exists' }),
+        },
+      );
+    } catch (error) {
+      if (!this.is409Conflict(error)) {
+        throw error; // Re-throw if it's not a 409 (page already exists is OK)
+      }
+      this.logger.debug('Index page already exists, skipping creation');
+    }
 
     // Dynamic Glossary
     const chemLib = new LibraryService({ lib: 'chem' });
@@ -79,30 +99,44 @@ export class BookService {
       })
     ).body;
     if (dynamicGlossary) {
-      await lib.api.pages.postPageContents(
-        assembleUrl([basePath, '20:_Glossary']),
-        `
+      try {
+        await lib.api.pages.postPageContents(
+          assembleUrl([basePath, '20%3A_Glossary']),
+          `
         ${dynamicGlossary}
         \n<p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic</a><a href="#">showtoc:no</a><a href="#">printoptions:no-header</a><a href="#">columns:three</a></p>
       `,
+          {
+            title: 'Glossary',
+            edittime: 'now',
+            ...(overwriteExisting ? {} : { abort: 'exists' }),
+          },
+        );
+      } catch (error) {
+        if (!this.is409Conflict(error)) {
+          throw error; // Re-throw if it's not a 409 (page already exists is OK)
+        }
+        this.logger.debug('Glossary page already exists, skipping creation');
+      }
+    }
+
+    // Detailed Licensing
+    try {
+      await lib.api.pages.postPageContents(
+        assembleUrl([basePath, '30%3A_Detailed_Licensing']),
+        dynamicDetailedLicensingLayout,
         {
-          title: 'Glossary',
+          title: 'Detailed Licensing',
           edittime: 'now',
           ...(overwriteExisting ? {} : { abort: 'exists' }),
         },
       );
+    } catch (error) {
+      if (!this.is409Conflict(error)) {
+        throw error; // Re-throw if it's not a 409 (page already exists is OK)
+      }
+      this.logger.debug('Detailed Licensing page already exists, skipping creation');
     }
-
-    // Detailed Licensing
-    await lib.api.pages.postPageContents(
-      assembleUrl([basePath, '30:_Detailed_Licensing']),
-      dynamicDetailedLicensingLayout,
-      {
-        title: 'Detailed Licensing',
-        edittime: 'now',
-        ...(overwriteExisting ? {} : { abort: 'exists' }),
-      },
-    );
 
     // Set thumbnail
     const thumbnailRes = await axios.get(this.DEFAULT_THUMBNAILS.BACK_MATTER, {
@@ -131,9 +165,10 @@ export class BookService {
 
     // TitlePage
     const QRoptions = { errorCorrectionLevel: 'L', margin: 2, scale: 2 };
-    await lib.api.pages.postPageContents(
-      assembleUrl([coverPageInfo.url, 'Front_Matter', '01:_TitlePage']),
-      `
+    try {
+      await lib.api.pages.postPageContents(
+        assembleUrl([coverPageInfo.url, '00%3AFront_Matter', '01%3A_TitlePage']),
+        `
         <div style="height:95vh; display:flex; flex-direction: column; position: relative; align-items: center">
         <div style=" display:flex; flex:1; flex-direction: column; justify-content: center">
         <p class="mt-align-center"><span class="mt-font-size-36">${coverPageInfo.printInfo.companyName || ''}</span></p>
@@ -143,48 +178,75 @@ export class BookService {
         <script>QRCode.toCanvas(document.getElementById('canvas'), '${coverPageInfo.url}', ${JSON.stringify(QRoptions)})</script>
         <p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic</a><a href="#">printoptions:no-header-title</a></p></div>
       `,
-      {
-        title: 'TitlePage',
-        edittime: 'now',
-        ...(overwriteExisting ? {} : { abort: 'exists' }),
-      },
-    );
+        {
+          title: 'TitlePage',
+          edittime: 'now',
+          ...(overwriteExisting ? {} : { abort: 'exists' }),
+        },
+      );
+    } catch (error) {
+      if (!this.is409Conflict(error)) {
+        throw error; // Re-throw if it's not a 409 (page already exists is OK)
+      }
+      this.logger.debug('TitlePage already exists, skipping creation');
+    }
 
     // InfoPage
-    await lib.api.pages.postPageContents(
-      assembleUrl([coverPageInfo.url, 'Front_Matter', '02:_InfoPage']),
-      `
+    try {
+      await lib.api.pages.postPageContents(
+        assembleUrl([coverPageInfo.url, '00%3AFront_Matter', '02%3A_InfoPage']),
+        `
         <p class=\\"mt-script-comment\\">Cross Library Transclusion</p><pre class=\\"script\\">template('CrossTransclude/Web',{'Library':'chem','PageID':170365});</pre>
         <p class=\\"template:tag-insert\\"><em>Tags recommended by the template: </em><a href=\\"#\\">article:topic</a><a href=\\"#\\">transcluded:yes</a><a href=\\"#\\">printoptions:no-header-title</a></p>
       `,
-      {
-        title: 'InfoPage',
-        edittime: 'now',
-        ...(overwriteExisting ? {} : { abort: 'exists' }),
-      },
-    );
+        {
+          title: 'InfoPage',
+          edittime: 'now',
+          ...(overwriteExisting ? {} : { abort: 'exists' }),
+        },
+      );
+    } catch (error) {
+      if (!this.is409Conflict(error)) {
+        throw error; // Re-throw if it's not a 409 (page already exists is OK)
+      }
+      this.logger.debug('InfoPage already exists, skipping creation');
+    }
 
     // Table of Contents
-    await lib.api.pages.postPageContents(
-      assembleUrl([coverPageInfo.url, 'Front_Matter', '03:_Table_of_Contents']),
-      dynamicTOCLayout,
-      {
-        title: 'Table of Contents',
-        edittime: 'now',
-        ...(overwriteExisting ? {} : { abort: 'exists' }),
-      },
-    );
+    try {
+      await lib.api.pages.postPageContents(
+        assembleUrl([coverPageInfo.url, '00%3AFront_Matter', '03%3A_Table_of_Contents']),
+        dynamicTOCLayout,
+        {
+          title: 'Table of Contents',
+          edittime: 'now',
+          ...(overwriteExisting ? {} : { abort: 'exists' }),
+        },
+      );
+    } catch (error) {
+      if (!this.is409Conflict(error)) {
+        throw error; // Re-throw if it's not a 409 (page already exists is OK)
+      }
+      this.logger.debug('Table of Contents already exists, skipping creation');
+    }
 
     // Licensing
-    await lib.api.pages.postPageContents(
-      assembleUrl([coverPageInfo.url, 'Front_Matter', '04:_Licensing']),
-      dynamicLicensingLayout,
-      {
-        title: 'Licensing',
-        edittime: 'now',
-        ...(overwriteExisting ? {} : { abort: 'exists' }),
-      },
-    );
+    try {
+      await lib.api.pages.postPageContents(
+        assembleUrl([coverPageInfo.url, '00%3AFront_Matter', '04%3A_Licensing']),
+        dynamicLicensingLayout,
+        {
+          title: 'Licensing',
+          edittime: 'now',
+          ...(overwriteExisting ? {} : { abort: 'exists' }),
+        },
+      );
+    } catch (error) {
+      if (!this.is409Conflict(error)) {
+        throw error; // Re-throw if it's not a 409 (page already exists is OK)
+      }
+      this.logger.debug('Licensing page already exists, skipping creation');
+    }
 
     // Set thumbnail
     const thumbnailRes = await axios.get(this.DEFAULT_THUMBNAILS.FRONT_MATTER, {
@@ -192,7 +254,7 @@ export class BookService {
     });
     const thumbnail = Buffer.from(thumbnailRes.data);
     await lib.api.pages.putPageFileName(
-      assembleUrl([coverPageInfo.url, 'Front_Matter']),
+      assembleUrl([coverPageInfo.url, '00%3AFront_Matter']),
       '=mindtouch.page%2523thumbnail',
       thumbnail,
     );
@@ -222,50 +284,67 @@ export class BookService {
 
       await CXOneRateLimiter.waitUntilAPIAvailable(4);
 
-      // await lib.api.pages.postPageContents(
-      //   this.getMatterRootPagePath(coverPageInfo.url, mode),
-      //   `<p>{{template.ShowOrg()}}</p><p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic-guide</a></p>`,
-      //   {
-      //     title: `${mode} Matter`,
-      //     edittime: 'now',
-      //     ...(overwriteExisting ? {} : { abort: 'exists' }),
-      //   },
-      // );
+      // Create root matter page (e.g., "zz%3ABack_Matter" or "00%3AFront_Matter")
+      try {
+        await lib.api.pages.postPageContents(
+          this.getMatterRootPagePath(coverPageInfo.url, mode),
+          `<p>{{template.ShowOrg()}}</p><p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic-guide</a></p>`,
+          {
+            title: `${mode} Matter`,
+            edittime: 'now',
+            abort: 'never', // TODO: decide if we want to always overwrite
+            // ...(overwriteExisting ? {} : { abort: 'exists' }),
+          },
+        );
+        this.logger.debug(`Created ${mode} matter page for book ${coverPageInfo.pageID.toString()}`);
+      } catch (error) {
+        if (!this.is409Conflict(error)) {
+          throw error; // Re-throw if it's not a 409 (page already exists is OK)
+        }
+        this.logger.debug(`${mode} matter root page already exists, skipping creation`);
+      }
 
-      this.logger.debug(
-        `Created ${mode} matter page for book ${coverPageInfo.pageID.lib}/${coverPageInfo.pageID.pageNum}`,
-      );
+      // Set page properties - handle each individually to avoid one failure blocking others
+      const properties = [
+        { property: 'mindtouch.idf#guideDisplay', value: 'single' },
+        { property: 'mindtouch.page#welcomeHidden', value: 'true' },
+        {
+          property: 'mindtouch#idf.guideTabs',
+          value:
+            '[{"templateKey":"Topic_hierarchy","templateTitle":"Topic hierarchy","templatePath":"MindTouch/IDF3/Views/Topic_hierarchy","guid":"fc488b5c-f7e1-1cad-1a9a-343d5c8641f5"}]',
+        },
+      ];
 
-      // await Promise.all(
-      //   [
-      //     { property: "mindtouch.idf#guideDisplay", value: "single" },
-      //     { property: "mindtouch.page#welcomeHidden", value: "true" },
-      //     {
-      //       property: "mindtouch#idf.guideTabs",
-      //       value:
-      //         '[{"templateKey":"Topic_hierarchy","templateTitle":"Topic hierarchy","templatePath":"MindTouch/IDF3/Views/Topic_hierarchy","guid":"fc488b5c-f7e1-1cad-1a9a-343d5c8641f5"}]',
-      //     },
-      //   ].map((p) => {
-      //     this.logger.debug(
-      //       `Setting property ${p.property} for ${mode} matter page of book ${coverPageInfo.pageID.lib}/${coverPageInfo.pageID.pageID}`,
-      //     );
-      //     return lib.api.pages.putPageProperties(
-      //       this.getMatterRootPagePath(coverPageInfo.url, mode),
-      //       p.property,
-      //       p.value,
-      //     );
-      //   }),
-      // );
+      for (const p of properties) {
+        try {
+          this.logger.debug(
+            `Setting property ${p.property} for ${mode} matter page of book ${coverPageInfo.pageID.toString()}`,
+          );
+          await lib.api.pages.putPageProperties(
+            this.getMatterRootPagePath(coverPageInfo.url, mode),
+            p.property,
+            p.value,
+          );
+          this.logger.debug(`Successfully set property ${p.property}`);
+        } catch (error) {
+          // Log the error but continue with other properties
+          const errorMsg = error instanceof Error ? error.message : String(error);
+          this.logger.warn(`Failed to set property ${p.property}: ${errorMsg}. Continuing anyway.`);
 
-      // mode === 'Front'
-      //   ? await this.createDefaultFrontMatter({
-      //       overwriteExisting,
-      //       coverPageInfo,
-      //     })
-      //   : await this.createDefaultBackMatter({
-      //       overwriteExisting,
-      //       coverPageInfo,
-      //     });
+          // Properties are nice to have but not required for PDF generation
+          // The matter pages will still work without these UI configuration properties
+        }
+      }
+
+      mode === 'Front'
+        ? await this.createDefaultFrontMatter({
+            overwriteExisting,
+            coverPageInfo,
+          })
+        : await this.createDefaultBackMatter({
+            overwriteExisting: true, // TODO: Decide if we want to always overwrite this
+            coverPageInfo,
+          });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error creating ${mode} matter: ${errorMsg}`);
@@ -291,7 +370,8 @@ export class BookService {
   }
 
   public getMatterRootPagePath(basePath: string, matterType: BookMatterType): string {
-    const rootPage = matterType === 'Front' ? '00:Front_Matter' : 'zz:Back_Matter';
+    // Page identifiers with colons (e.g., "00:Front_Matter") must have the colon URL-encoded
+    const rootPage = matterType === 'Front' ? '00%3AFront_Matter' : 'zz%3ABack_Matter';
     return assembleUrl([basePath, rootPage]);
   }
 

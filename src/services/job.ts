@@ -73,7 +73,7 @@ export class JobService {
         }
 
         const initPages = await bookModel.discoverPages(bookID.lib, bookID.pageNum);
-        log.debug(`Discovered ${initPages.flat.length} pages for book ${bookID.lib}/${bookID.pageNum}`);
+        log.debug(`Discovered ${initPages.flat.length} pages for book ${bookID.toString()}`);
 
         const coverPageInfo = initPages.flat.find((page) => page.pageID.toString() === bookID.toString());
         if (!coverPageInfo) {
@@ -86,15 +86,19 @@ export class JobService {
         const backMatterExists = bookModel.checkMatterExists(initPages, 'Back');
 
         if (!frontMatterExists) {
-          log.warn(`Front matter is missing for book ${bookID.lib}/${bookID.pageNum}. Creating front matter...`);
+          log.warn(`Front matter is missing for book ${bookID.toString()}. Creating front matter...`);
           await bookModel.createMatter({ mode: 'Front', coverPageInfo });
           didCreateMatter = true;
+        } else {
+          log.debug(`Front matter already exists for book ${bookID.toString()}. Skipping creation.`);
         }
 
         if (!backMatterExists) {
-          log.warn(`Back matter is missing for book ${bookID.lib}/${bookID.pageNum}. Creating back matter...`);
+          log.warn(`Back matter is missing for book ${bookID.toString()}. Creating back matter...`);
           await bookModel.createMatter({ mode: 'Back', coverPageInfo });
           didCreateMatter = true;
+        } else {
+          log.debug(`Back matter already exists for book ${bookID.toString()}. Skipping creation.`);
         }
 
         // If we created matter, we need to re-discover pages to get updated structure

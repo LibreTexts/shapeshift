@@ -11,10 +11,12 @@ import {
   PDF_COVER_TYPES,
   pdfTOCStyles,
   pdfIndexStyles,
+  pdfGlossaryStyles,
   pdfHeaderCSS,
   pdfFooterCSS,
 } from '../util/pdfHelpers';
 import { buildTagIndex, generateIndexHTML } from '../util/indexHelpers';
+import { parseGlossaryTable, buildGlossaryData, generateGlossaryHTML } from '../util/glossaryHelpers';
 import { ImageConstants } from '../util/imageConstants';
 import { sleep } from '../helpers';
 import { log as logService } from '../lib/log';
@@ -62,7 +64,7 @@ type ConversionTask = {
   fileName: string;
   sortKey: string;
   subtype?: 'main-toc';
-  type: 'page' | 'toc' | 'index';
+  type: 'page' | 'toc' | 'index' | 'glossary';
 };
 
 /**
@@ -935,6 +937,63 @@ ${pageTailHTML}
   }
 
   /**
+   * Generates the back-matter Glossary page for PDF output.
+   *
+   * Replaces the raw CXOne table (which renders poorly in PDF) with a
+   * server-side alphabetised definition list parsed from the table's
+   * data-th column attributes.
+   *
+   * Falls back to raw page rendering if the page body contains no parseable
+   * glossary table — e.g. a book where the author left the Glossary page empty
+   * or used a non-standard layout.
+   */
+  private async generateGlossary({ pageInfo, sortKey }: { pageInfo: BookPageInfo; sortKey: string }) {
+    try {
+      this.logger.withMetadata({ url: pageInfo.url }).info('Starting Glossary generation');
+
+      const rawBody = pageInfo.body.join('');
+      const entries = parseGlossaryTable(rawBody);
+
+      if (!entries || entries.length === 0) {
+        this.logger
+          .withMetadata({ url: pageInfo.url })
+          .warn('No parseable glossary table found — falling back to raw page rendering');
+        return this.convertPage({
+          pageID: pageInfo.pageID,
+          pageInfo,
+          pageBodyHTML: rawBody,
+          pageHeadHTML: pageInfo.head,
+          pageTailHTML: pageInfo.tail,
+          sortKey,
+        });
+      }
+
+      const glossaryBodyHTML = `
+        <div id="libre-print-directory-header-container">
+          <h1 id="libre-print-directory-header">Glossary</h1>
+        </div>
+        <div id="libre-glossary">
+          ${generateGlossaryHTML(buildGlossaryData(entries))}
+        </div>
+      `;
+
+      const outputPath = await this.convertPage({
+        pageID: pageInfo.pageID,
+        pageInfo,
+        pageBodyHTML: glossaryBodyHTML,
+        additionalCSS: pdfTOCStyles + '\n' + pdfGlossaryStyles,
+        sortKey,
+      });
+
+      this.logger.withMetadata({ url: pageInfo.url }).info('Finished Glossary generation.');
+      return outputPath;
+    } catch (error) {
+      this.logger.withMetadata({ url: pageInfo.url, error }).error('Glossary generation failed');
+      throw error;
+    }
+  }
+
+  /**
    * Returns a flat list of conversion tasks in the correct order for PDF generation, including TOC placement.
    * The TOC is placed before the first page that has more than 1 subpage and is tagged as either "article:topic-category" or "article:topic-guide",
    * but after any front matter. Back matter pages are placed at the end. If there are no suitable pages for TOC placement, the TOC will be placed at the end before back matter.
@@ -952,6 +1011,12 @@ ${pageTailHTML}
     this._parentMap.clear();
     this._rootPageID = tree.pageID.toString();
     this.buildMaps(tree);
+
+    // Log all back matter pages for debugging
+    const backMatterPages = pages.filter((p) => p.matterType === 'Back');
+    this.logger
+      .withMetadata({ backMatterPages: backMatterPages.map((p) => ({ title: p.title, url: p.url })) })
+      .info('Back matter pages discovered');
 
     // Process flat array with correct ordering and TOC placement
     for (const p of pages) {
@@ -987,6 +1052,22 @@ ${pageTailHTML}
           fileName: idxFileName,
           sortKey: idxFileName,
           type: 'index',
+        });
+        continue;
+      }
+
+      // The back matter "Glossary" page is replaced server-side by a generated alphabetical
+      // definition list parsed from the CXOne table authored by instructors.
+      if (p.matterType === 'Back' && p.title === 'Glossary') {
+        backMatterIdx += 1;
+        const glossFileName = `9999:${backMatterIdx}`;
+        conversionTasks.push({
+          _id: 'glossary-main',
+          pageID: p.pageID,
+          pageInfo: p,
+          fileName: glossFileName,
+          sortKey: glossFileName,
+          type: 'glossary',
         });
         continue;
       }
@@ -1188,6 +1269,11 @@ ${pageTailHTML}
         return this.generateIndex({
           pageInfo: task.pageInfo,
           allPages: this._allPages,
+          sortKey: task.sortKey,
+        });
+      } else if (task.type === 'glossary') {
+        return this.generateGlossary({
+          pageInfo: task.pageInfo,
           sortKey: task.sortKey,
         });
       } else {
