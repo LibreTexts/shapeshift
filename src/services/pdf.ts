@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
-import { readFileSync } from 'node:fs';
+import { readFileSync, createReadStream } from 'node:fs';
+import pLimit from 'p-limit';
 import { v4 as uuid } from 'uuid';
 import { join, resolve } from 'node:path';
 import {
@@ -64,6 +65,19 @@ type ConversionTask = {
   type: 'page' | 'toc' | 'index';
 };
 
+/**
+ * A group of ConversionTasks to be rendered in a single Prince invocation.
+ * Content pages that share a chapter ancestor are packed into one group to eliminate
+ * excess whitespace where a page ends with only a few lines before the next page begins.
+ * Front/back matter, TOC, and Index tasks are always solo groups (isPacked: false).
+ */
+type PageGroup = {
+  sortKey: string;
+  fileName: string;
+  tasks: ConversionTask[];
+  isPacked: boolean;
+};
+
 const RETRY_CONFIG = {
   maxAttempts: 3,
   initialDelayMs: 1000,
@@ -76,6 +90,31 @@ const CIRCUIT_BREAKER_CONFIG = {
   maxJobDurationMs: 4 * 60 * 60 * 1000, // 4 hours
 };
 
+/**
+ * Maximum number of content pages that may be packed into a single Prince invocation.
+ * Large chapters beyond this limit are split into sequential sub-groups, each rendered
+ * separately and merged by pdf-lib — avoiding excessive memory use in Prince for
+ * books with very large chapters.
+ */
+const MAX_PAGES_PER_GROUP = 6;
+
+/**
+ * Maximum number of Prince subprocesses running concurrently.
+ * Prince is CPU/I-O bound; 4 concurrent invocations balances throughput against
+ * resource pressure. Tune via PRINCE_CONCURRENCY env var.
+ */
+const DEFAULT_PRINCE_CONCURRENCY = 4;
+
+/**
+ * Number of individual group PDFs merged in each batch pass.
+ * Bounds peak memory during merging to roughly MERGE_BATCH_SIZE × avg-group-pdf-size.
+ * Tune via MERGE_BATCH_SIZE env var.
+ */
+const DEFAULT_MERGE_BATCH_SIZE = 25;
+
+/** Represents the pre-rendered math output for a single ConversionTask. */
+type PrerenderedTask = { task: ConversionTask; renderedBody: string };
+
 export class PDFService {
   private _bookID!: PageID;
   private _useLocalStorage: boolean = false;
@@ -83,6 +122,10 @@ export class PDFService {
   private readonly logger: LogLayer;
   private readonly logName = 'PDFService';
   private readonly storageService: StorageService;
+  private _treeMap: Map<string, BookPageInfo> = new Map();
+  private _parentMap: Map<string, string> = new Map();
+  private _rootPageID: string = '';
+  private _allPages: BookPageInfo[] = [];
 
   constructor(bookID: PageID, opts: { useLocalStorage?: boolean } = {}) {
     this._bookID = bookID;
@@ -109,6 +152,7 @@ export class PDFService {
   public async convertBook(pagesInput: BookPages): Promise<string | null> {
     if (!pagesInput?.flat?.length) return null;
     const { flat: pages } = pagesInput;
+    this._allPages = pages;
     const startTime = Date.now();
     const pagesMap = new Map(pages.map((c) => [c.pageID.toString(), c] as [string, BookPageInfo]));
 
@@ -118,82 +162,92 @@ export class PDFService {
         throw new Error('Preflight checks failed: Prince binary is not properly configured');
       }
 
-      // Build conversion tasks with correct ordering and TOC placement
+      // Build conversion tasks with correct ordering and TOC placement, then group
+      // content pages by chapter so each chapter is rendered in a single Prince invocation.
       const conversionTasks = this.buildTaskList(pagesInput);
-      this.logger.withMetadata({ totalTasks: conversionTasks.length }).info('Built conversion task list');
+      const pageGroups = this.groupTasksIntoChapters(conversionTasks);
+      this.logger
+        .withMetadata({ totalTasks: conversionTasks.length, totalGroups: pageGroups.length })
+        .info('Built conversion task list and page groups');
 
-      let processedPageCount = 0;
-      let consecutiveFailures = 0;
-
-      for (const task of conversionTasks) {
-        // Check job timeout
-        if (Date.now() - startTime > CIRCUIT_BREAKER_CONFIG.maxJobDurationMs) {
-          throw new Error('Job exceeded maximum duration (4 hours)');
-        }
-
-        if (consecutiveFailures >= CIRCUIT_BREAKER_CONFIG.maxConsecutiveFailures) {
-          throw new Error('Job failed due to too many consecutive page conversion failures');
-        }
-
-        this.logger
-          .withMetadata({
-            current: processedPageCount + 1,
-            total: pages.length,
-          })
-          .info('Processing page');
-
-        // Get the actual HTML content
-        const content = pagesMap.get(task.pageID.toString());
-        if (!content) {
-          // This should never happen since we built the task list from the same pages, but we check just in case
-          throw new Error(`Missing HTML content for pageID: ${task.pageID.toString()}`);
-        }
-
-        // Convert the page with retry logic
-        const convertFn = async () => {
-          if (task.type === 'toc') {
-            return await this.generateTableOfContents({
-              pageInfo: task.pageInfo,
-              isMainTOC: task.subtype === 'main-toc',
-              sortKey: task.sortKey,
-            });
-          } else if (task.type === 'index') {
-            return await this.generateIndex({
-              pageInfo: task.pageInfo,
-              allPages: pages,
-              sortKey: task.sortKey,
-            });
-          } else {
-            return await this.convertPage({
-              pageID: task.pageID,
-              pageInfo: task.pageInfo,
-              pageBodyHTML: task.pageInfo.body.join(''),
-              pageHeadHTML: task.pageInfo.head,
-              pageTailHTML: task.pageInfo.tail,
-              sortKey: task.sortKey,
-            });
+      // ── Phase 1: Pre-render MathJax for all groups sequentially ──────────────
+      // currentPageNumberPrefix is a module-level global in mathjax.ts; concurrent
+      // renders would race on it.  We complete all math work before spawning any
+      // Prince processes so Phase 2 is free of MathJax state.
+      this.logger.withMetadata({ totalGroups: pageGroups.length }).info('Pre-rendering math for all groups');
+      const prerenderedMap = new Map<string, PrerenderedTask[]>();
+      for (const group of pageGroups) {
+        const pageTasks = group.tasks.filter((t) => t.type === 'page');
+        if (pageTasks.length === 0) continue; // TOC / Index — no math needed
+        try {
+          const rendered: PrerenderedTask[] = [];
+          for (const t of pageTasks) {
+            rendered.push({ task: t, renderedBody: await prerenderMath(t.pageInfo.body.join(''), t.pageInfo) });
           }
-        };
-
-        const result = await this.retryWithBackoff(convertFn, `Convert ${task.type}: ${task.pageInfo.url}`);
-
-        if (result.success) {
-          this._convertedPagePaths.push(result.result!);
-          processedPageCount++;
-          consecutiveFailures = 0; // reset on success
-        } else {
-          // If a task fails after all retries, increment the consecutive failure count
-          // if more tasks completely fail than the threshold allows, the circuit breaker will trip and abort the job completely
-          consecutiveFailures++;
-          this.logger.withMetadata({ error: result.error, pageID: task.pageID }).error('Task failed after all retries');
+          prerenderedMap.set(group.sortKey, rendered);
+        } catch (mathError) {
+          // Math pre-rendering failed for this group (e.g. stack overflow on a deeply
+          // nested expression). Leave the group out of the map so Phase 2 falls back to
+          // inline rendering inside convertPageGroup, where retryWithBackoff handles it.
+          //
+          // Pass only the message string — not the Error object — to the logger.
+          // If mathError is a RangeError the stack may still be near its limit, and
+          // passing the object lets LogLayer call util.inspect on it, which can
+          // re-trigger the overflow and produce a confusing "Enrichment error".
+          const errMsg = mathError instanceof Error ? mathError.message : String(mathError);
+          this.logger
+            .withMetadata({ sortKey: group.sortKey, error: errMsg })
+            .warn('Math pre-render failed for group — will render inline during conversion');
         }
+      }
+
+      // ── Phase 2: Convert groups in parallel (bounded by PRINCE_CONCURRENCY) ──
+      const princeConcurrency =
+        parseInt(Environment.getOptional('PRINCE_CONCURRENCY', String(DEFAULT_PRINCE_CONCURRENCY)), 10) ||
+        DEFAULT_PRINCE_CONCURRENCY;
+      const princeLimit = pLimit(princeConcurrency);
+      this.logger
+        .withMetadata({ totalGroups: pageGroups.length, princeConcurrency })
+        .info('Converting page groups in parallel');
+
+      const groupResults = await Promise.allSettled(
+        pageGroups.map((group) =>
+          princeLimit(async () => {
+            if (Date.now() - startTime > CIRCUIT_BREAKER_CONFIG.maxJobDurationMs) {
+              throw new Error('Job exceeded maximum duration (4 hours)');
+            }
+            const prerendered = prerenderedMap.get(group.sortKey) ?? null;
+            const result = await this.retryWithBackoff(
+              () => this.convertPageGroup(group, prerendered),
+              `Convert group: ${group.fileName} (${group.tasks.length} page(s))`,
+            );
+            return { group, result };
+          }),
+        ),
+      );
+
+      let failureCount = 0;
+      for (const r of groupResults) {
+        if (r.status === 'rejected') {
+          failureCount++;
+          this.logger.withMetadata({ error: r.reason }).error('Group conversion promise rejected');
+        } else if (!r.value.result.success) {
+          failureCount++;
+          this.logger
+            .withMetadata({ error: r.value.result.error, group: r.value.group.fileName })
+            .error('Group failed after all retries');
+        } else {
+          if (r.value.result.result) this._convertedPagePaths.push(r.value.result.result);
+        }
+      }
+
+      if (failureCount >= CIRCUIT_BREAKER_CONFIG.maxConsecutiveFailures) {
+        throw new Error(`Job failed: ${failureCount} group(s) failed to convert`);
       }
 
       // All pages converted successfully, merge and generate covers
       this.logger.info('All pages converted, merging content');
-      const contentFilePath = await this.mergeContentPagesAndWrite();
-
-      const numPages = await this.calculateNumPagesInPDFDocument(contentFilePath);
+      const { filePath: contentFilePath, pageCount: numPages } = await this.mergeContentPagesAndWrite();
 
       // Generate covers with retry
       this.logger.info('Generating covers');
@@ -313,12 +367,6 @@ export class PDFService {
     }
   }
 
-  private async calculateNumPagesInPDFDocument(filePath: string): Promise<number> {
-    const file = await fs.readFile(filePath);
-    const filePDF = await PDFDocument.load(file);
-    return filePDF.getPageCount();
-  }
-
   private async generateContentOutputFilePath() {
     const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
     const basePath = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
@@ -346,6 +394,7 @@ export class PDFService {
     pageID,
     pageInfo,
     pageBodyHTML,
+    preRenderedBodyHTML,
     pageHeadHTML = '',
     pageTailHTML = '',
     additionalCSS,
@@ -355,6 +404,8 @@ export class PDFService {
     pageID: PageID;
     pageInfo: BookPageInfo;
     pageBodyHTML: string;
+    /** If supplied, skips the prerenderMath call (math was pre-rendered in Phase 1). */
+    preRenderedBodyHTML?: string;
     pageHeadHTML?: string;
     pageTailHTML?: string;
     additionalCSS?: string;
@@ -362,10 +413,8 @@ export class PDFService {
     sortKey: string;
   }) {
     try {
-      // Pre-render TeX math to inline SVG so Prince doesn't need to execute MathJax JS.
-      // Strip CMS-provided MathJax <script> tags from head since they're now unnecessary.
-      // Pass pageInfo to configure equation numbering based on page title (e.g., "4.2.1" for section 4.2)
-      const renderedBodyHTML = await prerenderMath(pageBodyHTML, pageInfo);
+      // Use pre-rendered math if available (Phase 1 pre-render), otherwise render now.
+      const renderedBodyHTML = preRenderedBodyHTML ?? (await prerenderMath(pageBodyHTML, pageInfo));
       const cleanedHeadHTML = stripMathJaxScripts(pageHeadHTML);
 
       const headerHTML = generatePDFHeader(ImageConstants['default']);
@@ -456,6 +505,16 @@ ${pageTailHTML}
     }
   }
 
+  /**
+   * Merges a list of PDF files into a single PDFDocument, processing them in
+   * batches of MERGE_BATCH_SIZE to bound peak memory usage.
+   *
+   * Without batching, loading all 250+ group PDFs simultaneously can exhaust
+   * available RAM (pdf-lib has no streaming API).  Batching keeps each pass to
+   * ~MERGE_BATCH_SIZE × avg-pdf-size in memory at a time.
+   *
+   * @returns The merged PDF as a Uint8Array and the total page count.
+   */
   private async mergeFiles(
     files: string[],
     metadata?: {
@@ -464,7 +523,48 @@ ${pageTailHTML}
       isPreview?: boolean;
       title: string;
     },
-  ) {
+  ): Promise<{ data: Uint8Array; pageCount: number }> {
+    const mergeBatchSize =
+      parseInt(Environment.getOptional('MERGE_BATCH_SIZE', String(DEFAULT_MERGE_BATCH_SIZE)), 10) ||
+      DEFAULT_MERGE_BATCH_SIZE;
+
+    if (files.length <= mergeBatchSize) {
+      return this._mergeFilesRaw(files, metadata);
+    }
+
+    // Two-tier batched merge: merge chunks → write batch temp files → merge batches
+    this.logger
+      .withMetadata({ totalFiles: files.length, mergeBatchSize })
+      .info('Large merge: using batched two-tier strategy');
+
+    const batchPaths: string[] = [];
+    try {
+      for (let i = 0; i < files.length; i += mergeBatchSize) {
+        const batch = files.slice(i, i + mergeBatchSize);
+        const { data } = await this._mergeFilesRaw(batch);
+        const batchPath = await this._writeTempPDF(data);
+        batchPaths.push(batchPath);
+        this.logger
+          .withMetadata({ batchIndex: Math.floor(i / mergeBatchSize), batchSize: batch.length })
+          .debug('Batch merged');
+      }
+      return await this._mergeFilesRaw(batchPaths, metadata);
+    } finally {
+      // Always clean up batch temp files even if final merge throws
+      await Promise.all(batchPaths.map((p) => fs.unlink(p).catch(() => {})));
+    }
+  }
+
+  /** Low-level merge: loads and copies all given PDF files into one document. */
+  private async _mergeFilesRaw(
+    files: string[],
+    metadata?: {
+      author: string;
+      isContent?: boolean;
+      isPreview?: boolean;
+      title: string;
+    },
+  ): Promise<{ data: Uint8Array; pageCount: number }> {
     const outputDocument = await PDFDocument.create();
     for (const filePath of files) {
       const file = await fs.readFile(filePath);
@@ -489,10 +589,27 @@ ${pageTailHTML}
     outputDocument.setProducer('LibreTexts Shapeshift');
     outputDocument.setCreator('LibreTexts (libretexts.org)');
     outputDocument.setCreationDate(new Date());
-    return outputDocument.save();
+
+    const data = await outputDocument.save();
+    return { data, pageCount: outputDocument.getPageCount() };
   }
 
-  private async mergeContentPagesAndWrite() {
+  /** Writes a PDF Uint8Array to a uniquely-named temp file and returns its path. */
+  private async _writeTempPDF(data: Uint8Array): Promise<string> {
+    const tempDir = resolve('.tmp');
+    await fs.mkdir(tempDir, { recursive: true });
+    const tempPath = join(tempDir, `merge_batch_${uuid()}.pdf`);
+    await fs.writeFile(tempPath, data);
+    return tempPath;
+  }
+
+  /**
+   * Merges all converted content page PDFs, uploads to storage, and cleans up
+   * workdir intermediates.
+   *
+   * @returns The output file path and total page count (avoiding a redundant PDF reload).
+   */
+  private async mergeContentPagesAndWrite(): Promise<{ filePath: string; pageCount: number }> {
     const extractFileName = (filePath: string) => {
       const split = filePath.split('/');
       return split[split.length - 1];
@@ -510,24 +627,32 @@ ${pageTailHTML}
         });
       });
 
-    const mergedRaw = await this.mergeFiles(sortedPages);
+    const { data: mergedData, pageCount } = await this.mergeFiles(sortedPages);
     const outPath = await this.generateContentOutputFilePath();
 
-    if (!this._useLocalStorage) {
-      await this.storageService.uploadFile({
-        contentType: 'application/pdf',
-        data: Buffer.from(mergedRaw),
-        key: outPath,
-      });
-    } else {
-      // Ensure directory exists before writing
-      const dirPath = getDirectoryPathFromFilePath(outPath);
-      await fs.mkdir(dirPath, { recursive: true });
+    // Write merged PDF to its final local path first (needed by both storage paths)
+    const dirPath = getDirectoryPathFromFilePath(outPath);
+    await fs.mkdir(dirPath, { recursive: true });
+    await fs.writeFile(outPath, mergedData);
 
-      // Write file to local storage
-      await fs.writeFile(outPath, mergedRaw);
+    if (!this._useLocalStorage) {
+      // Stream the file to S3 — avoids holding a second Buffer copy in memory
+      const stream = createReadStream(outPath);
+      const uploader = this.storageService.createStreamUploader({
+        contentType: 'application/pdf',
+        key: outPath,
+        stream,
+      });
+      if (!uploader) throw new Error('Failed to create S3 stream uploader for content PDF');
+      await uploader.done();
+      // Remove the local temp copy after successful upload
+      await fs.unlink(outPath).catch(() => {});
     }
-    return outPath;
+
+    // Clean up all individual group PDFs now that merge is complete
+    await Promise.all(sortedPages.map((p) => fs.unlink(p).catch(() => {})));
+
+    return { filePath: outPath, pageCount };
   }
 
   private async getLevel(pageInfo: BookPageInfo, level = 2, isSubTOC?: boolean): Promise<string> {
@@ -794,19 +919,17 @@ ${pageTailHTML}
     let backMatterIdx = 0;
     let frontMatterIdx = 0;
 
-    // Build a map from pageID → tree node so we can access subpages, which are stripped
-    // from the flat array by flattenPagesObj.
-    const treeMap = new Map<string, BookPageInfo>();
-    const buildTreeMap = (node: BookPageInfo) => {
-      treeMap.set(node.pageID.toString(), node);
-      node.subpages?.forEach(buildTreeMap);
-    };
-    buildTreeMap(tree);
+    // Build treeMap, parentMap, and set rootPageID on the instance so groupTasksIntoChapters
+    // can walk the hierarchy without re-traversing the tree.
+    this._treeMap.clear();
+    this._parentMap.clear();
+    this._rootPageID = tree.pageID.toString();
+    this.buildMaps(tree);
 
     // Process flat array with correct ordering and TOC placement
     for (const p of pages) {
       const idx = `${conversionTasks.length + 1}`.padStart(4, '0');
-      //const treeNode = treeMap.get(p.pageID.toString());
+      //const treeNode = this._treeMap.get(p.pageID.toString());
 
       // The front matter "Table of Contents" page uses the root book hierarchy to generate
       // a full-book TOC. It outputs at the front matter position, replacing the CXOne template placeholder.
@@ -906,6 +1029,233 @@ ${pageTailHTML}
     }
 
     return conversionTasks.sort((a, b) => a.fileName.localeCompare(b.fileName, undefined, { numeric: true }));
+  }
+
+  /**
+   * Recursively populates `_treeMap` (pageID → BookPageInfo) and `_parentMap`
+   * (child pageID → parent pageID) from the book tree root.
+   */
+  private buildMaps(node: BookPageInfo, parentIDStr?: string) {
+    this._treeMap.set(node.pageID.toString(), node);
+    if (parentIDStr) {
+      this._parentMap.set(node.pageID.toString(), parentIDStr);
+    }
+    node.subpages?.forEach((child) => this.buildMaps(child, node.pageID.toString()));
+  }
+
+  /**
+   * Walks up the parentMap from a given page to find its chapter-level ancestor —
+   * the direct child of the root node. Returns the chapter ancestor's pageID string,
+   * or null if the page is not a descendant of the root (orphan).
+   */
+  private findChapterAncestor(pageIDStr: string): string | null {
+    let current = pageIDStr;
+    let parent = this._parentMap.get(current);
+    while (parent && parent !== this._rootPageID) {
+      current = parent;
+      parent = this._parentMap.get(current);
+    }
+    return parent === this._rootPageID ? current : null;
+  }
+
+  /**
+   * Groups a sorted ConversionTask array into PageGroups for chapter-level packing.
+   *
+   * Content pages that share the same chapter ancestor (direct child of the root tree node)
+   * are merged into a single PageGroup and passed to Prince as one HTML document, eliminating
+   * the excess whitespace that accumulates when a page ends after only a few lines.
+   *
+   * Front/back matter pages, TOC tasks, and Index tasks are always emitted as solo groups
+   * (isPacked: false) to preserve their specialized per-page layouts.
+   *
+   * The output array preserves the original sortKey ordering.
+   */
+  private groupTasksIntoChapters(tasks: ConversionTask[]): PageGroup[] {
+    // chapterBuckets preserves insertion order (Map), so chapter groups stay in the
+    // same relative order as the first page of each chapter in the sorted task list.
+    const chapterBuckets = new Map<string, ConversionTask[]>();
+    const soloGroups: Array<{ task: ConversionTask; insertionIndex: number }> = [];
+
+    for (let i = 0; i < tasks.length; i++) {
+      const task = tasks[i];
+
+      // Non-page tasks and matter pages are always solo
+      if (task.type !== 'page' || task.pageInfo.matterType === 'Front' || task.pageInfo.matterType === 'Back') {
+        soloGroups.push({ task, insertionIndex: i });
+        continue;
+      }
+
+      const ancestorID = this.findChapterAncestor(task.pageID.toString());
+      if (!ancestorID) {
+        // Orphan page — not in the tree, emit solo
+        soloGroups.push({ task, insertionIndex: i });
+        continue;
+      }
+
+      const bucket = chapterBuckets.get(ancestorID);
+      if (bucket) {
+        bucket.push(task);
+      } else {
+        chapterBuckets.set(ancestorID, [task]);
+      }
+    }
+
+    // Build PageGroup objects for chapter buckets, splitting any that exceed MAX_PAGES_PER_GROUP
+    const chapterGroups: PageGroup[] = [];
+    for (const [, bucketTasks] of chapterBuckets) {
+      for (let offset = 0; offset < bucketTasks.length; offset += MAX_PAGES_PER_GROUP) {
+        const slice = bucketTasks.slice(offset, offset + MAX_PAGES_PER_GROUP);
+        const first = slice[0];
+        chapterGroups.push({
+          sortKey: first.sortKey,
+          fileName: first.fileName,
+          tasks: slice,
+          isPacked: true,
+        });
+      }
+    }
+
+    // Build PageGroup objects for solo tasks
+    const soloPageGroups: PageGroup[] = soloGroups.map(({ task }) => ({
+      sortKey: task.sortKey,
+      fileName: task.fileName,
+      tasks: [task],
+      isPacked: false,
+    }));
+
+    // Merge and sort by sortKey to preserve original ordering
+    return [...chapterGroups, ...soloPageGroups].sort((a, b) =>
+      a.sortKey.localeCompare(b.sortKey, undefined, { numeric: true }),
+    );
+  }
+
+  /**
+   * Converts a PageGroup to a PDF file on disk.
+   *
+   * Solo groups (front/back matter, TOC, Index, or single-page chapters) delegate to
+   * the existing per-task conversion methods. Packed groups (multiple content pages from
+   * the same chapter) are pre-rendered sequentially through MathJax, concatenated into
+   * a single HTML document, and passed to Prince in one invocation.
+   */
+  /**
+   * Converts a PageGroup to a PDF file on disk.
+   *
+   * @param prerendered - Pre-rendered math results from Phase 1, keyed per task.
+   *   When provided, math rendering is skipped inside this method.
+   */
+  private async convertPageGroup(
+    group: PageGroup,
+    prerendered: PrerenderedTask[] | null = null,
+  ): Promise<string | null> {
+    const task = group.tasks[0];
+
+    // Solo path — dispatch to existing single-task methods
+    if (!group.isPacked || group.tasks.length === 1) {
+      if (task.type === 'toc') {
+        return this.generateTableOfContents({
+          pageInfo: task.pageInfo,
+          isMainTOC: task.subtype === 'main-toc',
+          sortKey: task.sortKey,
+        });
+      } else if (task.type === 'index') {
+        return this.generateIndex({
+          pageInfo: task.pageInfo,
+          allPages: this._allPages,
+          sortKey: task.sortKey,
+        });
+      } else {
+        return this.convertPage({
+          pageID: task.pageID,
+          pageInfo: task.pageInfo,
+          pageBodyHTML: task.pageInfo.body.join(''),
+          preRenderedBodyHTML: prerendered?.[0]?.renderedBody,
+          pageHeadHTML: task.pageInfo.head,
+          pageTailHTML: task.pageInfo.tail,
+          sortKey: task.sortKey,
+        });
+      }
+    }
+
+    // Packed path — merge multiple content pages into one Prince invocation
+    try {
+      this.logger
+        .withMetadata({ sortKey: group.sortKey, pageCount: group.tasks.length })
+        .info('Converting packed chapter group');
+
+      // Use pre-rendered math from Phase 1 when available; fall back to inline rendering.
+      let rendered: Array<{ task: ConversionTask; body: string }>;
+      if (prerendered) {
+        rendered = prerendered.map((p) => ({ task: p.task, body: p.renderedBody }));
+      } else {
+        // Fallback: render sequentially (should only occur if called outside the normal convertBook flow)
+        rendered = [];
+        for (const t of group.tasks) {
+          rendered.push({ task: t, body: await prerenderMath(t.pageInfo.body.join(''), t.pageInfo) });
+        }
+      }
+
+      const packedBodyHTML = rendered
+        .map(({ task: t, body }) => `<div class="packed-page" data-page-id="${t.pageID}">\n${body}\n</div>`)
+        .join('\n');
+
+      // Use the first task's pageInfo for header/footer context (chapter guide page).
+      // The footer URL will point to the chapter's top-level page rather than individual sections.
+      const firstTaskInfo = task.pageInfo;
+      const cleanedHeadHTML = stripMathJaxScripts(firstTaskInfo.head);
+      const headerHTML = generatePDFHeader(ImageConstants['default']);
+      const footerHTML = generatePDFFooter({
+        currentPage: firstTaskInfo,
+        mainColor: '#127BC4',
+        pageLicense: firstTaskInfo.license,
+        prefix: '',
+      });
+
+      const wrappedHTML = `
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <style>${pdfFontCSS}</style>
+  <style>${pdfPageCSS}</style>
+  <style>${pdfHeaderCSS}</style>
+  <style>:root { --pdf-main-color: #127BC4; }</style>
+  <style>${pdfFooterCSS}</style>
+  ${cleanedHeadHTML}
+</head>
+<body>
+${headerHTML}
+${footerHTML}
+${packedBodyHTML}
+</body>
+</html>
+      `.trim();
+
+      const outputPath = await this.generatePageOutputFilePath(firstTaskInfo.pageID, group.sortKey);
+      await this.withTempFile(wrappedHTML, (inputPath) => this.runPrinceConversion(inputPath, outputPath));
+
+      this.logger.withMetadata({ outputPath, pageCount: group.tasks.length }).info('Converted packed chapter group.');
+      return outputPath;
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+      this.logger.withMetadata({ error, errorMessage, group: group.fileName }).error('Packed group conversion failed');
+      throw error;
+    }
+  }
+
+  /**
+   * Removes the workdir for this book, deleting all intermediate group PDFs and the
+   * merged content PDF.  Called on job failure to prevent orphaned temp files from
+   * accumulating on disk across retries.
+   */
+  public async cleanupWorkdir(): Promise<void> {
+    const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+    const workdir = resolve(`${baseDir}/pdf/${this._bookID.toString()}/workdir`);
+    try {
+      await fs.rm(workdir, { recursive: true, force: true });
+      this.logger.withMetadata({ workdir }).info('Cleaned up workdir');
+    } catch (error) {
+      this.logger.withMetadata({ workdir, error }).warn('Failed to clean up workdir');
+    }
   }
 
   private async ensureCoversDirectory() {

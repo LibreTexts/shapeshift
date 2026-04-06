@@ -60,3 +60,11 @@ mjx-container svg {
   max-width: 100%;
   height: auto;
 }
+
+/* Packed-page separator: small visual break between logically distinct content pages
+   that have been merged into a single Prince invocation for whitespace efficiency */
+.packed-page + .packed-page {
+  margin-top: 1.5em;
+  padding-top: 1em;
+  border-top: 0.5pt solid #ccc;
+}

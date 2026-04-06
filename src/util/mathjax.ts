@@ -140,7 +140,7 @@ async function initMathJax(): Promise<MathJaxGlobal> {
       paths: {
         mathjax: '@mathjax/src/bundle',
       },
-      load: ['adaptors/liteDOM'],
+      load: ['adaptors/liteDOM', '[tex]/mhchem', '[tex]/color', '[tex]/cancel', '[tex]/tagformat'],
       require: (file: string) => import(file),
       // Extension-specific configuration for mhchem chemistry notation
       '[tex]/mhchem': {
@@ -157,6 +157,13 @@ async function initMathJax(): Promise<MathJaxGlobal> {
     options: {
       ignoreHtmlClass: 'tex2jax_ignore',
       processHtmlClass: 'tex2jax_process',
+      // Remove assistiveMml from the render pipeline — the a11y component is not loaded,
+      // so SRE worker threads are never started and no speech HTML is generated.
+      renderActions: {
+        assistiveMml: [],
+      },
+      enableSpeech: false,
+      enableBraille: false,
     },
     output: {
       scale: 0.85,
@@ -210,22 +217,6 @@ function getOrInitMathJax(): Promise<MathJaxGlobal> {
   }
   return initPromise;
 }
-
-// ============================================================================
-// Process Cleanup
-// ============================================================================
-
-/**
- * Clean up MathJax worker threads when process exits.
- *
- * In MathJax v4, speech generation uses worker-threads that must be explicitly
- * shut down to allow the Node process to exit gracefully.
- */
-process.on('exit', () => {
-  if (global.MathJax) {
-    MathJax.done();
-  }
-});
 
 // ============================================================================
 // Page Number Prefix Extraction
@@ -342,23 +333,23 @@ export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Prom
     // Get the fully rendered HTML document
     const result = adaptor.outerHTML(adaptor.root(doc.document));
 
-    // Clear the document to free resources and prevent state pollution
-    // This helps avoid "Can't find handler for document" errors on subsequent renders
-    try {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      (doc as any).clear();
-    } catch {
-      // clear() might not exist or might fail, that's okay
-    }
-
     // MathJax wraps the input in a full HTML document. Extract just the body content
     // since the caller provides (and expects back) a body fragment.
     const bodyMatch = result.match(/<body>([\s\S]*)<\/body>/);
     return bodyMatch ? bodyMatch[1] : result;
   } catch (err) {
-    // Graceful degradation: return original HTML with raw LaTeX
-    // This is better than failing completely - raw math is still readable
-    console.error('MathJax rendering error:', err);
+    // Graceful degradation: return original HTML with raw LaTeX.
+    //
+    // IMPORTANT: when err is a RangeError (call stack overflow), the stack is still
+    // near its limit as we enter this catch block.  Calling console.error(err) invokes
+    // util.inspect(), which does deep recursive string formatting and immediately
+    // triggers a *second* RangeError that escapes this catch entirely.  Avoid any
+    // non-trivial function calls in the RangeError branch — just return raw html.
+    if (err instanceof RangeError) {
+      return html;
+    }
+    // Safe to log for non-overflow errors (err.message is a simple property read).
+    console.error('MathJax rendering error:', err instanceof Error ? err.message : String(err));
     return html;
   }
 }
