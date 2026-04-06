@@ -102,8 +102,16 @@ export class JobService {
 
         // <generate pdf>
         const pdfService = new PDFService(bookID, { useLocalStorage });
-        const pdfPath = await pdfService.convertBook(pages);
-        log.info(`PDF generated at path: ${pdfPath}`);
+        let pdfPath: string | null = null;
+        try {
+          pdfPath = await pdfService.convertBook(pages);
+          log.info(`PDF generated at path: ${pdfPath}`);
+        } catch (pdfError) {
+          const errorMsg = pdfError instanceof Error ? pdfError.message : String(pdfError);
+          log.error(`PDF conversion failed: ${errorMsg}`);
+          await pdfService.cleanupWorkdir();
+          throw pdfError; // re-throw so the outer catch marks the job as failed
+        }
         // </generate pdf>
 
         // <generate epub>

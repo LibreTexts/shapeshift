@@ -1,4 +1,5 @@
 import fs from 'node:fs/promises';
+import pLimit from 'p-limit';
 import { join, resolve } from 'node:path';
 import axios from 'axios';
 import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
@@ -13,6 +14,14 @@ import PageID from '../util/pageID';
 import { log as logService } from '../lib/log';
 import { LogLayer } from 'loglayer';
 import { Environment } from '../lib/environment';
+
+/**
+ * Maximum number of concurrent page content fetches from the CXOne API.
+ * The CXOne rate limiter (800 pts/60s, 2 pts/page) allows ~400 pages/min.
+ * Parallelism saturates that bandwidth while staying well within API limits.
+ * Tune via CONTENT_FETCH_CONCURRENCY env var for resource-constrained environments.
+ */
+const DEFAULT_CONTENT_FETCH_CONCURRENCY = 10;
 
 export class BookService {
   private readonly logger: LogLayer;
@@ -200,6 +209,7 @@ export class BookService {
   public async createMatter({
     mode,
     coverPageInfo,
+    // eslint-disable-next-line @typescript-eslint/no-unused-vars
     overwriteExisting = false,
   }: {
     mode: BookMatterType;
@@ -212,15 +222,15 @@ export class BookService {
 
       await CXOneRateLimiter.waitUntilAPIAvailable(4);
 
-      await lib.api.pages.postPageContents(
-        this.getMatterRootPagePath(coverPageInfo.url, mode),
-        `<p>{{template.ShowOrg()}}</p><p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic-guide</a></p>`,
-        {
-          title: `${mode} Matter`,
-          edittime: 'now',
-          ...(overwriteExisting ? {} : { abort: 'exists' }),
-        },
-      );
+      // await lib.api.pages.postPageContents(
+      //   this.getMatterRootPagePath(coverPageInfo.url, mode),
+      //   `<p>{{template.ShowOrg()}}</p><p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic-guide</a></p>`,
+      //   {
+      //     title: `${mode} Matter`,
+      //     edittime: 'now',
+      //     ...(overwriteExisting ? {} : { abort: 'exists' }),
+      //   },
+      // );
 
       this.logger.debug(
         `Created ${mode} matter page for book ${coverPageInfo.pageID.lib}/${coverPageInfo.pageID.pageNum}`,
@@ -247,15 +257,15 @@ export class BookService {
       //   }),
       // );
 
-      mode === 'Front'
-        ? await this.createDefaultFrontMatter({
-            overwriteExisting,
-            coverPageInfo,
-          })
-        : await this.createDefaultBackMatter({
-            overwriteExisting,
-            coverPageInfo,
-          });
+      // mode === 'Front'
+      //   ? await this.createDefaultFrontMatter({
+      //       overwriteExisting,
+      //       coverPageInfo,
+      //     })
+      //   : await this.createDefaultBackMatter({
+      //       overwriteExisting,
+      //       coverPageInfo,
+      //     });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       this.logger.error(`Error creating ${mode} matter: ${errorMsg}`);
@@ -394,61 +404,75 @@ export class BookService {
       const lib = new LibraryService({ lib: coverPageID.lib });
       await lib.init();
 
-      const bookContents: BookPageInfoWithContent[] = [];
       const htmlCacheDir = Environment.getOptional('HTML_CACHE_DIR');
 
       if (htmlCacheDir) {
         this.logger.withMetadata({ htmlCacheDir }).info('HTML caching enabled — cache hits will skip remote API calls');
       }
 
-      // TODO: Add error handling and retries for individual page content retrieval, so that a failure to retrieve one page doesn't cause the entire process to fail.
-      for (const page of pages) {
-        const cacheKey = htmlCacheDir
-          ? resolve(join(htmlCacheDir, `${page.pageID.lib}-${page.pageID.pageNum}.json`))
-          : null;
+      const concurrency =
+        parseInt(Environment.getOptional('CONTENT_FETCH_CONCURRENCY', String(DEFAULT_CONTENT_FETCH_CONCURRENCY)), 10) ||
+        DEFAULT_CONTENT_FETCH_CONCURRENCY;
+      const limit = pLimit(concurrency);
+      this.logger.withMetadata({ concurrency, totalPages: pages.length }).info('Fetching page contents in parallel');
 
-        let pageContent: { head?: string; body?: string | string[]; tail?: string | string[] } | null = null;
+      // Fetch all pages concurrently (bounded by `limit`).
+      // CXOneRateLimiter is token-bucket based and safe to call concurrently — it will
+      // internally serialize callers that exceed the rate budget.
+      const bookContents = await Promise.all(
+        pages.map((page) =>
+          limit(async () => {
+            const cacheKey = htmlCacheDir
+              ? resolve(join(htmlCacheDir, `${page.pageID.lib}-${page.pageID.pageNum}.json`))
+              : null;
 
-        if (cacheKey) {
-          try {
-            const cached = await fs.readFile(cacheKey, 'utf-8');
-            pageContent = JSON.parse(cached);
-            this.logger.debug(`Cache hit for page ${page.pageID.lib}/${page.pageID.pageNum}`);
-          } catch {
-            // Cache miss — fall through to API
-          }
-        }
+            let pageContent: { head?: string; body?: string | string[]; tail?: string | string[] } | null = null;
 
-        if (!pageContent) {
-          this.logger.debug(`Retrieving content for page ${page.pageID.lib}/${page.pageID.pageNum} (${page.url})...`);
-          pageContent = await lib.api.pages.getPageContents(page.pageID.pageNum, {
-            mode: 'view',
-            format: 'html',
-          });
-
-          if (cacheKey) {
-            try {
-              await fs.mkdir(htmlCacheDir!, { recursive: true });
-              await fs.writeFile(cacheKey, JSON.stringify(pageContent));
-              this.logger.debug(`Cached page content for ${page.pageID.lib}/${page.pageID.pageNum}`);
-            } catch (err) {
-              this.logger.withMetadata({ err, cacheKey }).warn('Failed to write page content to HTML cache');
+            if (cacheKey) {
+              try {
+                const cached = await fs.readFile(cacheKey, 'utf-8');
+                pageContent = JSON.parse(cached);
+                this.logger.debug(`Cache hit for page ${page.pageID.lib}/${page.pageID.pageNum}`);
+              } catch {
+                // Cache miss — fall through to API
+              }
             }
-          }
 
-          // Delay between requests to avoid rate limits (only when hitting the API)
-          await CXOneRateLimiter.waitUntilAPIAvailable(2);
-        }
+            if (!pageContent) {
+              this.logger.debug(
+                `Retrieving content for page ${page.pageID.lib}/${page.pageID.pageNum} (${page.url})...`,
+              );
 
-        bookContents.push({
-          ...page,
-          head: pageContent.head || '',
-          body: Array.isArray(pageContent.body)
-            ? pageContent.body.filter((item): item is string => typeof item === 'string')
-            : [pageContent.body || ''],
-          tail: Array.isArray(pageContent.tail) ? pageContent.tail.join('') : pageContent.tail || '',
-        });
-      }
+              // Consume rate-limit tokens before hitting the API
+              await CXOneRateLimiter.waitUntilAPIAvailable(2);
+
+              pageContent = await lib.api.pages.getPageContents(page.pageID.pageNum, {
+                mode: 'view',
+                format: 'html',
+              });
+
+              if (cacheKey) {
+                try {
+                  await fs.mkdir(htmlCacheDir!, { recursive: true });
+                  await fs.writeFile(cacheKey, JSON.stringify(pageContent));
+                  this.logger.debug(`Cached page content for ${page.pageID.lib}/${page.pageID.pageNum}`);
+                } catch (err) {
+                  this.logger.withMetadata({ err, cacheKey }).warn('Failed to write page content to HTML cache');
+                }
+              }
+            }
+
+            return {
+              ...page,
+              head: pageContent.head || '',
+              body: Array.isArray(pageContent.body)
+                ? pageContent.body.filter((item): item is string => typeof item === 'string')
+                : [pageContent.body || ''],
+              tail: Array.isArray(pageContent.tail) ? pageContent.tail.join('') : pageContent.tail || '',
+            } satisfies BookPageInfoWithContent;
+          }),
+        ),
+      );
 
       return bookContents;
     } catch (error) {
