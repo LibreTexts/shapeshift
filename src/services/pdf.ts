@@ -414,7 +414,9 @@ export class PDFService {
   }) {
     try {
       // Use pre-rendered math if available (Phase 1 pre-render), otherwise render now.
-      const renderedBodyHTML = preRenderedBodyHTML ?? (await prerenderMath(pageBodyHTML, pageInfo));
+      const renderedBodyHTML = this.sanitizeImagesForPDF(
+        preRenderedBodyHTML ?? (await prerenderMath(pageBodyHTML, pageInfo)),
+      );
       const cleanedHeadHTML = stripMathJaxScripts(pageHeadHTML);
 
       const headerHTML = generatePDFHeader(ImageConstants['default']);
@@ -698,6 +700,31 @@ ${pageTailHTML}
     );
     const inner = innerRaw.join('');
     return `<ul class='libre-print-list' ${twoColumn ? 'style="column-count: 2;"' : ''}>${inner}</ul>`;
+  }
+
+  /**
+   * Strips HTML width/height attributes and inline width/height style declarations from <img>
+   * elements so that the CSS max-width rule in pdf-page.css can take effect. CMS content often
+   * embeds fixed pixel dimensions that would otherwise override the stylesheet constraint.
+   */
+  private sanitizeImagesForPDF(html: string): string {
+    const $ = cheerio.load(html, { xmlMode: false });
+    $('img').each((_, el) => {
+      const $el = $(el);
+      $el.removeAttr('width');
+      $el.removeAttr('height');
+      const style = $el.attr('style') ?? '';
+      const cleaned = style
+        .split(';')
+        .filter((s) => !/^\s*(width|height)\s*:/.test(s))
+        .join(';');
+      if (cleaned.trim()) {
+        $el.attr('style', cleaned);
+      } else {
+        $el.removeAttr('style');
+      }
+    });
+    return $('body').html() ?? html;
   }
 
   private processDirectoryPage({
@@ -1195,7 +1222,10 @@ ${pageTailHTML}
       }
 
       const packedBodyHTML = rendered
-        .map(({ task: t, body }) => `<div class="packed-page" data-page-id="${t.pageID}">\n${body}\n</div>`)
+        .map(
+          ({ task: t, body }) =>
+            `<div class="packed-page" data-page-id="${t.pageID}">\n${this.sanitizeImagesForPDF(body)}\n</div>`,
+        )
         .join('\n');
 
       // Use the first task's pageInfo for header/footer context (chapter guide page).
