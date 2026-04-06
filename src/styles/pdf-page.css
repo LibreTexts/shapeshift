@@ -61,6 +61,17 @@ mjx-container svg {
   height: auto;
 }
 
+/* Constrain all content images to the printable column width */
+img,
+picture > img {
+  max-width: 100%;
+  height: auto;
+}
+
+figure {
+  max-width: 100%;
+}
+
 /* Packed-page separator: small visual break between logically distinct content pages
    that have been merged into a single Prince invocation for whitespace efficiency */
 .packed-page + .packed-page {
