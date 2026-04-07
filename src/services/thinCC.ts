@@ -1,23 +1,34 @@
 import { log as logService } from '../lib/log';
 import { LogLayer } from 'loglayer';
-import { BookPageInfo } from '../types/book';
-import JSZip from 'jszip';
+import { BookPageInfo, BookPages } from '../types/book';
 import { resolve } from 'node:path';
 import fs from 'node:fs/promises';
 import formatXml from 'xml-formatter';
 import { Environment } from '../lib/environment';
 import PageID from '../util/pageID';
+import { PassThrough } from 'node:stream';
+import { createWriteStream } from 'node:fs';
+import Archiver from 'archiver';
+import { Upload } from '@aws-sdk/lib-storage';
+import { StorageService } from '../lib/storageService';
 
 type ThinCCTopicPageData = { title: string; url: string };
 
 type ThinCCPageData = { title: string; resources: ThinCCTopicPageData[] };
 
+type ThinCCXMLEntry = {
+  data: string;
+  path: string;
+};
+
 export class ThinCCService {
   private readonly logger: LogLayer;
   private readonly logName = 'ThinCCService';
+  private readonly storageService: StorageService;
 
   constructor() {
     this.logger = logService.child().withContext({ logSource: this.logName });
+    this.storageService = new StorageService();
   }
 
   private getTopicPages(pageInfo: BookPageInfo) {
@@ -79,20 +90,23 @@ export class ThinCCService {
     });
   }
 
-  public async convertBook(pageInfo: BookPageInfo) {
-    this.logger.withMetadata({ url: pageInfo.url }).info('Starting ThinCC conversion.');
-    const pages = this.getPages(pageInfo);
-    const { org, resources, resourceXMLEntries } = this.generateOrgAndResources(pages);
-    const xml = this.generateXML({ org, pageInfo, resources });
-    const zip = new JSZip();
-    resourceXMLEntries.forEach((x) => zip.file(x.path, x.data));
-    zip.file('imsmanifest.xml', xml);
-    const result = await zip.generateAsync({ type: 'nodebuffer' });
-    const outPath = await this.generateFinalOutputFileName({
-      bookID: pageInfo.pageID,
+  public async convertBook(pagesInput: BookPages, opt?: { useLocalStorage?: boolean }) {
+    if (!pagesInput?.flat?.length) return null;
+    const { flat: pagesFlat, tree: pagesTree } = pagesInput;
+    const coverPage = pagesFlat[0];
+    const bookID = coverPage.pageID;
+
+    this.logger.withMetadata({ bookID }).info('Starting ThinCC conversion.');
+    const pages = this.getPages(pagesTree);
+    const { org, resources, resourceXMLEntries: xmlEntries } = this.generateOrgAndResources(pages);
+    const manifest = this.generateXML({ org, pageInfo: coverPage, resources });
+    const outPath = await this.writeFinalOutputFile({
+      bookID,
+      manifest,
+      xmlEntries,
+      useLocalStorage: opt?.useLocalStorage,
     });
-    await fs.writeFile(outPath, result);
-    this.logger.withMetadata({ url: pageInfo.url }).info('Finished ThinCC conversion.');
+    this.logger.withMetadata({ bookID }).info('Finished ThinCC conversion.');
     return outPath;
   }
 
@@ -105,7 +119,7 @@ export class ThinCCService {
   }) {
     const tmpDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
     const dirPath = resolve(`${tmpDir}/out/${bookID.lib}-${bookID.pageNum}`);
-    const fileName = outFileNameOverride ?? 'LibreText';
+    const fileName = outFileNameOverride ?? bookID.toString();
     const filePath = `${dirPath}/${fileName}.imscc`;
     await fs.mkdir(dirPath, { recursive: true });
     return filePath;
@@ -119,7 +133,7 @@ export class ThinCCService {
       counter++;
       return result;
     };
-    const resourceXMLEntries: { data: string; path: string }[] = [];
+    const resourceXMLEntries: ThinCCXMLEntry[] = [];
 
     const { org, resources } = pages.reduce(
       (acc, curr) => {
@@ -188,5 +202,62 @@ export class ThinCCService {
       </manifest>
     `;
     return formatXml(xml);
+  }
+
+  private async writeFinalOutputFile({
+    bookID,
+    manifest,
+    useLocalStorage,
+    xmlEntries,
+  }: {
+    bookID: PageID;
+    manifest: string;
+    useLocalStorage?: boolean;
+    xmlEntries: ThinCCXMLEntry[];
+  }) {
+    const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+    const baseDirPath = `${baseDir}/thincc/${bookID.toString()}`;
+    const outputPath = `${baseDirPath}/${bookID.toString()}.imscc`;
+    if (useLocalStorage) await fs.mkdir(baseDirPath, { recursive: true });
+
+    const output = !useLocalStorage ? new PassThrough() : createWriteStream(outputPath);
+    output.on('close', () => {
+      this.logger.withMetadata({ bookID }).info('ThinCC output write stream closed.');
+    });
+    const archive = Archiver('zip', { zlib: { level: 9 } });
+    archive.on('error', (err) => {
+      this.logger.withError(err).error('Encounted an error preparing final ThinCC output.');
+      output.destroy(err);
+    });
+    archive.pipe(output);
+
+    let uploader: Upload | undefined;
+    if (!useLocalStorage) {
+      uploader = this.storageService.createStreamUploader({
+        contentType: 'application/zip',
+        key: 'test',
+        stream: output as PassThrough,
+      });
+    }
+
+    // write files
+    archive.append(Buffer.from(manifest, 'utf-8'), { name: 'imsmanifest.xml' });
+    xmlEntries.forEach((item) => {
+      archive.append(Buffer.from(item.data, 'utf-8'), { name: item.path });
+    });
+
+    if (!useLocalStorage) {
+      // WARN: don't actually await here: can cause deadlock with storage service streaming upload
+      archive.finalize();
+    } else {
+      await archive.finalize();
+    }
+    this.logger.withMetadata({ bookID }).info('Uploading ThinCC to storage service...');
+    if (!useLocalStorage) {
+      await uploader?.done();
+    }
+    this.logger.withMetadata({ bookID }).info('Finished upload ThinCC to storage service.');
+    this.logger.withMetadata({ bookID }).info('Finished writing ThinCC output.');
+    return outputPath;
   }
 }

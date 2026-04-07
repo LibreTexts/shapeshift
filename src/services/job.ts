@@ -4,9 +4,11 @@ import { Environment } from '../lib/environment';
 import { PDFService } from './pdf';
 import { Job } from '../model';
 import { CreationAttributes } from 'sequelize';
-// import { ThinCCService } from './thinCC';
+import { ThinCCService } from './thinCC';
 import { log } from '../lib/log';
 import { EPUBService } from './epub';
+
+export type JobOutputFormat = 'EPUB' | 'PDF' | 'ThinCC';
 
 export type JobQueueMessageRawBody = {
   jobId: string;
@@ -22,9 +24,11 @@ export type JobQueueMessage = {
 export type JobStatus = 'created' | 'inprogress' | 'finished' | 'failed';
 
 export class JobService {
+  private readonly allFormats: JobOutputFormat[];
   private readonly queueClient: QueueClient;
 
   constructor() {
+    this.allFormats = ['EPUB', 'PDF', 'ThinCC'];
     this.queueClient = new QueueClient();
   }
 
@@ -61,6 +65,12 @@ export class JobService {
           Environment.getSystemEnvironment() === 'DEVELOPMENT' ? 'true' : 'false',
         ) === 'true';
       log.debug(`USE_LOCAL_STORAGE is set to ${useLocalStorage}`);
+
+      const enabledFormats =
+        Environment.getSystemEnvironment() !== 'DEVELOPMENT'
+          ? this.allFormats
+          : (Environment.getOptional('ENABLED_FORMATS', this.allFormats.join(',')).split(',') as JobOutputFormat[]);
+      log.debug(`ENABLED_FORMATS is set to ${enabledFormats.join(', ')}`);
 
       try {
         const bookModel = new BookService();
@@ -107,25 +117,34 @@ export class JobService {
         // <generate pdf>
         const pdfService = new PDFService(bookID, { useLocalStorage });
         let pdfPath: string | null = null;
-        try {
-          pdfPath = await pdfService.convertBook(pages);
-          log.info(`PDF generated at path: ${pdfPath}`);
-        } catch (pdfError) {
-          const errorMsg = pdfError instanceof Error ? pdfError.message : String(pdfError);
-          log.error(`PDF conversion failed: ${errorMsg}`);
-          await pdfService.cleanupWorkdir();
-          throw pdfError; // re-throw so the outer catch marks the job as failed
+        if (enabledFormats.includes('PDF')) {
+          try {
+            pdfPath = await pdfService.convertBook(pages);
+            log.info(`PDF generated at path: ${pdfPath}`);
+          } catch (pdfError) {
+            const errorMsg = pdfError instanceof Error ? pdfError.message : String(pdfError);
+            log.error(`PDF conversion failed: ${errorMsg}`);
+            await pdfService.cleanupWorkdir();
+            throw pdfError; // re-throw so the outer catch marks the job as failed
+          }
         }
         // </generate pdf>
 
         // <generate epub>
-        const epubService = new EPUBService();
-        const epubPath = await epubService.convertBook(pages, { useLocalStorage });
-        if (epubPath) log.info(`EPUB generated at path: ${epubPath}`);
+        if (enabledFormats.includes('EPUB')) {
+          const epubService = new EPUBService();
+          const epubPath = await epubService.convertBook(pages, { useLocalStorage });
+          if (epubPath) log.info(`EPUB generated at path: ${epubPath}`);
+        }
         // </generate epub>
 
-        // const thinCCService = new ThinCCService();
-        // await thinCCService.convertBook(pages);
+        // <generate thincc>
+        if (enabledFormats.includes('ThinCC')) {
+          const thinCCService = new ThinCCService();
+          const thinCCPath = await thinCCService.convertBook(pages, { useLocalStorage });
+          if (thinCCPath) log.info(`ThinCC generated at path: ${thinCCPath}`);
+        }
+        // </generate thincc>
 
         await this.finish(jobMsg);
       } catch (error) {
