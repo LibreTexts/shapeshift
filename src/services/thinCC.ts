@@ -1,7 +1,6 @@
 import { log as logService } from '../lib/log';
 import { LogLayer } from 'loglayer';
 import { BookPageInfo, BookPages } from '../types/book';
-import { resolve } from 'node:path';
 import fs from 'node:fs/promises';
 import formatXml from 'xml-formatter';
 import { Environment } from '../lib/environment';
@@ -108,21 +107,6 @@ export class ThinCCService {
     });
     this.logger.withMetadata({ bookID }).info('Finished ThinCC conversion.');
     return outPath;
-  }
-
-  private async generateFinalOutputFileName({
-    bookID,
-    outFileNameOverride,
-  }: {
-    bookID: PageID;
-    outFileNameOverride?: string;
-  }) {
-    const tmpDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
-    const dirPath = resolve(`${tmpDir}/out/${bookID.lib}-${bookID.pageNum}`);
-    const fileName = outFileNameOverride ?? bookID.toString();
-    const filePath = `${dirPath}/${fileName}.imscc`;
-    await fs.mkdir(dirPath, { recursive: true });
-    return filePath;
   }
 
   private generateOrgAndResources(pages: ThinCCPageData[]) {
