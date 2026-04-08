@@ -61,11 +61,13 @@ mjx-container svg {
   height: auto;
 }
 
-/* Constrain all content images to the printable column width */
+/* Constrain all content images to the printable column width and a sensible max height */
 img,
 picture > img {
   max-width: 100%;
+  max-height: 3in; /* Max height can be adjusted here as needed */
   height: auto;
+  width: auto;
 }
 
 figure {
