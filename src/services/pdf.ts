@@ -33,6 +33,7 @@ import PageID from '../util/pageID';
 import * as cheerio from 'cheerio';
 import { PDFCoverOpts, PDFCoverType } from '../types/pdf';
 import { prerenderMath, stripMathJaxScripts, extractPageNumberPrefix } from '../util/mathjax';
+import { stripBlocklistedScripts } from '../util/htmlFilters';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -485,7 +486,7 @@ export class PDFService {
       const renderedBodyHTML = this.sanitizeImagesForPDF(
         preRenderedBodyHTML ?? (await prerenderMath(pageBodyHTML, pageInfo)),
       );
-      const cleanedHeadHTML = stripMathJaxScripts(pageHeadHTML);
+      const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(pageHeadHTML));
 
       const headerHTML = generatePDFHeader(ImageConstants['default']);
       const sectionNum = extractPageNumberPrefix(pageInfo.title).replace(/\.$/, '');
@@ -513,7 +514,7 @@ export class PDFService {
 ${headerHTML}
 ${footerHTML}
 ${renderedBodyHTML}
-${pageTailHTML}
+${stripBlocklistedScripts(pageTailHTML)}
 </body>
 </html>
       `.trim();
@@ -1417,7 +1418,7 @@ ${pageTailHTML}
         const renderedBody = this.sanitizeImagesForPDF(
           preRendered ?? (await prerenderMath(t.pageInfo.body.join(''), t.pageInfo)),
         );
-        const cleanedHeadHTML = stripMathJaxScripts(t.pageInfo.head);
+        const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(t.pageInfo.head));
         const headerHTML = generatePDFHeader(ImageConstants['default']);
         const sectionNum = extractPageNumberPrefix(t.pageInfo.title).replace(/\.$/, '');
         const footerHTML = generatePDFFooter({ sectionNum });
@@ -1444,7 +1445,7 @@ ${pageTailHTML}
 ${headerHTML}
 ${footerHTML}
 ${renderedBody}
-${t.pageInfo.tail ?? ''}
+${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
 </body>
 </html>
         `.trim();
