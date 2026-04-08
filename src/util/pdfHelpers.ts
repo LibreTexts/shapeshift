@@ -3,7 +3,6 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-import { LicenseInfo } from './licensing';
 import { BookPageInfo } from '../types/book';
 import { PDFCoverOpts, PDFCoverType, PDFCoverDimensions } from '../types/pdf';
 
@@ -182,43 +181,15 @@ export function generatePDFHeader(headerImg: string) {
  * Must be placed in the <body> — Prince's `position: running(pageFooter)` (in pdf-page.css)
  * removes it from flow and places it in the @page @bottom margin box.
  *
- * The `--pdf-main-color` CSS custom property must be set in the document <head> for theming.
+ * Shows the PDF page number centered at the bottom, optionally followed by the section
+ * numeration extracted from the page title (e.g., "41 | 2.3.2").
  */
-export function generatePDFFooter({
-  currentPage,
-  pageLicense,
-  prefix,
-}: {
-  currentPage: BookPageInfo | null;
-  mainColor: string;
-  pageLicense: LicenseInfo | null;
-  prefix: string;
-}) {
-  let programLink = '';
-  if (currentPage?.printInfo) {
-    const { attributionPrefix, programName, programURL } = currentPage.printInfo;
-    if (attributionPrefix && programName && programURL) {
-      programLink = `<a href="${programURL}" rel="noreferrer">${attributionPrefix} ${programName}</a>`;
-    }
-  }
+export function generatePDFFooter({ sectionNum }: { sectionNum: string }) {
+  const sectionSuffix = sectionNum ? ` | ${sectionNum}` : '';
   return `
     <div id="libre-pdf-footer"><div id="libreFooter">
-      <div class="footer-left">
-          <a href="${pageLicense ? pageLicense.link : ''}">${pageLicense ? pageLicense.label : ''}</a>
-          ${programLink ? `<div>${programLink}</div>` : ''}
-      </div>
-      <div class="footer-center">
-            
-            <div class="footer-pagenum">
-              ${prefix}<div class="pageNumber"></div>
-            </div>
-      </div>
-      <div class="footer-right">
-          ${
-            currentPage
-              ? `<a href="https://${currentPage.subdomain}.libretexts.org/@go/page/${currentPage.pageID.pageNum}?pdf">https://${currentPage.subdomain}.libretexts.org/@go/page/${currentPage.pageID.pageNum}</a>`
-              : ''
-          }
+      <div class="footer-pagenum">
+        <div class="pageNumber"></div>${sectionSuffix}
       </div>
     </div></div>
   `;
