@@ -789,7 +789,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       const style = $el.attr('style') ?? '';
       const cleaned = style
         .split(';')
-        .filter((s) => !/^\s*(width|height)\s*:/.test(s))
+        .filter((s) => !/^\s*(max-)?(width|height)\s*:/.test(s))
         .join(';');
       if (cleaned.trim()) {
         $el.attr('style', cleaned);
