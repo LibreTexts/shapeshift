@@ -32,7 +32,7 @@ import PageID from '../util/pageID';
 // import { PDF_COVER_WIDTHS } from '../lib/constants';
 import * as cheerio from 'cheerio';
 import { PDFCoverOpts, PDFCoverType } from '../types/pdf';
-import { prerenderMath, stripMathJaxScripts } from '../util/mathjax';
+import { prerenderMath, stripMathJaxScripts, extractPageNumberPrefix } from '../util/mathjax';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -69,9 +69,11 @@ type ConversionTask = {
 
 /**
  * A group of ConversionTasks to be rendered in a single Prince invocation.
- * Content pages that share a chapter ancestor are packed into one group to eliminate
- * excess whitespace where a page ends with only a few lines before the next page begins.
- * Front/back matter, TOC, and Index tasks are always solo groups (isPacked: false).
+ * Content pages that share a chapter ancestor are grouped together so that a single
+ * Prince invocation renders them all (multi-file input), reducing subprocess overhead.
+ * Front/back matter, TOC, and Index tasks are always single-task groups.
+ *
+ * isPacked is kept for commented-out packing code below; all live groups use isPacked: false.
  */
 type PageGroup = {
   sortKey: string;
@@ -422,12 +424,8 @@ export class PDFService {
       const cleanedHeadHTML = stripMathJaxScripts(pageHeadHTML);
 
       const headerHTML = generatePDFHeader(ImageConstants['default']);
-      const footerHTML = generatePDFFooter({
-        currentPage: pageInfo,
-        mainColor,
-        pageLicense: pageInfo.license,
-        prefix: '',
-      });
+      const sectionNum = extractPageNumberPrefix(pageInfo.title).replace(/\.$/, '');
+      const footerHTML = generatePDFFooter({ sectionNum });
 
       // Wrap the page content in a complete HTML document with header/footer running elements.
       // Prince's running element CSS (in pdf-page.css) pulls #libre-pdf-header and
@@ -474,7 +472,7 @@ ${pageTailHTML}
    * @param inputPath - path to the input HTML file to be converted
    * @param outputPath - desired path for the output PDF file
    */
-  private async runPrinceConversion(inputPath: string, outputPath: string) {
+  private async runPrinceConversion(inputPath: string | string[], outputPath: string) {
     try {
       const prince = new Prince({
         binary: Environment.getOptional('PRINCE_BINARY_PATH', '') || undefined,
@@ -1167,14 +1165,14 @@ ${pageTailHTML}
   }
 
   /**
-   * Groups a sorted ConversionTask array into PageGroups for chapter-level packing.
+   * Groups a sorted ConversionTask array into PageGroups for chapter-level multi-file rendering.
    *
    * Content pages that share the same chapter ancestor (direct child of the root tree node)
-   * are merged into a single PageGroup and passed to Prince as one HTML document, eliminating
-   * the excess whitespace that accumulates when a page ends after only a few lines.
+   * are grouped into a single PageGroup and passed to Prince as multiple HTML files in one
+   * invocation, reducing Prince subprocess overhead without combining HTML content.
    *
-   * Front/back matter pages, TOC tasks, and Index tasks are always emitted as solo groups
-   * (isPacked: false) to preserve their specialized per-page layouts.
+   * Front/back matter pages, TOC tasks, Index tasks, and orphan pages are always emitted
+   * as single-task groups to preserve their specialized per-page layouts.
    *
    * The output array preserves the original sortKey ordering.
    */
@@ -1208,7 +1206,9 @@ ${pageTailHTML}
       }
     }
 
-    // Build PageGroup objects for chapter buckets, splitting any that exceed MAX_PAGES_PER_GROUP
+    // Build PageGroup objects for chapter buckets.
+    // Split any that exceed MAX_PAGES_PER_GROUP to bound Prince memory use per invocation.
+    // Each group uses isPacked: false — pages are rendered as separate HTML files, not combined.
     const chapterGroups: PageGroup[] = [];
     for (const [, bucketTasks] of chapterBuckets) {
       for (let offset = 0; offset < bucketTasks.length; offset += MAX_PAGES_PER_GROUP) {
@@ -1218,10 +1218,29 @@ ${pageTailHTML}
           sortKey: first.sortKey,
           fileName: first.fileName,
           tasks: slice,
-          isPacked: true,
+          isPacked: false,
         });
       }
     }
+
+    // ── PACKING DISABLED ────────────────────────────────────────────────────────────────────────
+    // The original packing approach combined all page HTML bodies into a single document per
+    // chapter, which reduced whitespace but caused per-page header/footer styling issues.
+    // Kept here for reference in case packing is re-evaluated.
+    //
+    // for (const [, bucketTasks] of chapterBuckets) {
+    //   for (let offset = 0; offset < bucketTasks.length; offset += MAX_PAGES_PER_GROUP) {
+    //     const slice = bucketTasks.slice(offset, offset + MAX_PAGES_PER_GROUP);
+    //     const first = slice[0];
+    //     chapterGroups.push({
+    //       sortKey: first.sortKey,
+    //       fileName: first.fileName,
+    //       tasks: slice,
+    //       isPacked: true,   // ← combined HTML packing
+    //     });
+    //   }
+    // }
+    // ────────────────────────────────────────────────────────────────────────────────────────────
 
     // Build PageGroup objects for solo tasks
     const soloPageGroups: PageGroup[] = soloGroups.map(({ task }) => ({
@@ -1240,13 +1259,13 @@ ${pageTailHTML}
   /**
    * Converts a PageGroup to a PDF file on disk.
    *
-   * Solo groups (front/back matter, TOC, Index, or single-page chapters) delegate to
-   * the existing per-task conversion methods. Packed groups (multiple content pages from
-   * the same chapter) are pre-rendered sequentially through MathJax, concatenated into
-   * a single HTML document, and passed to Prince in one invocation.
-   */
-  /**
-   * Converts a PageGroup to a PDF file on disk.
+   * Single-task groups (front/back matter, TOC, Index, Glossary, orphan pages) delegate
+   * to the existing per-task conversion methods.
+   *
+   * Multi-task chapter groups use a multi-file Prince invocation: each page is rendered
+   * to its own HTML file (with correct per-page header/footer), then all files are passed
+   * to Prince in one invocation. This preserves per-page styling while reducing subprocess
+   * overhead compared to one invocation per page.
    *
    * @param prerendered - Pre-rendered math results from Phase 1, keyed per task.
    *   When provided, math rendering is skipped inside this method.
@@ -1257,8 +1276,8 @@ ${pageTailHTML}
   ): Promise<string | null> {
     const task = group.tasks[0];
 
-    // Solo path — dispatch to existing single-task methods
-    if (!group.isPacked || group.tasks.length === 1) {
+    // Single-task path — dispatch to existing per-task conversion methods
+    if (group.tasks.length === 1) {
       if (task.type === 'toc') {
         return this.generateTableOfContents({
           pageInfo: task.pageInfo,
@@ -1289,44 +1308,26 @@ ${pageTailHTML}
       }
     }
 
-    // Packed path — merge multiple content pages into one Prince invocation
+    // Multi-file path — one HTML file per page, one Prince invocation for the chapter group.
+    // Each page gets its own header/footer (correct per-page section numbers). Prince processes
+    // multiple input files as a single document flow, updating running elements as it goes.
+    const tempPaths: string[] = [];
     try {
       this.logger
         .withMetadata({ sortKey: group.sortKey, pageCount: group.tasks.length })
-        .info('Converting packed chapter group');
+        .info('Converting chapter group (multi-file)');
 
-      // Use pre-rendered math from Phase 1 when available; fall back to inline rendering.
-      let rendered: Array<{ task: ConversionTask; body: string }>;
-      if (prerendered) {
-        rendered = prerendered.map((p) => ({ task: p.task, body: p.renderedBody }));
-      } else {
-        // Fallback: render sequentially (should only occur if called outside the normal convertBook flow)
-        rendered = [];
-        for (const t of group.tasks) {
-          rendered.push({ task: t, body: await prerenderMath(t.pageInfo.body.join(''), t.pageInfo) });
-        }
-      }
+      for (const t of group.tasks) {
+        const preRendered = prerendered?.find((p) => p.task._id === t._id)?.renderedBody;
+        const renderedBody = this.sanitizeImagesForPDF(
+          preRendered ?? (await prerenderMath(t.pageInfo.body.join(''), t.pageInfo)),
+        );
+        const cleanedHeadHTML = stripMathJaxScripts(t.pageInfo.head);
+        const headerHTML = generatePDFHeader(ImageConstants['default']);
+        const sectionNum = extractPageNumberPrefix(t.pageInfo.title).replace(/\.$/, '');
+        const footerHTML = generatePDFFooter({ sectionNum });
 
-      const packedBodyHTML = rendered
-        .map(
-          ({ task: t, body }) =>
-            `<div class="packed-page" data-page-id="${t.pageID}">\n${this.sanitizeImagesForPDF(body)}\n</div>`,
-        )
-        .join('\n');
-
-      // Use the first task's pageInfo for header/footer context (chapter guide page).
-      // The footer URL will point to the chapter's top-level page rather than individual sections.
-      const firstTaskInfo = task.pageInfo;
-      const cleanedHeadHTML = stripMathJaxScripts(firstTaskInfo.head);
-      const headerHTML = generatePDFHeader(ImageConstants['default']);
-      const footerHTML = generatePDFFooter({
-        currentPage: firstTaskInfo,
-        mainColor: '#127BC4',
-        pageLicense: firstTaskInfo.license,
-        prefix: '',
-      });
-
-      const wrappedHTML = `
+        const wrappedHTML = `
 <!DOCTYPE html>
 <html>
 <head>
@@ -1341,21 +1342,97 @@ ${pageTailHTML}
 <body>
 ${headerHTML}
 ${footerHTML}
-${packedBodyHTML}
+${renderedBody}
+${t.pageInfo.tail ?? ''}
 </body>
 </html>
-      `.trim();
+        `.trim();
 
-      const outputPath = await this.generatePageOutputFilePath(firstTaskInfo.pageID, group.sortKey);
-      await this.withTempFile(wrappedHTML, (inputPath) => this.runPrinceConversion(inputPath, outputPath));
+        tempPaths.push(await this._createTempFile(wrappedHTML));
+      }
 
-      this.logger.withMetadata({ outputPath, pageCount: group.tasks.length }).info('Converted packed chapter group.');
+      const outputPath = await this.generatePageOutputFilePath(task.pageID, group.sortKey);
+      await this.runPrinceConversion(tempPaths, outputPath);
+
+      this.logger
+        .withMetadata({ outputPath, pageCount: group.tasks.length })
+        .info('Converted chapter group (multi-file).');
       return outputPath;
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
-      this.logger.withMetadata({ error, errorMessage, group: group.fileName }).error('Packed group conversion failed');
+      this.logger
+        .withMetadata({ error, errorMessage, group: group.fileName })
+        .error('Multi-file chapter group conversion failed');
       throw error;
+    } finally {
+      await Promise.all(tempPaths.map((p) => this._deleteTempFile(p).catch(() => {})));
     }
+
+    // ── PACKING DISABLED ────────────────────────────────────────────────────────────────────────
+    // The original packing approach combined all page HTML bodies into a single HTML document
+    // per chapter group, which eliminated excess whitespace but caused per-page header/footer
+    // styling issues (all pages in a group shared the first page's section number in the footer).
+    // Kept here for reference in case packing is re-evaluated.
+    //
+    // try {
+    //   this.logger
+    //     .withMetadata({ sortKey: group.sortKey, pageCount: group.tasks.length })
+    //     .info('Converting packed chapter group');
+    //
+    //   let rendered: Array<{ task: ConversionTask; body: string }>;
+    //   if (prerendered) {
+    //     rendered = prerendered.map((p) => ({ task: p.task, body: p.renderedBody }));
+    //   } else {
+    //     rendered = [];
+    //     for (const t of group.tasks) {
+    //       rendered.push({ task: t, body: await prerenderMath(t.pageInfo.body.join(''), t.pageInfo) });
+    //     }
+    //   }
+    //
+    //   const packedBodyHTML = rendered
+    //     .map(
+    //       ({ task: t, body }) =>
+    //         `<div class="packed-page" data-page-id="${t.pageID}">\n${this.sanitizeImagesForPDF(body)}\n</div>`,
+    //     )
+    //     .join('\n');
+    //
+    //   const firstTaskInfo = task.pageInfo;
+    //   const cleanedHeadHTML = stripMathJaxScripts(firstTaskInfo.head);
+    //   const headerHTML = generatePDFHeader(ImageConstants['default']);
+    //   const sectionNum = extractPageNumberPrefix(firstTaskInfo.title).replace(/\.$/, '');
+    //   const footerHTML = generatePDFFooter({ sectionNum });
+    //
+    //   const wrappedHTML = `
+    // <!DOCTYPE html>
+    // <html>
+    // <head>
+    //   <meta charset="UTF-8">
+    //   <style>${pdfFontCSS}</style>
+    //   <style>${pdfPageCSS}</style>
+    //   <style>${pdfHeaderCSS}</style>
+    //   <style>:root { --pdf-main-color: #127BC4; }</style>
+    //   <style>${pdfFooterCSS}</style>
+    //   ${cleanedHeadHTML}
+    // </head>
+    // <body>
+    // ${headerHTML}
+    // ${footerHTML}
+    // ${packedBodyHTML}
+    // </body>
+    // </html>
+    //   `.trim();
+    //
+    //   const outputPath = await this.generatePageOutputFilePath(firstTaskInfo.pageID, group.sortKey);
+    //   await this.withTempFile(wrappedHTML, (inputPath) => this.runPrinceConversion(inputPath, outputPath));
+    //
+    //   this.logger.withMetadata({ outputPath, pageCount: group.tasks.length }).info('Converted packed chapter group.');
+    //   return outputPath;
+    // } catch (error) {
+    //   const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
+    //   this.logger.withMetadata({ error, errorMessage, group: group.fileName }).error('Packed group conversion failed');
+    //   throw error;
+    // }
+    // ────────────────────────────────────────────────────────────────────────────────────────────
   }
 
   /**
