@@ -292,8 +292,7 @@ export class BookService {
           {
             title: `${mode} Matter`,
             edittime: 'now',
-            abort: 'never', // TODO: decide if we want to always overwrite
-            // ...(overwriteExisting ? {} : { abort: 'exists' }),
+            ...(overwriteExisting ? {} : { abort: 'exists' }),
           },
         );
         this.logger.debug(`Created ${mode} matter page for book ${coverPageInfo.pageID.toString()}`);
@@ -342,7 +341,7 @@ export class BookService {
             coverPageInfo,
           })
         : await this.createDefaultBackMatter({
-            overwriteExisting: true, // TODO: Decide if we want to always overwrite this
+            overwriteExisting,
             coverPageInfo,
           });
     } catch (error) {
