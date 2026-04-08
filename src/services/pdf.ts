@@ -205,16 +205,22 @@ export class PDFService {
         }
       }
 
-      // ── Phase 2: Convert groups in parallel (bounded by PRINCE_CONCURRENCY) ──
+      // ── Phase 2: Convert groups in two passes to produce correct page numbers ─
+      //
+      // Pass 1 renders all groups at default page numbering so we can count pages per
+      // group. Pass 2 re-renders with --page-offset set to the cumulative page count
+      // of all preceding groups, producing a continuously-numbered merged PDF.
+      // Both passes run fully parallel up to PRINCE_CONCURRENCY.
       const princeConcurrency =
         parseInt(Environment.getOptional('PRINCE_CONCURRENCY', String(DEFAULT_PRINCE_CONCURRENCY)), 10) ||
         DEFAULT_PRINCE_CONCURRENCY;
       const princeLimit = pLimit(princeConcurrency);
       this.logger
         .withMetadata({ totalGroups: pageGroups.length, princeConcurrency })
-        .info('Converting page groups in parallel');
+        .info('Pass 1: generating group PDFs to measure page counts');
 
-      const groupResults = await Promise.allSettled(
+      // ── Phase 2a: Pass 1 ─────────────────────────────────────────────────────
+      const pass1Results = await Promise.allSettled(
         pageGroups.map((group) =>
           princeLimit(async () => {
             if (Date.now() - startTime > CIRCUIT_BREAKER_CONFIG.maxJobDurationMs) {
@@ -223,23 +229,79 @@ export class PDFService {
             const prerendered = prerenderedMap.get(group.sortKey) ?? null;
             const result = await this.retryWithBackoff(
               () => this.convertPageGroup(group, prerendered),
-              `Convert group: ${group.fileName} (${group.tasks.length} page(s))`,
+              `Pass 1 group: ${group.fileName} (${group.tasks.length} page(s))`,
             );
             return { group, result };
           }),
         ),
       );
 
+      // ── Phase 2b: Count pages per group, compute cumulative offsets ───────────
+      type GroupCount = { group: PageGroup; pageCount: number };
+      let pass1FailureCount = 0;
+      const pass1Counts: GroupCount[] = [];
+      for (const r of pass1Results) {
+        if (r.status === 'rejected') {
+          pass1FailureCount++;
+          this.logger.withMetadata({ error: r.reason }).error('Group Pass 1 promise rejected');
+        } else if (!r.value.result.success) {
+          pass1FailureCount++;
+          this.logger
+            .withMetadata({ error: r.value.result.error, group: r.value.group.fileName })
+            .error('Group failed Pass 1 after all retries');
+        } else if (r.value.result.result) {
+          const pageCount = await this.countPdfPages(r.value.result.result);
+          pass1Counts.push({ group: r.value.group, pageCount });
+        }
+      }
+
+      if (pass1FailureCount >= CIRCUIT_BREAKER_CONFIG.maxConsecutiveFailures) {
+        throw new Error(`Job failed in Pass 1: ${pass1FailureCount} group(s) failed to convert`);
+      }
+
+      // Sort in the same order as mergeContentPagesAndWrite so offsets accumulate correctly
+      pass1Counts.sort((a, b) => a.group.sortKey.localeCompare(b.group.sortKey, undefined, { numeric: true }));
+      const groupOffsets = new Map<string, number>();
+      let cumulativeOffset = 0;
+      for (const { group, pageCount } of pass1Counts) {
+        groupOffsets.set(group.sortKey, cumulativeOffset);
+        cumulativeOffset += pageCount;
+      }
+      this.logger
+        .withMetadata({ totalGroups: pass1Counts.length, totalPages: cumulativeOffset })
+        .info('Pass 2: re-generating group PDFs with correct page offsets');
+
+      // ── Phase 2c: Pass 2 — re-render with correct --page-offset ──────────────
+      // Output paths are deterministic (generatePageOutputFilePath uses pageID + sortKey),
+      // so Pass 2 overwrites Pass 1 files without a separate deletion step.
+      const pass2Results = await Promise.allSettled(
+        pageGroups.map((group) =>
+          princeLimit(async () => {
+            if (Date.now() - startTime > CIRCUIT_BREAKER_CONFIG.maxJobDurationMs) {
+              throw new Error('Job exceeded maximum duration (4 hours)');
+            }
+            const prerendered = prerenderedMap.get(group.sortKey) ?? null;
+            const pageOffset = groupOffsets.get(group.sortKey) ?? 0;
+            const result = await this.retryWithBackoff(
+              () => this.convertPageGroup(group, prerendered, pageOffset),
+              `Pass 2 group: ${group.fileName} (${group.tasks.length} page(s))`,
+            );
+            return { group, result };
+          }),
+        ),
+      );
+
+      // ── Phase 2d: Collect Pass 2 results ─────────────────────────────────────
       let failureCount = 0;
-      for (const r of groupResults) {
+      for (const r of pass2Results) {
         if (r.status === 'rejected') {
           failureCount++;
-          this.logger.withMetadata({ error: r.reason }).error('Group conversion promise rejected');
+          this.logger.withMetadata({ error: r.reason }).error('Group Pass 2 promise rejected');
         } else if (!r.value.result.success) {
           failureCount++;
           this.logger
             .withMetadata({ error: r.value.result.error, group: r.value.group.fileName })
-            .error('Group failed after all retries');
+            .error('Group failed Pass 2 after all retries');
         } else {
           if (r.value.result.result) this._convertedPagePaths.push(r.value.result.result);
         }
@@ -404,6 +466,7 @@ export class PDFService {
     additionalCSS,
     mainColor = '#127BC4',
     sortKey,
+    pageOffset,
   }: {
     pageID: PageID;
     pageInfo: BookPageInfo;
@@ -415,6 +478,7 @@ export class PDFService {
     additionalCSS?: string;
     mainColor?: string;
     sortKey: string;
+    pageOffset?: number;
   }) {
     try {
       // Use pre-rendered math if available (Phase 1 pre-render), otherwise render now.
@@ -441,6 +505,7 @@ export class PDFService {
   <style>${pdfHeaderCSS}</style>
   <style>:root { --pdf-main-color: ${mainColor}; }</style>
   <style>${pdfFooterCSS}</style>
+  ${pageOffset ? `<style>html { counter-reset: page ${pageOffset}; }</style>` : ''}
   ${additionalCSS ? `<style>${additionalCSS}</style>` : ''}
   ${cleanedHeadHTML}
 </head>
@@ -505,6 +570,13 @@ ${pageTailHTML}
         .error('Prince conversion failed');
       throw new Error(`Prince conversion failed: ${errorMessage}`);
     }
+  }
+
+  /** Returns the page count of an existing PDF file. Used between Pass 1 and Pass 2 to compute per-group page offsets. */
+  private async countPdfPages(filePath: string): Promise<number> {
+    const bytes = await fs.readFile(filePath);
+    const doc = await PDFDocument.load(bytes);
+    return doc.getPageCount();
   }
 
   /**
@@ -817,10 +889,12 @@ ${pageTailHTML}
     pageInfo,
     isMainTOC = false,
     sortKey,
+    pageOffset,
   }: {
     pageInfo: BookPageInfo;
     isMainTOC?: boolean;
     sortKey: string;
+    pageOffset?: number;
   }) {
     try {
       this.logger.withMetadata({ url: pageInfo.url }).info('Starting Table of Contents');
@@ -847,6 +921,7 @@ ${pageTailHTML}
           pageBodyHTML: tocBodyHTML,
           additionalCSS: pdfTOCStyles,
           sortKey,
+          pageOffset,
         });
 
         this.logger.withMetadata({ url: pageInfo.url }).info('Finished Main Table of Contents.');
@@ -873,6 +948,7 @@ ${pageTailHTML}
           pageTailHTML: pageInfo.tail,
           additionalCSS: pdfTOCStyles,
           sortKey,
+          pageOffset,
         });
 
         this.logger.withMetadata({ url: pageInfo.url }).info('Finished Table of Contents.');
@@ -900,10 +976,12 @@ ${pageTailHTML}
     pageInfo,
     allPages,
     sortKey,
+    pageOffset,
   }: {
     pageInfo: BookPageInfo;
     allPages: BookPageInfo[];
     sortKey: string;
+    pageOffset?: number;
   }) {
     try {
       this.logger.withMetadata({ url: pageInfo.url }).info('Starting Index generation');
@@ -924,6 +1002,7 @@ ${pageTailHTML}
         pageBodyHTML: indexBodyHTML,
         additionalCSS: pdfIndexStyles,
         sortKey,
+        pageOffset,
       });
 
       this.logger.withMetadata({ url: pageInfo.url }).info('Finished Index generation.');
@@ -945,7 +1024,15 @@ ${pageTailHTML}
    * glossary table — e.g. a book where the author left the Glossary page empty
    * or used a non-standard layout.
    */
-  private async generateGlossary({ pageInfo, sortKey }: { pageInfo: BookPageInfo; sortKey: string }) {
+  private async generateGlossary({
+    pageInfo,
+    sortKey,
+    pageOffset,
+  }: {
+    pageInfo: BookPageInfo;
+    sortKey: string;
+    pageOffset?: number;
+  }) {
     try {
       this.logger.withMetadata({ url: pageInfo.url }).info('Starting Glossary generation');
 
@@ -963,6 +1050,7 @@ ${pageTailHTML}
           pageHeadHTML: pageInfo.head,
           pageTailHTML: pageInfo.tail,
           sortKey,
+          pageOffset,
         });
       }
 
@@ -981,6 +1069,7 @@ ${pageTailHTML}
         pageBodyHTML: glossaryBodyHTML,
         additionalCSS: pdfTOCStyles + '\n' + pdfGlossaryStyles,
         sortKey,
+        pageOffset,
       });
 
       this.logger.withMetadata({ url: pageInfo.url }).info('Finished Glossary generation.');
@@ -1273,6 +1362,7 @@ ${pageTailHTML}
   private async convertPageGroup(
     group: PageGroup,
     prerendered: PrerenderedTask[] | null = null,
+    pageOffset?: number,
   ): Promise<string | null> {
     const task = group.tasks[0];
 
@@ -1283,17 +1373,20 @@ ${pageTailHTML}
           pageInfo: task.pageInfo,
           isMainTOC: task.subtype === 'main-toc',
           sortKey: task.sortKey,
+          pageOffset,
         });
       } else if (task.type === 'index') {
         return this.generateIndex({
           pageInfo: task.pageInfo,
           allPages: this._allPages,
           sortKey: task.sortKey,
+          pageOffset,
         });
       } else if (task.type === 'glossary') {
         return this.generateGlossary({
           pageInfo: task.pageInfo,
           sortKey: task.sortKey,
+          pageOffset,
         });
       } else {
         return this.convertPage({
@@ -1304,6 +1397,7 @@ ${pageTailHTML}
           pageHeadHTML: task.pageInfo.head,
           pageTailHTML: task.pageInfo.tail,
           sortKey: task.sortKey,
+          pageOffset,
         });
       }
     }
@@ -1317,7 +1411,8 @@ ${pageTailHTML}
         .withMetadata({ sortKey: group.sortKey, pageCount: group.tasks.length })
         .info('Converting chapter group (multi-file)');
 
-      for (const t of group.tasks) {
+      for (let i = 0; i < group.tasks.length; i++) {
+        const t = group.tasks[i];
         const preRendered = prerendered?.find((p) => p.task._id === t._id)?.renderedBody;
         const renderedBody = this.sanitizeImagesForPDF(
           preRendered ?? (await prerenderMath(t.pageInfo.body.join(''), t.pageInfo)),
@@ -1326,6 +1421,11 @@ ${pageTailHTML}
         const headerHTML = generatePDFHeader(ImageConstants['default']);
         const sectionNum = extractPageNumberPrefix(t.pageInfo.title).replace(/\.$/, '');
         const footerHTML = generatePDFFooter({ sectionNum });
+
+        // Inject counter-reset only in the first file — Prince treats multi-file input as one
+        // continuous document, so resetting in each file would restart numbering per-page.
+        const pageCounterCSS =
+          i === 0 && pageOffset ? `<style>html { counter-reset: page ${pageOffset}; }</style>` : '';
 
         const wrappedHTML = `
 <!DOCTYPE html>
@@ -1337,6 +1437,7 @@ ${pageTailHTML}
   <style>${pdfHeaderCSS}</style>
   <style>:root { --pdf-main-color: #127BC4; }</style>
   <style>${pdfFooterCSS}</style>
+  ${pageCounterCSS}
   ${cleanedHeadHTML}
 </head>
 <body>
