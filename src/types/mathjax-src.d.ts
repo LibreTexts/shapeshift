@@ -6,6 +6,7 @@ declare module '@mathjax/src' {
     };
     getDocument(html: string): {
       renderPromise(): Promise<unknown>;
+      clear(): void;
       document: unknown;
     };
   }
