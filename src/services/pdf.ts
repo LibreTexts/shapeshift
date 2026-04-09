@@ -816,7 +816,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
     const $ = cheerio.load(html);
 
     const directory = $('.mt-guide-content, .mt-category-container');
-    if (!directory) return null;
+    if (!directory.length) return null;
 
     // Create a new directory element with the listing HTML and replace the existing directory content
     const newDirectory = $('<div></div>');
@@ -835,17 +835,15 @@ ${stripBlocklistedScripts(pageTailHTML)}
     const pageTitle = $('#title');
 
     const pageTitleParent = pageTitle?.parent();
-    if (!pageTitle || !pageTitleParent) return null;
-    pageTitle.css('style', 'border-bottom: none !important');
+    if (!pageTitle.length || !pageTitleParent.length) return null;
+    pageTitle.attr('style', 'border-bottom: none !important');
 
     const newTitle = $('<h1></h1>').text(pageType).attr('id', 'libre-print-directory-header');
 
     const typeContainer = $('<div></div>').attr('id', 'libre-print-directory-header-container');
     typeContainer.append(newTitle);
 
-    // insert pageTitleParent before the typeConatiner
-    // TODO: is this layout correct?
-    pageTitleParent.insertBefore(typeContainer);
+    pageTitle.before(typeContainer);
 
     if (pageType === 'Table of Contents') pageTitle.remove();
 
@@ -1392,13 +1390,23 @@ ${stripBlocklistedScripts(pageTailHTML)}
           pageOffset,
         });
       } else {
+        const rawBody = task.pageInfo.body.join('');
+        const listing = await this.getLevel(task.pageInfo);
+        const directoryHTML = this.processDirectoryPage({
+          html: rawBody,
+          listing,
+          tags: task.pageInfo.tags,
+          title: task.pageInfo.title,
+        });
+
         return this.convertPage({
           pageID: task.pageID,
           pageInfo: task.pageInfo,
-          pageBodyHTML: task.pageInfo.body.join(''),
+          pageBodyHTML: directoryHTML ?? rawBody,
           preRenderedBodyHTML: prerendered?.[0]?.renderedBody,
           pageHeadHTML: task.pageInfo.head,
           pageTailHTML: task.pageInfo.tail,
+          additionalCSS: directoryHTML ? pdfTOCStyles : undefined,
           sortKey: task.sortKey,
           pageOffset,
         });
@@ -1416,9 +1424,19 @@ ${stripBlocklistedScripts(pageTailHTML)}
 
       for (let i = 0; i < group.tasks.length; i++) {
         const t = group.tasks[i];
+
+        const rawBody = t.pageInfo.body.join('');
+        const listing = await this.getLevel(t.pageInfo);
+        const directoryHTML = this.processDirectoryPage({
+          html: rawBody,
+          listing,
+          tags: t.pageInfo.tags,
+          title: t.pageInfo.title,
+        });
+
         const preRendered = prerendered?.find((p) => p.task._id === t._id)?.renderedBody;
         const renderedBody = this.sanitizeImagesForPDF(
-          preRendered ?? (await prerenderMath(t.pageInfo.body.join(''), t.pageInfo)),
+          preRendered ?? (await prerenderMath(directoryHTML ?? rawBody, t.pageInfo)),
         );
         const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(t.pageInfo.head));
         const headerHTML = generatePDFHeader(ImageConstants['default']);
@@ -1441,6 +1459,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
   <style>${pdfHeaderCSS}</style>
   <style>:root { --pdf-main-color: #127BC4; }</style>
   <style>${pdfFooterCSS}</style>
+  ${directoryHTML ? `<style>${pdfTOCStyles}</style>` : ''}
   ${pageCounterCSS}
   ${cleanedHeadHTML}
 </head>
