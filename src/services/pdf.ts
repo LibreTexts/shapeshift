@@ -42,6 +42,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // CSS loaded at module init and inlined into HTML sent to Prince.
 // Note: changes to this file require a server restart in development.
 const pdfPageCSS = readFileSync(join(__dirname, '../styles/pdf-page.css'), 'utf-8');
+const pdfTableCSS = readFileSync(join(__dirname, '../styles/pdf-tables.css'), 'utf-8');
 const pdfFontCSS = generateFontCSS();
 
 /**
@@ -503,6 +504,7 @@ export class PDFService {
   <meta charset="UTF-8">
   <style>${pdfFontCSS}</style>
   <style>${pdfPageCSS}</style>
+  <style>${pdfTableCSS}</style>
   <style>${pdfHeaderCSS}</style>
   <style>:root { --pdf-main-color: ${mainColor}; }</style>
   <style>${pdfFooterCSS}</style>
@@ -1435,6 +1437,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
   <meta charset="UTF-8">
   <style>${pdfFontCSS}</style>
   <style>${pdfPageCSS}</style>
+  <style>${pdfTableCSS}</style>
   <style>${pdfHeaderCSS}</style>
   <style>:root { --pdf-main-color: #127BC4; }</style>
   <style>${pdfFooterCSS}</style>
