@@ -70,6 +70,7 @@ interface DOMAdaptor {
  */
 interface MathDocument {
   renderPromise(): Promise<void>;
+  clear(): void;
   document: unknown;
 }
 
@@ -202,6 +203,28 @@ async function initMathJax(): Promise<MathJaxGlobal> {
   // Wait for MathJax to complete initialization
   await MathJax.startup.promise;
 
+  // Disable on-demand entity file loading.
+  //
+  // Root cause of "Can't find handler for document" errors:
+  //
+  // HTMLHandler.handlesDocument() calls adaptor.parse(html) inside a broad try-catch
+  // that swallows ALL errors. The liteDOM parser calls Entities.translate() on every
+  // text node. When it encounters a named HTML entity not in the pre-loaded dictionary
+  // (e.g. &nbsp;, &mdash;, &hellip;, &copy;) and loadMissingEntities is true, it calls
+  // retryAfter(asyncLoad(...)) which intentionally throws a RetryError. This retry
+  // mechanism works correctly inside renderPromise() (where handleRetriesFor re-runs
+  // the action after the entity file loads), but NOT inside handlesDocument(): the
+  // try-catch there swallows the RetryError, leaving the document as the raw string.
+  // A string fails the instanceof LiteDocument check, so handlesDocument() returns
+  // false — and with no handlers matching, HandlerList throws the observed error.
+  //
+  // Fix: disable loadMissingEntities so unknown entities are returned verbatim
+  // (e.g. &mdash; stays &mdash; in the text node). For HTML text content this is
+  // harmless — Prince XML handles HTML entities during PDF rendering. The pre-loaded
+  // entity dict already covers all standard mathematical entities needed for TeX/MathML.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  (MathJax as any)._.util.Entities.options.loadMissingEntities = false;
+
   return MathJax;
 }
 
@@ -332,6 +355,11 @@ export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Prom
 
     // Get the fully rendered HTML document
     const result = adaptor.outerHTML(adaptor.root(doc.document));
+
+    // Clean up the document to free resources and prevent MathJax's internal handler
+    // registry from accumulating stale entries. Without this, subsequent getDocument()
+    // calls fail with "Can't find handler for document".
+    doc.clear();
 
     // MathJax wraps the input in a full HTML document. Extract just the body content
     // since the caller provides (and expects back) a body fragment.

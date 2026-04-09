@@ -220,6 +220,14 @@ MathJax.done();
 - **Worker threads**: v4 runs speech (SRE) and Braille label generation in worker threads. If speech/Braille labels are not needed, set `enableSpeech: false` and `enableBraille: false` to prevent thread startup. Always call `MathJax.done()` to clean up.
 - **Stack overflows**: Deep math trees + SRE can cause `RangeError: Maximum call stack`. Disable assistive MML if rendering large documents server-side.
 - **Font loading**: v4 splits fonts into chunks loaded on demand — always use promise-based methods (`tex2svgPromise`, `renderPromise`) even for simple expressions.
-- **Document cleanup**: Call `doc.clear()` after `renderPromise()` to free resources and avoid "Can't find handler for document" errors on subsequent renders.
+- **Document cleanup**: Call `doc.clear()` after `renderPromise()` to free resources after each render.
 - **HTML wrapping**: `getDocument()` wraps input in a full HTML document. Extract body: `result.match(/<body>([\s\S]*)<\/body>/)[1]`.
 - **Config must precede import**: Setting `global.MathJax` after importing a component has no effect.
+- **"Can't find handler for document" — disable `loadMissingEntities`**: When using the bundled components (`tex-mml-svg.js`, etc.), the liteDOM parser calls `Entities.translate()` on every HTML text node during `handlesDocument()`. If it encounters a named HTML entity not in the pre-loaded dictionary (e.g. `&nbsp;`, `&mdash;`, `&hellip;`, `&copy;`), it calls `retryAfter()` which intentionally throws a `RetryError`. Inside `renderPromise()` this is handled correctly by `handleRetriesFor`. However, `handlesDocument()` wraps `adaptor.parse()` in a broad `try-catch` that swallows ALL errors, including `RetryError`. The swallowed error leaves the input as a plain string, which fails the `instanceof LiteDocument` check — so `handlesDocument()` returns `false`, no handler matches, and `HandlerList` throws "Can't find handler for document". The fix is to disable the on-demand loading after initialization:
+
+  ```js
+  await MathJax.startup.promise;
+  MathJax._.util.Entities.options.loadMissingEntities = false;
+  ```
+
+  With this set, unknown entities are returned verbatim (e.g. `&mdash;` stays `&mdash;` in the DOM text node). For server-side PDF generation this is harmless — Prince XML handles HTML entities during rendering. The pre-loaded entity dictionary already covers all standard mathematical entities required for TeX/MathML rendering. Without this fix, the first ~15–20 pages rendered per process (one per entity letter first encountered) will silently fall back to raw LaTeX.
