@@ -5,6 +5,14 @@ const bookIDSchema = zod.stringFormat('BookID', /[a-z1-2]{3,9}[-][0-9]{2,10}/gi)
 const jobIDSchema = zod.string().length(12);
 
 export const validators = {
+  jobs: {
+    listOpen: zod.object({
+      query: zod.object({
+        status: zod.enum(['created', 'inprogress', 'failed']).optional(),
+        sort: zod.enum(['asc', 'desc']).default('desc'),
+      }),
+    }),
+  },
   download: {
     get: zod.object({
       params: zod.object({
