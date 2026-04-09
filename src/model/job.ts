@@ -4,6 +4,7 @@ import {
   CreatedAt,
   DataType,
   Default,
+  Index,
   Model,
   PrimaryKey,
   Table,
@@ -35,6 +36,7 @@ export class Job extends Model<JobAttributes, JobCreationAttributes> {
   @Column(DataType.STRING)
   declare id: string;
 
+  @Index
   @Column(DataType.ENUM('created', 'inprogress', 'finished', 'failed'))
   declare status: JobStatus;
 

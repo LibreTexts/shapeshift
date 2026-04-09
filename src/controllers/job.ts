@@ -1,11 +1,13 @@
 import { JobService } from '../services/job';
 import { QueueClient } from '../lib/queueClient';
 import zod from 'zod';
+import { Op } from 'sequelize';
 import { Response } from 'express';
 import { validators } from '../api/validators';
 import { extractIPFromHeaders, ZodRequest } from '../helpers';
 import { LogLayer } from 'loglayer';
 import { log as logService } from '../lib/log';
+import { Job } from '../model';
 
 export class JobController {
   private readonly logger: LogLayer;
@@ -37,6 +39,22 @@ export class JobController {
       },
       status: 200,
     });
+  }
+
+  public async listOpen(req: ZodRequest<zod.infer<typeof validators.jobs.listOpen>>, res: Response) {
+    const sort = req.validatedData?.query?.sort ?? 'desc';
+    const statusFilter = req.validatedData?.query?.status;
+
+    const whereClause = statusFilter
+      ? { status: statusFilter }
+      : { status: { [Op.in]: ['created', 'inprogress', 'failed'] } };
+
+    const jobs = await Job.findAll({
+      where: whereClause,
+      attributes: ['id', 'status', 'isHighPriority', 'url', 'createdAt'],
+      order: [['createdAt', sort.toUpperCase()]],
+    });
+    return res.status(200).send({ data: jobs, status: 200 });
   }
 
   public async get(req: ZodRequest<zod.infer<typeof validators.job.get>>, res: Response) {

@@ -3,6 +3,7 @@ import express from 'express';
 import { Environment } from '../lib/environment';
 import { JobController } from '../controllers/job';
 import { validateZod, validators } from './validators';
+import { apiKeyAuth } from './middleware/apiKeyAuth';
 import { DownloadController } from '../controllers/download';
 import zod from 'zod';
 import { ZodRequest } from '../helpers';
@@ -31,6 +32,11 @@ router
   .route('/download/:bookID/:format/:fileName')
   .get(validateZod(validators.download.get), (req, res) =>
     downloadController.downloadFile(req as ZodRequest<zod.infer<typeof validators.download.get>>, res),
+  );
+router
+  .route('/jobs')
+  .get(apiKeyAuth, validateZod(validators.jobs.listOpen), (req, res) =>
+    jobController.listOpen(req as ZodRequest<zod.infer<typeof validators.jobs.listOpen>>, res),
   );
 router.route('/job').post(validateZod(validators.job.create), (req, res) => jobController.create(req, res));
 router.route('/job/:jobID').get(validateZod(validators.job.get), (req, res) => jobController.get(req, res));

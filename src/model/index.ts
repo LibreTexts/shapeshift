@@ -1,4 +1,5 @@
 import { Sequelize } from 'sequelize-typescript';
+import { ApiCredential } from './apiCredential';
 import { Job } from './job';
 import { Environment } from '../lib/environment';
 import { ConnectionOptions } from 'sequelize';
@@ -35,7 +36,7 @@ const sequelize = new Sequelize({
     : writerConfig),
 });
 
-sequelize.addModels([Job]);
+sequelize.addModels([ApiCredential, Job]);
 
 /**
  * Attempts to establish a connection to the database.
@@ -53,4 +54,4 @@ export async function connectDatabase(sync: boolean = false): Promise<boolean> {
   return true;
 }
 
-export { sequelize, Job };
+export { ApiCredential, sequelize, Job };
