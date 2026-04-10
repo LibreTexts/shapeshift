@@ -17,8 +17,12 @@ export const validators = {
     get: zod.object({
       params: zod.object({
         bookID: bookIDSchema,
-        fileName: zod.enum(['LibreText.imscc', 'Publication.zip', 'Full.pdf']), // FIXME: define all
-        format: zod.enum(['pdf', 'thincc']),
+        format: zod.enum(['pdf', 'epub', 'thincc', 'pages', 'publication']),
+        fileName: zod
+          .string()
+          .max(255)
+          .regex(/^\w[\w.-]*$/)
+          .optional(),
       }),
     }),
   },

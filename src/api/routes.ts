@@ -29,7 +29,7 @@ router.use(
   }),
 );
 router
-  .route('/download/:bookID/:format/:fileName')
+  .route('/download/:bookID/:format/:fileName?')
   .get(validateZod(validators.download.get), (req, res) =>
     downloadController.downloadFile(req as ZodRequest<zod.infer<typeof validators.download.get>>, res),
   );

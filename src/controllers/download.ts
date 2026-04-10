@@ -8,6 +8,19 @@ import { StorageService } from '../lib/storageService';
 import { getSignedUrl } from '@aws-sdk/cloudfront-signer';
 import { Environment } from '../lib/environment';
 
+interface FormatConfig {
+  fileName: string;
+  contentType: string;
+}
+
+const FORMAT_CONFIG: Record<string, FormatConfig> = {
+  pdf: { fileName: 'Full.pdf', contentType: 'application/pdf' },
+  epub: { fileName: 'Publication.epub', contentType: 'application/epub+zip' },
+  thincc: { fileName: 'LibreText.imscc', contentType: 'application/zip' },
+  pages: { fileName: 'Individual.zip', contentType: 'application/zip' },
+  publication: { fileName: 'Publication.zip', contentType: 'application/zip' },
+};
+
 export class DownloadController {
   private readonly cloudFrontDistributionDomain: string;
   private readonly cloudFrontKeyPairId: string;
@@ -25,30 +38,59 @@ export class DownloadController {
   }
 
   public async downloadFile(req: ZodRequest<zod.infer<typeof validators.download.get>>, res: Response) {
-    const path = `${req.params.format}/${req.params.bookID}/${req.params.fileName}`;
-    const exists = await this.storageService.ensureFileExists(path);
+    const { bookID, format, fileName: fileNameParam } = req.params;
+
+    let fileName: string;
+    if (fileNameParam) {
+      fileName = fileNameParam;
+    } else {
+      const formatConfig = FORMAT_CONFIG[format];
+      if (!formatConfig) {
+        return res.status(404).send({ status: 404, msg: `No default file configured for format "${format}".` });
+      }
+      fileName = formatConfig.fileName;
+    }
+
+    const s3Key = `${format}/${bookID}/${fileName}`;
+    const exists = await this.storageService.ensureFileExists(s3Key);
     if (!exists) {
       return res.status(404).send({
-        msg: `File with path "${path}" not found.`,
+        msg: `File with path "${s3Key}" not found.`,
         status: 404,
       });
     }
 
     // TODO: record download event
-    const inFiveMinutes = new Date();
-    inFiveMinutes.setMinutes(inFiveMinutes.getMinutes() + 5);
-    const signedURL = getSignedUrl({
-      dateLessThan: inFiveMinutes.toString(),
-      keyPairId: this.cloudFrontKeyPairId,
-      privateKey: Buffer.from(this.cloudFrontPrivateKey, 'base64').toString('utf-8'),
-      url: `https://${this.cloudFrontDistributionDomain}/${path}`,
-    });
+    const downloadUrl = this.buildDownloadUrl(s3Key, fileName);
     this.logger
       .withMetadata({
-        ...req.params,
+        bookID,
+        format,
+        fileName,
         requesterIp: extractIPFromHeaders(req),
       })
       .info('File downloaded');
-    return res.status(302).redirect(signedURL);
+    return res.status(302).redirect(downloadUrl);
+  }
+
+  /**
+   * Returns a signed CloudFront URL for the given S3 key. The
+   * response-content-disposition param is included so browsers always prompt a
+   * download with the correct filename regardless of S3 object metadata.
+   *
+   * TODO: skip signing for public books once book-level visibility is implemented.
+   */
+  private buildDownloadUrl(s3Key: string, fileName: string): string {
+    const disposition = `attachment; filename="${fileName}"`;
+    const baseUrl = `https://${this.cloudFrontDistributionDomain}/${s3Key}?response-content-disposition=${encodeURIComponent(disposition)}`;
+
+    const inFiveMinutes = new Date();
+    inFiveMinutes.setMinutes(inFiveMinutes.getMinutes() + 5);
+    return getSignedUrl({
+      dateLessThan: inFiveMinutes.toString(),
+      keyPairId: this.cloudFrontKeyPairId,
+      privateKey: Buffer.from(this.cloudFrontPrivateKey, 'base64').toString('utf-8'),
+      url: baseUrl,
+    });
   }
 }
