@@ -7,6 +7,16 @@ import { extractIPFromHeaders, ZodRequest } from '../helpers';
 import { StorageService } from '../lib/storageService';
 import { getSignedUrl } from '@aws-sdk/cloudfront-signer';
 import { Environment } from '../lib/environment';
+import { MongoClient } from 'mongodb';
+
+let mongoClient: MongoClient | null = null;
+
+function getMongoClient(uri: string): MongoClient {
+  if (!mongoClient) {
+    mongoClient = new MongoClient(uri);
+  }
+  return mongoClient;
+}
 
 interface FormatConfig {
   fileName: string;
@@ -60,7 +70,8 @@ export class DownloadController {
       });
     }
 
-    // TODO: record download event
+    const extension = fileName.split('.').pop() ?? format;
+    await this.recordDownloadEvent(bookID, fileName, extension);
     const downloadUrl = this.buildDownloadUrl(s3Key, fileName);
     this.logger
       .withMetadata({
@@ -71,6 +82,26 @@ export class DownloadController {
       })
       .info('File downloaded');
     return res.status(302).redirect(downloadUrl);
+  }
+
+  private async recordDownloadEvent(identifier: string, file: string, extension: string): Promise<void> {
+    const uri = Environment.getOptional('MONGODB_URI');
+    if (!uri) return;
+
+    const database = Environment.getOptional('MONGODB_DATABASE', 'download-stats');
+    const collection = Environment.getOptional('MONGODB_COLLECTION', 'download-events');
+
+    try {
+      const client = getMongoClient(uri);
+      await client.db(database).collection(collection).insertOne({
+        identifier,
+        file,
+        format: extension.toLowerCase(),
+        timestamp: new Date(),
+      });
+    } catch (err) {
+      this.logger.withError(err as Error).error('Failed to record download event');
+    }
   }
 
   /**
