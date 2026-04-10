@@ -112,7 +112,9 @@ export class JobService {
         }
 
         // If we created matter, we need to re-discover pages to get updated structure
-        const pages = didCreateMatter ? await bookModel.discoverPages(bookID.lib, bookID.pageNum) : initPages;
+        const pages = didCreateMatter
+          ? await bookModel.discoverPages(bookID.lib, bookID.pageNum, { forceRefresh: true })
+          : initPages;
 
         // <generate pdf>
         const pdfService = new PDFService(bookID, { useLocalStorage });

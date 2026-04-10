@@ -28,4 +28,8 @@ export default class PageID {
   toString(): string {
     return `${this._lib}-${this._pageNum}`;
   }
+
+  toJSON() {
+    return this.toString();
+  }
 }
