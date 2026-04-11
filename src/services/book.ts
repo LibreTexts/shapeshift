@@ -14,6 +14,7 @@ import PageID from '../util/pageID';
 import { log as logService } from '../lib/log';
 import { LogLayer } from 'loglayer';
 import { Environment } from '../lib/environment';
+import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
 
 /**
  * Maximum number of concurrent page content fetches from the CXOne API.
@@ -378,10 +379,22 @@ export class BookService {
    * Discovers the page tree for a given book, starting from (and including) the root page. Can return either a nested structure or a flat array of pages.
    * @param libName - the subdomain/library name
    * @param pageID - the root page ID of the book
-   * @param flat - whether to return a flat array of pages or a nested structure (default: false)
+   * @param opt - Optional settings.
    */
-  public async discoverPages(libName: string, pageID: number): Promise<BookPages> {
+  public async discoverPages(libName: string, pageID: number, opt?: { forceRefresh?: boolean }): Promise<BookPages> {
     try {
+      const bookID = new PageID({ lib: libName, pageNum: pageID });
+      if (
+        Environment.getSystemEnvironment() === 'DEVELOPMENT' &&
+        Environment.getOptional('ENABLE_DEVELOPMENT_CACHE') === 'true' &&
+        !opt?.forceRefresh
+      ) {
+        const cached = await this.readDevelopmentCacheFile(bookID);
+        if (cached) {
+          this.logger.withMetadata({ bookID }).info('Using cached book pages.');
+          return cached as BookPages;
+        }
+      }
       const lib = new LibraryService({ lib: libName });
       await lib.init();
       await CXOneRateLimiter.waitUntilAPIAvailable(2);
@@ -389,13 +402,22 @@ export class BookService {
       const pagesRaw = pagesRespRaw.page;
 
       const pages = await this.getPageInfo(libName, pagesRaw, lib);
-      return {
+      const result = {
         flat: this.flattenPagesObj(pages),
         tree: pages,
       };
+
+      if (
+        Environment.getSystemEnvironment() === 'DEVELOPMENT' &&
+        Environment.getOptional('ENABLE_DEVELOPMENT_CACHE') === 'true'
+      ) {
+        this.logger.withMetadata({ bookID }).info('Saving discovered pages to local development cache.');
+        await this.writeDevelopmentCacheFile({ bookID, content: Buffer.from(JSON.stringify(result), 'utf-8') });
+      }
+      return result;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      this.logger.error(`Error discovering pages for ${libName}/${pageID}: ${errorMsg}`);
+      this.logger.withError(error).error(`Error discovering pages for ${libName}/${pageID}: ${errorMsg}`);
       throw error; // re-throw the error after logging it, so that the calling function can handle it appropriately (e.g. fail the job)
     }
   }
@@ -660,5 +682,30 @@ export class BookService {
       }
     }
     return info;
+  }
+
+  private async readDevelopmentCacheFile(bookID: PageID) {
+    try {
+      const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+      const filePath = `${baseDir}/book-data-cache/${bookID.toString()}.json`;
+      const data = await fs.readFile(filePath, 'utf-8');
+      if (!data) return null;
+      return JSON.parse(data, (key, value) => {
+        if (key !== 'pageID') return value;
+        return new PageID({ pageIDString: value });
+      });
+    } catch (error) {
+      // file doesn't exist
+      return null;
+    }
+  }
+
+  private async writeDevelopmentCacheFile({ bookID, content }: { bookID: PageID; content: Buffer }) {
+    const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+    const filePath = `${baseDir}/book-data-cache/${bookID.toString()}.json`;
+    const dirPath = getDirectoryPathFromFilePath(filePath);
+    await fs.mkdir(dirPath, { recursive: true });
+    await fs.writeFile(filePath, content, 'utf-8');
+    return filePath;
   }
 }
