@@ -17,12 +17,7 @@ export const validators = {
     get: zod.object({
       params: zod.object({
         bookID: bookIDSchema,
-        format: zod.enum(['pdf', 'epub', 'thincc', 'pages', 'publication']),
-        fileName: zod
-          .string()
-          .max(255)
-          .regex(/^\w[\w.-]*$/)
-          .optional(),
+        format: zod.enum(['pdf', 'epub', 'thincc', 'pages', 'publication'])
       }),
     }),
   },

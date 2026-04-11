@@ -48,20 +48,14 @@ export class DownloadController {
   }
 
   public async downloadFile(req: ZodRequest<zod.infer<typeof validators.download.get>>, res: Response) {
-    const { bookID, format, fileName: fileNameParam } = req.params;
+    const { bookID, format } = req.params;
 
-    let fileName: string;
-    if (fileNameParam) {
-      fileName = fileNameParam;
-    } else {
-      const formatConfig = FORMAT_CONFIG[format];
-      if (!formatConfig) {
-        return res.status(404).send({ status: 404, msg: `No default file configured for format "${format}".` });
-      }
-      fileName = formatConfig.fileName;
+    const formatConfig = FORMAT_CONFIG[format];
+    if (!formatConfig) {
+      return res.status(404).send({ status: 404, msg: `No default file configured for format "${format}".` });
     }
 
-    const s3Key = `${format}/${bookID}/${fileName}`;
+    const s3Key = `${format}/${bookID}/${formatConfig.fileName}`;
     const exists = await this.storageService.ensureFileExists(s3Key);
     if (!exists) {
       return res.status(404).send({
@@ -70,14 +64,14 @@ export class DownloadController {
       });
     }
 
-    const extension = fileName.split('.').pop() ?? format;
-    await this.recordDownloadEvent(bookID, fileName, extension);
-    const downloadUrl = this.buildDownloadUrl(s3Key, fileName);
+    const extension = formatConfig.fileName.split('.').pop() ?? format;
+    await this.recordDownloadEvent(bookID, formatConfig.fileName, extension);
+    const downloadUrl = this.buildDownloadUrl(s3Key, formatConfig.fileName);
     this.logger
       .withMetadata({
         bookID,
         format,
-        fileName,
+        fileName: formatConfig.fileName,
         requesterIp: extractIPFromHeaders(req),
       })
       .info('File downloaded');
