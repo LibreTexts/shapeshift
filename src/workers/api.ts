@@ -2,10 +2,12 @@ import 'dotenv/config';
 import express from 'express';
 import helmet from 'helmet';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
+import swaggerUi from 'swagger-ui-express';
 import { connectDatabase } from '../model';
 import { router } from '../api/routes';
 import { log as logService } from '../lib/log';
 import { Environment } from '../lib/environment';
+import swaggerDocument from '../swagger.json';
 
 Environment.load();
 const app = express();
@@ -29,6 +31,7 @@ const apiLimiter = rateLimit({
 
 app.use(express.json());
 app.use(helmet.hidePoweredBy());
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
 app.use('/api/v1', apiLimiter, router);
 app.use('/health', (_req, res) => res.send({ healthy: true, msg: 'API worker appears healthy.' }));
 

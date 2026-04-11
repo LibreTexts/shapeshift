@@ -1,0 +1,293 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Shapeshift API",
+    "description": "API for submitting and tracking LibreTexts content export jobs (PDF, EPUB, etc.).",
+    "version": "1.0.0"
+  },
+  "servers": [
+    {
+      "url": "/api/v1"
+    }
+  ],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key issued by an administrator."
+      }
+    },
+    "schemas": {
+      "JobStatus": {
+        "type": "string",
+        "enum": ["created", "inprogress", "finished", "failed"]
+      },
+      "ExportFormat": {
+        "type": "string",
+        "enum": ["pdf", "epub", "thincc", "pages", "publication"]
+      },
+      "Job": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "example": "abc123xyz012" },
+          "status": { "$ref": "#/components/schemas/JobStatus" },
+          "isHighPriority": { "type": "boolean" },
+          "url": { "type": "string", "format": "uri", "example": "https://phys.libretexts.org/Bookshelves/University_Physics" },
+          "createdAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "ErrorResponse": {
+        "type": "object",
+        "properties": {
+          "msg": { "type": "string" },
+          "status": { "type": "integer" }
+        },
+        "required": ["msg", "status"]
+      }
+    }
+  },
+  "paths": {
+    "/job": {
+      "post": {
+        "summary": "Submit an export job",
+        "description": "Enqueues a new export job for the given LibreTexts book URL.",
+        "tags": ["Jobs"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["url"],
+                "properties": {
+                  "url": {
+                    "type": "string",
+                    "format": "uri",
+                    "description": "Full URL of the LibreTexts book to export.",
+                    "example": "https://phys.libretexts.org/Bookshelves/University_Physics"
+                  },
+                  "highPriority": {
+                    "type": "boolean",
+                    "default": false,
+                    "description": "Route the job to the high-priority queue."
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Job created successfully.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string", "example": "abc123xyz012" },
+                        "status": { "type": "string", "example": "created" }
+                      }
+                    },
+                    "status": { "type": "integer", "example": 200 }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request body.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/job/{jobID}": {
+      "get": {
+        "summary": "Get a job by ID",
+        "description": "Returns the current status and metadata for a single export job.",
+        "tags": ["Jobs"],
+        "parameters": [
+          {
+            "name": "jobID",
+            "in": "path",
+            "required": true,
+            "description": "12-character job identifier returned by POST /job.",
+            "schema": { "type": "string", "minLength": 12, "maxLength": 12, "example": "abc123xyz012" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Job found.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "id": { "type": "string" },
+                        "isHighPriority": { "type": "boolean" },
+                        "status": { "$ref": "#/components/schemas/JobStatus" },
+                        "url": { "type": "string", "format": "uri" }
+                      }
+                    },
+                    "status": { "type": "integer", "example": 200 }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid job ID format.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "Job not found.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/jobs": {
+      "get": {
+        "summary": "List open jobs",
+        "description": "Returns a list of jobs filtered by status. Requires a valid API key.",
+        "tags": ["Jobs"],
+        "security": [{ "bearerAuth": [] }],
+        "parameters": [
+          {
+            "name": "status",
+            "in": "query",
+            "required": false,
+            "description": "Filter by job status. If omitted, returns created, inprogress, and failed jobs.",
+            "schema": {
+              "type": "string",
+              "enum": ["created", "inprogress", "failed"]
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "description": "Sort order by createdAt.",
+            "schema": {
+              "type": "string",
+              "enum": ["asc", "desc"],
+              "default": "desc"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of jobs.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Job" }
+                    },
+                    "status": { "type": "integer", "example": 200 }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Missing or invalid API key.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/download/{bookID}/{format}/{fileName}": {
+      "get": {
+        "summary": "Download an exported file",
+        "description": "Redirects (302) to a short-lived signed CloudFront URL for the requested export file.",
+        "tags": ["Downloads"],
+        "parameters": [
+          {
+            "name": "bookID",
+            "in": "path",
+            "required": true,
+            "description": "Library-prefixed book identifier (e.g. `phys-12345`).",
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z1-2]{3,9}-[0-9]{2,10}$",
+              "example": "phys-123456"
+            }
+          },
+          {
+            "name": "format",
+            "in": "path",
+            "required": true,
+            "description": "Export format.",
+            "schema": { "$ref": "#/components/schemas/ExportFormat" }
+          },
+          {
+            "name": "fileName",
+            "in": "path",
+            "required": false,
+            "description": "Specific file name within the export. If omitted, the default file for the format is used.",
+            "schema": {
+              "type": "string",
+              "maxLength": 255,
+              "pattern": "^\\w[\\w.-]*$",
+              "example": "book.pdf"
+            }
+          }
+        ],
+        "responses": {
+          "302": {
+            "description": "Redirect to signed CloudFront download URL.",
+            "headers": {
+              "Location": {
+                "description": "Signed CloudFront URL (valid for 5 minutes).",
+                "schema": { "type": "string", "format": "uri" }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid path parameters.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          },
+          "404": {
+            "description": "File not found in storage.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ErrorResponse" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
