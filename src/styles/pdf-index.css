@@ -1,8 +1,14 @@
 /* -----------------------------------------------------------------------
  * Index page styles for Prince XML PDF output.
- * Mirrors the legacy "columns:three" layout produced by the browser-side
- * DynamicIndex template.  Uses CSS multi-column so Prince reflows content
- * into three balanced columns automatically.
+ * Uses CSS multi-column layout (column-count: 3).
+ *
+ * The key to avoiding a spurious page break before the column block is to
+ * NOT set break-inside: avoid on .libre-index-letter-group. When that rule
+ * is present, the three columns have misaligned avoid constraints — no single
+ * fragment point satisfies all columns simultaneously, so Prince and Chrome
+ * push the entire block to a new page rather than start it mid-page.
+ * Instead, break-after: avoid on the heading keeps headings with their first
+ * term without creating irreconcilable cross-column fragment constraints.
  * ----------------------------------------------------------------------- */
 
 /* Letter-jump navigation bar */
@@ -21,16 +27,15 @@
 }
 
 /* Three-column index body */
-#libre-index-table {
+#libre-index-body {
   column-count: 3;
   column-gap: 1.4em;
   font-family: 'Atkinson Hyperlegible', Arial, sans-serif;
   font-size: 10.5px;
 }
 
-/* Keep each letter group from splitting mid-column where possible */
+/* Do NOT set break-inside: avoid here — see file-level comment above. */
 .libre-index-letter-group {
-  break-inside: avoid-column;
   margin-bottom: 1em;
 }
 
@@ -43,6 +48,10 @@
   margin: 0 0 0.4em 0 !important;
   padding: 0 !important;
   line-height: 1.4 !important;
+  /* Keep the heading glued to its first term — prevents an orphaned letter
+     heading sitting alone at the bottom of a column or page. */
+  break-after: avoid;
+  page-break-after: avoid;
 }
 
 /* Suppress any MindTouch-injected heading counters */

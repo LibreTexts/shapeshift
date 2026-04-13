@@ -166,33 +166,20 @@ export function generateIndexHTML(data: IndexData): string {
     .map((g, i) => `${i > 0 ? ' &bull; ' : ''}<a href="#libre-index-${g.letter}">${g.letter}</a>`)
     .join('');
 
-  const letterGroups = data.byLetter
-    .map((group) => {
-      const terms = group.terms
-        .map((term) => {
-          const pageLinks = term.pages
-            .map(
-              (p) => `<a href="${escapeAttr(p.pageLink)}" class="libre-index-page-link">${escapeHTML(p.pageName)}</a>`,
-            )
-            .join('<br/>');
-          return `
-        <div class="libre-index-term">
-          <p class="libre-index-term-name">${escapeHTML(term.name)}</p>
-          <div class="libre-index-term-pages">${pageLinks}</div>
-        </div>`;
-        })
-        .join('');
+  const renderGroup = (group: IndexLetter): string => {
+    const terms = group.terms
+      .map((term) => {
+        const pageLinks = term.pages
+          .map((p) => `<a href="${escapeAttr(p.pageLink)}" class="libre-index-page-link">${escapeHTML(p.pageName)}</a>`)
+          .join('<br/>');
+        return `<div class="libre-index-term"><p class="libre-index-term-name">${escapeHTML(term.name)}</p><div class="libre-index-term-pages">${pageLinks}</div></div>`;
+      })
+      .join('');
+    return `<div class="libre-index-letter-group" id="libre-index-${group.letter}"><h2 class="libre-index-letter">${group.letter}</h2>${terms}</div>`;
+  };
 
-      return `
-      <div class="libre-index-letter-group" id="libre-index-${group.letter}">
-        <h2 class="libre-index-letter">${group.letter}</h2>${terms}
-      </div>`;
-    })
-    .join('');
-
-  return `<nav id="libre-index-nav">${navLinks}</nav>
-    <div id="libre-index-table">${letterGroups}
-    </div>`;
+  return `<div id="libre-index-nav">${navLinks}</div>
+<div id="libre-index-body">${data.byLetter.map(renderGroup).join('')}</div>`;
 }
 
 // ---------------------------------------------------------------------------
