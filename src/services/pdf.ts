@@ -36,6 +36,7 @@ import { prerenderMath, stripMathJaxScripts, extractPageNumberPrefix } from '../
 import { stripBlocklistedScripts } from '../util/htmlFilters';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { decode } from 'html-entities';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -188,7 +189,12 @@ export class PDFService {
         try {
           const rendered: PrerenderedTask[] = [];
           for (const t of pageTasks) {
-            rendered.push({ task: t, renderedBody: await prerenderMath(t.pageInfo.body.join(''), t.pageInfo) });
+            // Decode HTML entities before MathJax so liteDOM never stores them as verbatim
+            // strings (which get double-encoded to &amp;ldquo; in outerHTML output).
+            rendered.push({
+              task: t,
+              renderedBody: await prerenderMath(this.decodeHTML(t.pageInfo.body.join('')), t.pageInfo),
+            });
           }
           prerenderedMap.set(group.sortKey, rendered);
         } catch (mathError) {
@@ -458,6 +464,14 @@ export class PDFService {
     return filePath;
   }
 
+  private decodeHTML(raw: string) {
+    // Protect &quot; (used in attribute values) from being decoded to a bare " that
+    // would break HTML attribute quoting. All other named entities — including curly
+    // quotes like &ldquo; / &rdquo; / &rsquo; — are decoded to their unicode equivalents
+    // so Prince receives plain text rather than literal entity strings.
+    return decode(raw.replaceAll('&quot;', 'QUOT_REPL'), { level: 'html5' }).replace(/QUOT_REPL/g, '&quot;');
+  }
+
   private async convertPage({
     pageID,
     pageInfo,
@@ -484,8 +498,13 @@ export class PDFService {
   }) {
     try {
       // Use pre-rendered math if available (Phase 1 pre-render), otherwise render now.
-      const renderedBodyHTML = this.sanitizeImagesForPDF(
-        preRenderedBodyHTML ?? (await prerenderMath(pageBodyHTML, pageInfo)),
+      // Entities in pageBodyHTML are decoded before prerenderMath so MathJax's liteDOM
+      // never stores them verbatim (which causes double-encoding in outerHTML output).
+      // The outer decodeHTML is a catch-all for any other content paths (TOC, Index, etc.).
+      const renderedBodyHTML = this.decodeHTML(
+        this.sanitizeImagesForPDF(
+          preRenderedBodyHTML ?? (await prerenderMath(this.decodeHTML(pageBodyHTML), pageInfo)),
+        ),
       );
       const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(pageHeadHTML));
 
