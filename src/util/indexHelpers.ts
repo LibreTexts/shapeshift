@@ -9,7 +9,17 @@ import { BookPageInfo } from '../types/book';
  * "lulu" is belt-and-suspenders for lulu print tags.
  * "source" removes source-material provenance tags.
  */
-const INDEX_TAG_EXCLUSIONS = ['source', 'lulu', '@', '-'] as const;
+const INDEX_TAG_EXCLUSIONS = [
+  'article',
+  'authorname',
+  'coverpage',
+  'license',
+  'licenseversion',
+  'lulu',
+  'source',
+  '@',
+  '-',
+] as const;
 
 /**
  * Leading articles stripped from term names before sorting so that e.g.
