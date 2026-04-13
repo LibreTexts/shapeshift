@@ -350,16 +350,21 @@ export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Prom
     // getDocument is dynamically added by MathJax during initialization
     const doc = mj.startup.getDocument(preprocessedHTML);
 
-    // renderPromise handles async font loading in v4's split font architecture
-    await doc.renderPromise();
+    // Inner try/finally ensures doc.clear() always runs — even if renderPromise() or
+    // outerHTML() throws. Without this guarantee, a thrown error leaves the document
+    // registered in MathJax's handler registry; the next getDocument() call then finds
+    // a stale entry and throws "Can't find handler for document". The finally block
+    // executes before the error propagates to the outer catch.
+    let result: string;
+    try {
+      // renderPromise handles async font loading in v4's split font architecture
+      await doc.renderPromise();
 
-    // Get the fully rendered HTML document
-    const result = adaptor.outerHTML(adaptor.root(doc.document));
-
-    // Clean up the document to free resources and prevent MathJax's internal handler
-    // registry from accumulating stale entries. Without this, subsequent getDocument()
-    // calls fail with "Can't find handler for document".
-    doc.clear();
+      // Get the fully rendered HTML document
+      result = adaptor.outerHTML(adaptor.root(doc.document));
+    } finally {
+      doc.clear();
+    }
 
     // MathJax wraps the input in a full HTML document. Extract just the body content
     // since the caller provides (and expects back) a body fragment.
