@@ -1107,6 +1107,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
 
     // Process flat array with correct ordering and TOC placement
     for (const p of pages) {
+      if (p.pageID.toString() === this._rootPageID) continue; // don't include actual cover page with page listing
       const idx = `${conversionTasks.length + 1}`.padStart(4, '0');
       const treeNode = this._treeMap.get(p.pageID.toString());
 
