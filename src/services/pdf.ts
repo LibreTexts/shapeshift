@@ -514,8 +514,8 @@ export class PDFService {
 </head>
 <body>
 ${headerHTML}
-${footerHTML}
 ${renderedBodyHTML}
+${footerHTML}
 ${stripBlocklistedScripts(pageTailHTML)}
 </body>
 </html>
@@ -835,14 +835,13 @@ ${stripBlocklistedScripts(pageTailHTML)}
     const pageTitle = $('#title');
 
     const pageTitleParent = pageTitle?.parent();
-    if (!pageTitle.length || !pageTitleParent.length) return null;
+    if (!pageTitle || !pageTitleParent) return null;
     pageTitle.attr('style', 'border-bottom: none !important');
 
     const newTitle = $('<h1></h1>').text(pageType).attr('id', 'libre-print-directory-header');
 
     const typeContainer = $('<div></div>').attr('id', 'libre-print-directory-header-container');
     typeContainer.append(newTitle);
-
     pageTitle.before(typeContainer);
 
     if (pageType === 'Table of Contents') pageTitle.remove();
@@ -930,7 +929,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       } else {
         const listing = await this.getLevel(pageInfo);
         const updatedHTML = this.processDirectoryPage({
-          html: pageInfo.body.join(''),
+          html: `<h1 id="title">${pageInfo.title}</h1>${pageInfo.body.join('')}`,
           listing,
           tags: pageInfo.tags,
           title: pageInfo.title,
@@ -1109,7 +1108,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
     // Process flat array with correct ordering and TOC placement
     for (const p of pages) {
       const idx = `${conversionTasks.length + 1}`.padStart(4, '0');
-      //const treeNode = this._treeMap.get(p.pageID.toString());
+      const treeNode = this._treeMap.get(p.pageID.toString());
 
       // The front matter "Table of Contents" page uses the root book hierarchy to generate
       // a full-book TOC. It outputs at the front matter position, replacing the CXOne template placeholder.
@@ -1162,25 +1161,25 @@ ${stripBlocklistedScripts(pageTailHTML)}
 
       // TODO: Re-enable chapter/section TOC generation once main TOC placement is stable.
       // Chapter/section directory pages will eventually get their own TOC page at the start of each chapter.
-      // if (
-      //   treeNode &&
-      //   Array.isArray(treeNode.subpages) &&
-      //   treeNode.subpages.length > 1 &&
-      //   (p.tags.includes('article:topic-category') || p.tags.includes('article:topic-guide')) &&
-      //   !['Back Matter', 'Front Matter'].some((t) => p.title.includes(t)) &&
-      //   p.pageID.toString() !== tree.pageID.toString() // guard: root book page TOC is handled by toc-main
-      // ) {
-      //   const chapterFileName = `${idx}_TOC`;
-      //   conversionTasks.push({
-      //     _id: `toc-${p.pageID}`,
-      //     pageID: p.pageID,
-      //     pageInfo: treeNode, // tree node retains subpages for getLevel()
-      //     fileName: chapterFileName,
-      //     sortKey: chapterFileName,
-      //     type: 'toc',
-      //   });
-      //   continue;
-      // }
+      if (
+        treeNode &&
+        Array.isArray(treeNode.subpages) &&
+        treeNode.subpages.length > 1 &&
+        (p.tags.includes('article:topic-category') || p.tags.includes('article:topic-guide')) &&
+        !['Back Matter', 'Front Matter'].some((t) => p.title.includes(t)) &&
+        p.pageID.toString() !== tree.pageID.toString() // guard: root book page TOC is handled by toc-main
+      ) {
+        const chapterFileName = `${idx}_TOC`;
+        conversionTasks.push({
+          _id: `toc-${p.pageID}`,
+          pageID: p.pageID,
+          pageInfo: treeNode, // tree node retains subpages for getLevel()
+          fileName: chapterFileName,
+          sortKey: chapterFileName,
+          type: 'toc',
+        });
+        continue;
+      }
 
       let idxPrefix = idx;
       if (p.matterType === 'Front') {
@@ -1390,7 +1389,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           pageOffset,
         });
       } else {
-        const rawBody = task.pageInfo.body.join('');
+        const rawBody = `<h1 id="title">${task.pageInfo.title}</h1>${task.pageInfo.body.join('')}`;
         const listing = await this.getLevel(task.pageInfo);
         const directoryHTML = this.processDirectoryPage({
           html: rawBody,
@@ -1425,7 +1424,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       for (let i = 0; i < group.tasks.length; i++) {
         const t = group.tasks[i];
 
-        const rawBody = t.pageInfo.body.join('');
+        const rawBody = `<h1 id="title">${t.pageInfo.title}</h1>${t.pageInfo.body.join('')}`;
         const listing = await this.getLevel(t.pageInfo);
         const directoryHTML = this.processDirectoryPage({
           html: rawBody,
@@ -1436,7 +1435,9 @@ ${stripBlocklistedScripts(pageTailHTML)}
 
         const preRendered = prerendered?.find((p) => p.task._id === t._id)?.renderedBody;
         const renderedBody = this.sanitizeImagesForPDF(
-          preRendered ?? (await prerenderMath(directoryHTML ?? rawBody, t.pageInfo)),
+          directoryHTML != null
+            ? await prerenderMath(directoryHTML, t.pageInfo)
+            : (preRendered ?? (await prerenderMath(rawBody, t.pageInfo))),
         );
         const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(t.pageInfo.head));
         const headerHTML = generatePDFHeader(ImageConstants['default']);
@@ -1465,8 +1466,8 @@ ${stripBlocklistedScripts(pageTailHTML)}
 </head>
 <body>
 ${headerHTML}
-${footerHTML}
 ${renderedBody}
+${footerHTML}
 ${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
 </body>
 </html>
