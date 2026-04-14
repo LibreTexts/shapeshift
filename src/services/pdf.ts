@@ -191,9 +191,10 @@ export class PDFService {
           for (const t of pageTasks) {
             // Decode HTML entities before MathJax so liteDOM never stores them as verbatim
             // strings (which get double-encoded to &amp;ldquo; in outerHTML output).
+            const rawHTML = this.decodeHTML(this.addPageTitle(t.pageInfo, t.pageInfo.body.join('')));
             rendered.push({
               task: t,
-              renderedBody: await prerenderMath(this.decodeHTML(t.pageInfo.body.join('')), t.pageInfo),
+              renderedBody: await prerenderMath(rawHTML, t.pageInfo),
             });
           }
           prerenderedMap.set(group.sortKey, rendered);
@@ -464,6 +465,16 @@ export class PDFService {
     return filePath;
   }
 
+  private addPageTitle(pageInfo: BookPageInfo, raw: string) {
+    const titleExclusions = ['InfoPage', 'TitlePage', 'Table of Contents'];
+    const isInExcludedList = titleExclusions.some((e) => pageInfo.title.includes(e));
+    const isTableOfContents = pageInfo.pageID.pageNum === this._bookID.pageNum;
+    const hasChildren = !!pageInfo.subpages?.length;
+    const shouldRenderTitle = !(isInExcludedList || isTableOfContents || hasChildren);
+    const pageTitleElem = shouldRenderTitle ? `<h1>${pageInfo.title}</h1>` : '';
+    return `${pageTitleElem}${raw}`;
+  }
+
   private decodeHTML(raw: string) {
     // Protect &quot; (used in attribute values) from being decoded to a bare " that
     // would break HTML attribute quoting. All other named entities — including curly
@@ -473,28 +484,28 @@ export class PDFService {
   }
 
   private async convertPage({
-    pageID,
-    pageInfo,
-    pageBodyHTML,
-    preRenderedBodyHTML,
-    pageHeadHTML = '',
-    pageTailHTML = '',
     additionalCSS,
     mainColor = '#127BC4',
-    sortKey,
+    pageBodyHTML,
+    pageHeadHTML = '',
+    pageID,
+    pageInfo,
     pageOffset,
+    pageTailHTML = '',
+    preRenderedBodyHTML,
+    sortKey,
   }: {
-    pageID: PageID;
-    pageInfo: BookPageInfo;
-    pageBodyHTML: string;
-    /** If supplied, skips the prerenderMath call (math was pre-rendered in Phase 1). */
-    preRenderedBodyHTML?: string;
-    pageHeadHTML?: string;
-    pageTailHTML?: string;
     additionalCSS?: string;
     mainColor?: string;
-    sortKey: string;
+    pageBodyHTML: string;
+    pageHeadHTML?: string;
+    pageID: PageID;
+    pageInfo: BookPageInfo;
     pageOffset?: number;
+    pageTailHTML?: string;
+    /** If supplied, skips the prerenderMath call (math was pre-rendered in Phase 1). */
+    preRenderedBodyHTML?: string;
+    sortKey: string;
   }) {
     try {
       // Use pre-rendered math if available (Phase 1 pre-render), otherwise render now.
@@ -503,7 +514,8 @@ export class PDFService {
       // The outer decodeHTML is a catch-all for any other content paths (TOC, Index, etc.).
       const renderedBodyHTML = this.decodeHTML(
         this.sanitizeImagesForPDF(
-          preRenderedBodyHTML ?? (await prerenderMath(this.decodeHTML(pageBodyHTML), pageInfo)),
+          preRenderedBodyHTML ??
+            (await prerenderMath(this.decodeHTML(this.addPageTitle(pageInfo, pageBodyHTML)), pageInfo)),
         ),
       );
       const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(pageHeadHTML));
@@ -948,7 +960,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       } else {
         const listing = await this.getLevel(pageInfo);
         const updatedHTML = this.processDirectoryPage({
-          html: `<h1 id="title">${pageInfo.title}</h1>${pageInfo.body.join('')}`,
+          html: `<h2 id="title">${pageInfo.title}</h2>${pageInfo.body.join('')}`,
           listing,
           tags: pageInfo.tags,
           title: pageInfo.title,
@@ -1136,7 +1148,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         frontMatterIdx += 1;
         const tocFileName = `0000:${frontMatterIdx}`;
         conversionTasks.push({
-          _id: `toc-main`,
+          _id: 'toc-main',
           pageID: p.pageID,
           pageInfo: tree, // root node carries the full hierarchy needed by getLevel()
           fileName: tocFileName,
@@ -1409,7 +1421,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           pageOffset,
         });
       } else {
-        const rawBody = `<h1 id="title">${task.pageInfo.title}</h1>${task.pageInfo.body.join('')}`;
+        const rawBody = task.pageInfo.body.join('');
         const listing = await this.getLevel(task.pageInfo);
         const directoryHTML = this.processDirectoryPage({
           html: rawBody,
@@ -1444,7 +1456,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       for (let i = 0; i < group.tasks.length; i++) {
         const t = group.tasks[i];
 
-        const rawBody = `<h1 id="title">${t.pageInfo.title}</h1>${t.pageInfo.body.join('')}`;
+        const rawBody = t.pageInfo.body.join('');
         const listing = await this.getLevel(t.pageInfo);
         const directoryHTML = this.processDirectoryPage({
           html: rawBody,
