@@ -185,7 +185,13 @@ export function generateIndexHTML(data: IndexData): string {
         return `<div class="libre-index-term"><p class="libre-index-term-name">${escapeHTML(term.name)}</p><div class="libre-index-term-pages">${pageLinks}</div></div>`;
       })
       .join('');
-    return `<div class="libre-index-letter-group" id="libre-index-${group.letter}"><h2 class="libre-index-letter">${group.letter}</h2>${terms}</div>`;
+    return `
+      <div class="libre-index-letter-group">
+        <h2 class="libre-index-letter">
+          <a id="libre-index-${group.letter}">${group.letter}</a>
+        </h2>
+        ${terms}
+      </div>`;
   };
 
   return `<div id="libre-index-nav">${navLinks}</div>
