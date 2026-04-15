@@ -53,6 +53,10 @@ const pdfCoverExtraPaddingCSS = readFileSync(join(__dirname, '../styles/pdf-cove
 export const pdfTOCStyles = readFileSync(join(__dirname, '../styles/pdf-toc.css'), 'utf-8');
 export const pdfIndexStyles = readFileSync(join(__dirname, '../styles/pdf-index.css'), 'utf-8');
 export const pdfGlossaryStyles = readFileSync(join(__dirname, '../styles/pdf-glossary.css'), 'utf-8');
+export const pdfDetailedLicensingStyles = readFileSync(
+  join(__dirname, '../styles/pdf-detailed-licensing.css'),
+  'utf-8',
+);
 
 // --- Page dimension constants (letter size) ---
 export const PDF_PAGE_WIDTH_IN = 8.5;

@@ -1,0 +1,10 @@
+#libre-licensing-by-page-container {
+    column-count: 2;
+    font-size: 11px;
+    margin-top: 1em;
+    padding: 0 1em;
+}
+
+#libre-licensing-by-page-container > ul {
+    margin: 0;
+}

@@ -14,6 +14,7 @@ import {
   pdfGlossaryStyles,
   pdfHeaderCSS,
   pdfFooterCSS,
+  pdfDetailedLicensingStyles,
 } from '../util/pdfHelpers';
 import { buildTagIndex, generateIndexHTML } from '../util/indexHelpers';
 import { parseGlossaryTable, buildGlossaryData, generateGlossaryHTML } from '../util/glossaryHelpers';
@@ -37,6 +38,8 @@ import { stripBlocklistedScripts } from '../util/htmlFilters';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decode } from 'html-entities';
+import { generateDetailedLicensingHTML } from '../util/detailedLicensingHelpers';
+import axios from 'axios';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -67,7 +70,7 @@ type ConversionTask = {
   fileName: string;
   sortKey: string;
   subtype?: 'main-toc';
-  type: 'page' | 'toc' | 'index' | 'glossary';
+  type: 'page' | 'toc' | 'index' | 'glossary' | 'detailed-licensing';
 };
 
 /**
@@ -1111,6 +1114,53 @@ ${stripBlocklistedScripts(pageTailHTML)}
     }
   }
 
+  private async generateDetailedLicensing({
+    pageInfo,
+    sortKey,
+    pageOffset,
+  }: {
+    pageInfo: BookPageInfo;
+    sortKey: string;
+    pageOffset?: number;
+  }) {
+    try {
+      this.logger.withMetadata({ bookID: pageInfo.pageID.toString() }).info('Starting Detailed Licensing generation');
+      const licensingReportRes = await axios.get(`https://api.libretexts.org/endpoint/licensereport/${pageInfo.url}`, {
+        headers: {
+          Origin: 'downloads.libretexts.org',
+        },
+      });
+      if (licensingReportRes.status !== 200 || !licensingReportRes.data) {
+        this.logger
+          .withMetadata({ bookID: pageInfo.pageID.toString() })
+          .info('No detailed licensing report found or error encountered.');
+      }
+      const licensingBodyHTML = `
+        <div id="libre-print-directory-header-container">
+          <h1 id="libre-print-directory-header">Detailed Licensing</h1>
+        </div>
+        <div id="libre-detailed-licensing">
+          ${generateDetailedLicensingHTML(licensingReportRes.data)}
+        </div>
+      `;
+
+      const outputPath = await this.convertPage({
+        pageID: pageInfo.pageID,
+        pageInfo,
+        pageBodyHTML: licensingBodyHTML,
+        additionalCSS: pdfTOCStyles + '\n' + pdfDetailedLicensingStyles,
+        sortKey,
+        pageOffset,
+      });
+
+      this.logger.withMetadata({ url: pageInfo.url }).info('Finished Detailed Licensing generation.');
+      return outputPath;
+    } catch (error) {
+      this.logger.withMetadata({ url: pageInfo.url, error }).error('Detailed Licensing generation failed');
+      throw error;
+    }
+  }
+
   /**
    * Returns a flat list of conversion tasks in the correct order for PDF generation, including TOC placement.
    * The TOC is placed before the first page that has more than 1 subpage and is tagged as either "article:topic-category" or "article:topic-guide",
@@ -1187,6 +1237,21 @@ ${stripBlocklistedScripts(pageTailHTML)}
           fileName: glossFileName,
           sortKey: glossFileName,
           type: 'glossary',
+        });
+        continue;
+      }
+
+      // The back matter "Detailed Licensing" page is replaced by a server-side generated report.
+      if (p.matterType === 'Back' && p.title === 'Detailed Licensing') {
+        backMatterIdx += 1;
+        const dlFileName = `9999:${backMatterIdx}`;
+        conversionTasks.push({
+          _id: 'detailed-licensing-main',
+          pageID: p.pageID,
+          pageInfo: tree, // needs full hierarchy contained in root node
+          fileName: dlFileName,
+          sortKey: dlFileName,
+          type: 'detailed-licensing',
         });
         continue;
       }
@@ -1420,6 +1485,12 @@ ${stripBlocklistedScripts(pageTailHTML)}
         });
       } else if (task.type === 'glossary') {
         return this.generateGlossary({
+          pageInfo: task.pageInfo,
+          sortKey: task.sortKey,
+          pageOffset,
+        });
+      } else if (task.type === 'detailed-licensing') {
+        return this.generateDetailedLicensing({
           pageInfo: task.pageInfo,
           sortKey: task.sortKey,
           pageOffset,

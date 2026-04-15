@@ -1,11 +1,5 @@
 import { ImageConstants } from './imageConstants';
-
-export type LicenseInfo = {
-  label: string;
-  link: string;
-  raw: string;
-  version?: string;
-};
+import { LicenseInfo } from '../types/licensing';
 
 /**
  * Builds an HTML string with the specified Creative Commons license's icon(s).
