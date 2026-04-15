@@ -142,7 +142,7 @@ export class PDFService {
       throw new Error('Book ID is required and must be a valid PageID instance');
     }
 
-    this.logger = logService.child().withContext({ logSource: this.logName });
+    this.logger = logService.child().withContext({ logSource: this.logName, bookID: this._bookID.toString() });
     this.storageService = new StorageService();
   }
 
@@ -466,7 +466,7 @@ export class PDFService {
   }
 
   private addPageTitle(pageInfo: BookPageInfo, raw: string) {
-    const titleExclusions = ['InfoPage', 'TitlePage', 'Table of Contents'];
+    const titleExclusions = ['Detailed Licensing', 'Glossary', 'Index', 'InfoPage', 'TitlePage', 'Table of Contents'];
     const isInExcludedList = titleExclusions.some((e) => pageInfo.title.includes(e));
     const isTableOfContents = pageInfo.pageID.pageNum === this._bookID.pageNum;
     const hasChildren = !!pageInfo.subpages?.length;
@@ -520,7 +520,7 @@ export class PDFService {
       );
       const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(pageHeadHTML));
 
-      const headerHTML = generatePDFHeader(ImageConstants['default']);
+      const headerHTML = this.getShouldShowHeader(pageInfo) ? generatePDFHeader(ImageConstants['default']) : '';
       const sectionNum = extractPageNumberPrefix(pageInfo.title).replace(/\.$/, '');
       const footerHTML = generatePDFFooter({ sectionNum });
 
@@ -1285,6 +1285,10 @@ ${stripBlocklistedScripts(pageTailHTML)}
     return parent === this._rootPageID ? current : null;
   }
 
+  public getShouldShowHeader(pageInfo: BookPageInfo): boolean {
+    return !['TitlePage', 'InfoPage'].includes(pageInfo.title);
+  }
+
   /**
    * Groups a sorted ConversionTask array into PageGroups for chapter-level multi-file rendering.
    *
@@ -1472,7 +1476,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
             : (preRendered ?? (await prerenderMath(rawBody, t.pageInfo))),
         );
         const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(t.pageInfo.head));
-        const headerHTML = generatePDFHeader(ImageConstants['default']);
+        const headerHTML = this.getShouldShowHeader(t.pageInfo) ? generatePDFHeader(ImageConstants['default']) : '';
         const sectionNum = extractPageNumberPrefix(t.pageInfo.title).replace(/\.$/, '');
         const footerHTML = generatePDFFooter({ sectionNum });
 
