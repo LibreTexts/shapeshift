@@ -241,10 +241,10 @@ function _generatePDFFrontCoverContent(currentPage: BookPageInfo) {
   return `
     <div id="frontContainer">
       <div>
-        <div id="frontTitle">${currentPage.printInfo.title ?? ''}</div>
+        <div id="frontTitle">${currentPage.printInfo.title || currentPage.title || 'Unknown'}</div>
       </div>
       <div>
-        <div id="frontCite"><i>${currentPage.printInfo.authorName ?? ''}</i><br/>${currentPage.printInfo.companyName ?? ''}</div>
+        <div id="frontCite"><i>${currentPage.printInfo.authorName || 'Unknown'}</i><br/>${currentPage.printInfo.companyName || ''}</div>
       </div>
     </div>
   `;
@@ -313,8 +313,8 @@ function _generatePDFSpineContent({
   const spineFontSize = Math.min((dimensions.spineWidth / dimensions.totalWidth) * 500, 40);
   return `
     <div id="spine">
-      <div>${currentPage.printInfo.spineTitle || currentPage.printInfo.title || ''}</div>
-      <div id="spineCite"><b style="flex:1; text-align: center">${currentPage.printInfo.authorName || ''}</b><img src="https://cdn.libretexts.net/shapeshift/stacked_logo.png" /></div>
+      <div>${currentPage.printInfo.spineTitle || currentPage.printInfo.title || currentPage.title || 'Unknown'}</div>
+      <div id="spineCite"><b style="flex:1; text-align: center">${currentPage.printInfo.authorName || 'Unknown'}</b><img src="https://cdn.libretexts.net/shapeshift/stacked_logo.png" /></div>
     </div>
     <style>
       #spine {
