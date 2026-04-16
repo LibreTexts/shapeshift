@@ -21,7 +21,6 @@ import { parseGlossaryTable, buildGlossaryData, generateGlossaryHTML } from '../
 import { ImageConstants } from '../util/imageConstants';
 import { sleep } from '../helpers';
 import { log as logService } from '../lib/log';
-// import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
 import { PDFDocument } from 'pdf-lib';
 import { LogLayer } from 'loglayer';
 import { Environment } from '../lib/environment';
@@ -30,7 +29,6 @@ import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
 import Prince from 'prince';
 import { BookPageInfo, BookPages } from '../types/book';
 import PageID from '../util/pageID';
-// import { PDF_COVER_WIDTHS } from '../lib/constants';
 import * as cheerio from 'cheerio';
 import { PDFCoverOpts, PDFCoverType } from '../types/pdf';
 import { prerenderMath, stripMathJaxScripts, extractPageNumberPrefix } from '../util/mathjax';
@@ -338,6 +336,7 @@ export class PDFService {
       // TODO: does pages contain the cover page or only true content pages?
       const coverPageInfo = pagesMap.get(this._bookID.toString());
 
+      const coversPath = await this.ensureCoversDirectory();
       const coverResults = await Promise.allSettled(
         coverConfigs.map(async (config) => {
           const result = await this.retryWithBackoff(
@@ -377,7 +376,10 @@ export class PDFService {
         })
         .info('Book conversion completed successfully');
 
-      return contentFilePath;
+      return await this.mergeToFullDocumentAndWrite({
+        coverFilePath: `${coversPath}/Main.pdf`,
+        contentFilePath,
+      });
     } catch (error) {
       this.logger.withMetadata({ error, duration: Date.now() - startTime }).error('Book conversion failed');
       throw error;
@@ -453,6 +455,16 @@ export class PDFService {
 
     // Ensure the dir exists before returning the file path
     await fs.mkdir(dirPath, { recursive: true });
+    return filePath;
+  }
+
+  private async generateFullDocumentOutputFilePath() {
+    const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+    const basePath = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
+    const filePath = join(basePath, `/${this._bookID.toString()}.pdf`);
+
+    // Ensure the dir exists before returning the file path
+    await fs.mkdir(basePath, { recursive: true });
     return filePath;
   }
 
@@ -764,6 +776,37 @@ ${stripBlocklistedScripts(pageTailHTML)}
     await Promise.all(sortedPages.map((p) => fs.unlink(p).catch(() => {})));
 
     return { filePath: outPath, pageCount };
+  }
+
+  private async mergeToFullDocumentAndWrite({
+    contentFilePath,
+    coverFilePath,
+  }: {
+    contentFilePath: string;
+    coverFilePath: string;
+  }) {
+    const { data: mergedData } = await this.mergeFiles([coverFilePath, contentFilePath]);
+    const outPath = await this.generateFullDocumentOutputFilePath();
+
+    // Write merged PDF to its final local path first (needed by both storage paths)
+    const dirPath = getDirectoryPathFromFilePath(outPath);
+    await fs.mkdir(dirPath, { recursive: true });
+    await fs.writeFile(outPath, mergedData);
+
+    if (!this._useLocalStorage) {
+      // Stream the file to S3 — avoids holding a second Buffer copy in memory
+      const stream = createReadStream(outPath);
+      const uploader = this.storageService.createStreamUploader({
+        contentType: 'application/pdf',
+        key: outPath,
+        stream,
+      });
+      if (!uploader) throw new Error('Failed to create S3 stream uploader for content PDF');
+      await uploader.done();
+      // Remove the local temp copy after successful upload
+      await fs.unlink(outPath).catch(() => {});
+    }
+    return outPath;
   }
 
   private async getLevel(pageInfo: BookPageInfo, level = 2, isSubTOC?: boolean): Promise<string> {
