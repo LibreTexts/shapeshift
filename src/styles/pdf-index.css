@@ -3,7 +3,7 @@
  * Uses CSS multi-column layout (column-count: 3).
  *
  * The key to avoiding a spurious page break before the column block is to
- * NOT set break-inside: avoid on .libre-index-letter-group. When that rule
+ * NOT set break-inside: avoid on .index-letter-group. When that rule
  * is present, the three columns have misaligned avoid constraints — no single
  * fragment point satisfies all columns simultaneously, so Prince and Chrome
  * push the entire block to a new page rather than start it mid-page.
@@ -26,64 +26,93 @@
   font-weight: bold;
 }
 
-/* Three-column index body */
-#libre-index-body {
+#index-body {
   column-count: 3;
-  column-gap: 1.4em;
-  font-family: 'Atkinson Hyperlegible', Arial, sans-serif;
+  column-gap: 2.25rem;
+  column-fill: auto;
+  min-height: 70vh;
   font-size: 10.5px;
 }
 
-/* Do NOT set break-inside: avoid here — see file-level comment above. */
-.libre-index-letter-group {
-  margin-bottom: 1em;
+.index-letter-group {
+  margin-bottom: 0.1rem;
 }
 
-/* Letter heading */
-.libre-index-letter {
-  font-size: 1.1em !important;
-  font-weight: bold !important;
-  color: var(--pdf-main-color, #127BC4) !important;
-  border-bottom: 1px solid var(--pdf-main-color, #127BC4);
-  margin: 0 0 0.4em 0 !important;
-  padding: 0 !important;
-  line-height: 1.4 !important;
-  /* Keep the heading glued to its first term — prevents an orphaned letter
-     heading sitting alone at the bottom of a column or page. */
+.index-letter-group:first-child .index-letter-heading {
+  margin-top: 0
+}
+
+.index-letter-heading {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 1.25rem 0 0.45rem;
   break-after: avoid;
   page-break-after: avoid;
 }
 
-/* Suppress any MindTouch-injected heading counters */
-.libre-index-letter::before {
-  content: none !important;
+h2.index-letter-label {
+  line-height: 1;
+  flex-shrink: 0;
+  min-width: 1rem;
+  font-weight: 600;
+  letter-spacing: normal;
+  text-transform: none;
+  font-size: 1.1em !important;
 }
 
-/* Individual term */
-.libre-index-term {
-  margin-bottom: 0.35em;
+.index-letter-rule {
+  flex: 1;
+  height: 1px;
+  background: var(--pdf-main-color, #127BC4);
+  opacity: 0.35;
 }
 
-.libre-index-term-name {
-  font-weight: bold;
-  margin: 0 !important;
-  padding: 0 !important;
-  line-height: 1.3;
+ul.index-entry-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
 }
 
-/* Page links indented under the term name */
-.libre-index-term-pages {
-  padding-left: 0.75em;
-  line-height: 1.5;
+li.index-entry {
+  break-inside: avoid;
+  padding: 0.05rem 0;
 }
 
-.libre-index-page-link {
+.index-entry-line {
+  display: flex;
+  justify-content: space-between;
+  align-items: baseline;
+  gap: 0.25rem;
+}
+
+.index-entry-term {
+  flex: 1 1 auto;
+  hyphens: auto;
+  -webkit-hyphens: auto;
+}
+
+.index-entry-leader {
+  flex: 1 1 auto;
+  border-bottom: 1px dotted #bbb;
+  margin: 0 0.2rem 3px;
+  min-width: 0.5rem;
+}
+
+.index-entry-pages {
+  font-size: 9px;
+  flex-shrink: 0;
+  text-align: right;
+  max-width: 48%;
+}
+
+.index-entry-pages a {
   color: var(--pdf-main-color, #127BC4);
   text-decoration: none;
+  font-style: italic;
 }
 
-/* Fallback message when no index terms are found */
-.libre-index-empty {
-  font-style: italic;
-  color: #666;
+.index-entry-pages a + a::before {
+  content: "; ";
+  font-style: normal;
 }

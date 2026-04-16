@@ -12,10 +12,12 @@ import { BookPageInfo } from '../types/book';
 const INDEX_TAG_EXCLUSIONS = [
   'article',
   'authorname',
+  'authortag',
   'coverpage',
   'license',
   'licenseversion',
   'lulu',
+  'showtoc',
   'source',
   '@',
   '-',
@@ -169,33 +171,41 @@ export function buildTagIndex(pages: BookPageInfo[]): IndexData {
  */
 export function generateIndexHTML(data: IndexData): string {
   if (data.byLetter.length === 0) {
-    return '<p class="libre-index-empty">No index terms found.</p>';
+    return '<p class="index-empty">No index terms found.</p>';
   }
-
-  const navLinks = data.byLetter
-    .map((g, i) => `${i > 0 ? ' &bull; ' : ''}<a href="#libre-index-${g.letter}">${g.letter}</a>`)
-    .join('');
 
   const renderGroup = (group: IndexLetter): string => {
     const terms = group.terms
       .map((term) => {
         const pageLinks = term.pages
-          .map((p) => `<a href="${escapeAttr(p.pageLink)}" class="libre-index-page-link">${escapeHTML(p.pageName)}</a>`)
+          .map((p) => `<a href="${escapeAttr(p.pageLink)}" class="index-page-link">${escapeHTML(p.pageName)}</a>`)
           .join('<br/>');
-        return `<div class="libre-index-term"><p class="libre-index-term-name">${escapeHTML(term.name)}</p><div class="libre-index-term-pages">${pageLinks}</div></div>`;
+        return `
+          <li class="index-entry">
+            <div class="index-entry-line">
+              <span class="index-entry-term">${escapeHTML(term.name)}</span>
+              <span class="index-entry-leader" aria-hidden="true"></span>
+              <span class="index-entry-pages">${pageLinks}</span>
+            </div>
+          </li>
+        `;
       })
       .join('');
     return `
-      <div class="libre-index-letter-group">
-        <h2 class="libre-index-letter">
-          <a id="libre-index-${group.letter}">${group.letter}</a>
-        </h2>
-        ${terms}
-      </div>`;
+      <section class="index-letter-group" id="index-${group.letter}" aria-labelledby="index-heading-${group.letter}">
+        <div class="index-letter-heading">
+          <h2 class="index-letter-label" id="index-heading-${group.letter}">${group.letter}</h2>
+          <span class="index-letter-rule" aria-hidden="true"></span>
+        </div>
+        <ul class="index-entry-list">${terms}</ul>
+      </section>`;
   };
 
-  return `<div id="libre-index-nav">${navLinks}</div>
-<div id="libre-index-body">${data.byLetter.map(renderGroup).join('')}</div>`;
+  return `
+    <div id="index-body">
+      ${data.byLetter.map(renderGroup).join('')}
+    </div>
+  `;
 }
 
 // ---------------------------------------------------------------------------
