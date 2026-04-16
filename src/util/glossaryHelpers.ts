@@ -76,9 +76,21 @@ export function parseGlossaryTable(bodyHTML: string): GlossaryEntry[] | null {
     const licenseMatch = LICENSE_RE.exec(fragment);
     const sourceMatch = SOURCE_RE.exec(fragment);
     const license = licenseMatch
-      ? stripHTMLTags(licenseMatch[1]).replace(/<p>/g, ' ').replace(/<\/p>/g, ' ').trim()
+      ? stripHTMLTags(licenseMatch[1])
+          .replace(/&nbsp;/g, ' ')
+          .replace(/\xa0/g, ' ')
+          .replace(/<p>/g, ' ')
+          .replace(/<\/p>/g, ' ')
+          .trim()
       : '';
-    const source = sourceMatch ? stripHTMLTags(sourceMatch[1]).replace(/<p>/g, ' ').replace(/<\/p>/g, ' ').trim() : '';
+    const source = sourceMatch
+      ? stripHTMLTags(sourceMatch[1])
+          .replace(/&nbsp;/g, ' ')
+          .replace(/\xa0/g, ' ')
+          .replace(/<p>/g, ' ')
+          .replace(/<\/p>/g, ' ')
+          .trim()
+      : '';
 
     const sourceParts = [license, source].filter(Boolean);
     if (sourceParts.length > 0) {
@@ -89,14 +101,24 @@ export function parseGlossaryTable(bodyHTML: string): GlossaryEntry[] | null {
     let link: string | null = null;
     const linkMatch = LINK_RE.exec(fragment);
     if (linkMatch) {
-      const linkCell = linkMatch[1].trim();
+      const linkCell = linkMatch[1]
+        .replace(/&nbsp;/g, ' ')
+        .replace(/\xa0/g, ' ')
+        .trim();
       if (linkCell) {
         const hrefMatch = LINK_HREF_RE.exec(linkCell);
         if (hrefMatch) {
-          link = hrefMatch[1].trim() || null;
+          link =
+            hrefMatch[1]
+              .replace(/&nbsp;/g, '')
+              .replace(/\xa0/g, '')
+              .trim() || null;
         } else {
           // Fallback: use stripped cell text as URL
-          const rawURL = stripHTMLTags(linkCell).trim();
+          const rawURL = stripHTMLTags(linkCell)
+            .replace(/&nbsp;/g, '')
+            .replace(/\xa0/g, '')
+            .trim();
           link = rawURL || null;
         }
       }
@@ -170,10 +192,6 @@ export function generateGlossaryHTML(data: GlossaryData): string {
     return '<p class="libre-glossary-empty">No glossary terms found.</p>';
   }
 
-  const navLinks = data.byLetter
-    .map((g, i) => `${i > 0 ? ' &bull; ' : ''}<a href="#libre-glossary-${g.letter}">${g.letter}</a>`)
-    .join('');
-
   const letterGroups = data.byLetter
     .map((group) => {
       const entryItems = group.entries
@@ -196,9 +214,11 @@ export function generateGlossaryHTML(data: GlossaryData): string {
     })
     .join('');
 
-  return `<nav id="libre-glossary-nav">${navLinks}</nav>
-    <div id="libre-glossary-table">${letterGroups}
-    </div>`;
+  return `
+    <div id="libre-glossary-table">
+      ${letterGroups}
+    </div>
+  `;
 }
 
 // ---------------------------------------------------------------------------

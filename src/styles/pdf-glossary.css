@@ -25,9 +25,7 @@
   font-size: 11px;
 }
 
-/* Keep each letter group from splitting at a bad page break */
 .libre-glossary-letter-group {
-  break-inside: avoid;
   margin-bottom: 1.2em;
 }
 
