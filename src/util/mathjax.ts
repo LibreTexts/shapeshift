@@ -205,7 +205,8 @@ async function initMathJax(): Promise<MathJaxGlobal> {
 
   // Disable on-demand entity file loading.
   //
-  // Root cause of "Can't find handler for document" errors:
+  // This is one of two root causes of "Can't find handler for document" errors.
+  // See sanitizeMathJaxNumericEntities() below for the second.
   //
   // HTMLHandler.handlesDocument() calls adaptor.parse(html) inside a broad try-catch
   // that swallows ALL errors. The liteDOM parser calls Entities.translate() on every
@@ -239,6 +240,52 @@ function getOrInitMathJax(): Promise<MathJaxGlobal> {
     initPromise = initMathJax();
   }
   return initPromise;
+}
+
+// ============================================================================
+// Numeric Entity Sanitization
+// ============================================================================
+
+/**
+ * Neutralizes numeric HTML entities that would cause MathJax's liteDOM parser
+ * to throw a RangeError — the second root cause of "Can't find handler for
+ * document" errors (after the loadMissingEntities RetryError path fixed above).
+ *
+ * MathJax's Entities.translate() matches numeric entities with the regex
+ * `/&(...|#(?:[0-9]+|x[0-9a-f]+));/gi` (note the `/i` flag). Its numeric()
+ * helper then does `entity.charAt(0) === 'x'` case-SENSITIVELY before calling
+ * String.fromCodePoint(n). Three inputs cause String.fromCodePoint to throw:
+ *
+ *   1. `&#X1A;` (uppercase X) — the `i` flag makes the regex match, but
+ *      charAt(0)==='x' fails, so parseInt('X1A',10) returns NaN, and
+ *      fromCodePoint(NaN) throws "Invalid code point NaN".
+ *   2. `&#x110000;` or higher — beyond Unicode's 0x10FFFF ceiling;
+ *      fromCodePoint throws "Invalid code point 1114112".
+ *   3. `&#9999999;` — same ceiling, decimal form.
+ *
+ * Those thrown RangeErrors propagate out of adaptor.parse(), get silently
+ * swallowed by HTMLHandler.handlesDocument()'s try-catch, leave `document`
+ * as a raw string, fail the `instanceof` checks, and surface as the opaque
+ * "Can't find handler for document" error with no indication of the real cause.
+ *
+ * Fix: normalize capital-X to lowercase (MathJax then handles it correctly),
+ * and replace out-of-range code points with U+FFFD (the Unicode replacement
+ * character) — matching html-entities' lenient behavior for the same inputs.
+ */
+function sanitizeMathJaxNumericEntities(html: string): string {
+  // Hex numeric entities — case-normalize and bound-check.
+  return html
+    .replace(/&#[xX]([0-9a-fA-F]+);/g, (_match, hex: string) => {
+      const n = parseInt(hex, 16);
+      if (!Number.isFinite(n) || n < 0 || n > 0x10ffff) return '\uFFFD';
+      // Always emit lowercase 'x' so MathJax's case-sensitive charAt check passes.
+      return `&#x${hex};`;
+    })
+    .replace(/&#([0-9]+);/g, (match, dec: string) => {
+      const n = parseInt(dec, 10);
+      if (!Number.isFinite(n) || n < 0 || n > 0x10ffff) return '\uFFFD';
+      return match;
+    });
 }
 
 // ============================================================================
@@ -334,11 +381,16 @@ export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Prom
     // Preprocess HTML to expand PageIndex macros before MathJax processing
     // This is more reliable than trying to update macros dynamically in MathJax
     // Replace \PageIndex{n} with the expanded value (e.g., "4.2.n")
-    let preprocessedHTML = html;
+    //
+    // Also sanitize out-of-range / uppercase-X numeric entities so the liteDOM
+    // parser can't throw a RangeError during adaptor.parse() — which
+    // HTMLHandler.handlesDocument()'s try-catch would otherwise swallow,
+    // producing the opaque "Can't find handler for document" failure.
+    let preprocessedHTML = sanitizeMathJaxNumericEntities(html);
     if (prefix) {
       // Match \PageIndex{...} patterns and replace with prefix + content
       // Need to handle both inline and display math contexts
-      preprocessedHTML = html.replace(/\\PageIndex\{([^}]+)\}/g, (match, content) => {
+      preprocessedHTML = preprocessedHTML.replace(/\\PageIndex\{([^}]+)\}/g, (_match, content) => {
         // Wrap dots in braces for proper TeX rendering: "4.2." → "{4}{.}{2}{.}"
         const prefixWithBraces = prefix.replace(/\./g, '{.}');
         // Use eatSpaces macro to handle spacing
@@ -346,9 +398,24 @@ export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Prom
       });
     }
 
-    // Use MathJax's document API to find and render all math in the HTML
-    // getDocument is dynamically added by MathJax during initialization
-    const doc = mj.startup.getDocument(preprocessedHTML);
+    // Normalize malformed HTML through cheerio before MathJax's liteDOM parser.
+    preprocessedHTML = cheerio.load(preprocessedHTML, null, false).html();
+
+    // Pre-parse the normalized HTML ourselves so we can (a) catch and log any
+    // remaining parse errors with page context, and (b) pass a LiteDocument to
+    // getDocument() — bypassing HTMLHandler.handlesDocument()'s error-swallowing
+    // try-catch so instanceof succeeds directly.
+    let parsedDoc;
+    try {
+      parsedDoc = (adaptor as any).parse(preprocessedHTML, 'text/html');
+    } catch (parseErr) {
+      const pageName = pageInfo?.title ?? 'unknown';
+      const msg = parseErr instanceof Error ? parseErr.message : String(parseErr);
+      console.error(`MathJax HTML parse failed for "${pageName}": ${msg}`);
+      return html; // Graceful degradation — return original HTML with raw LaTeX
+    }
+
+    const doc = mj.startup.getDocument(parsedDoc);
 
     // Inner try/finally ensures doc.clear() always runs — even if renderPromise() or
     // outerHTML() throws. Without this guarantee, a thrown error leaves the document
