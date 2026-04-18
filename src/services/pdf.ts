@@ -25,7 +25,7 @@ import { PDFDocument } from 'pdf-lib';
 import { LogLayer } from 'loglayer';
 import { Environment } from '../lib/environment';
 import { StorageService } from '../lib/storageService';
-import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
+import { fsPathToS3Key, getDirectoryPathFromFilePath } from '../util/fsHelpers';
 import Prince from 'prince';
 import { BookPageInfo, BookPages } from '../types/book';
 import PageID from '../util/pageID';
@@ -376,10 +376,13 @@ export class PDFService {
         })
         .info('Book conversion completed successfully');
 
-      return await this.mergeToFullDocumentAndWrite({
+      const finalFilePath = await this.mergeToFullDocumentAndWrite({
         coverFilePath: `${coversPath}/Main.pdf`,
         contentFilePath,
       });
+      await this.cleanupWorkdir();
+      if (!this._useLocalStorage) await this.cleanupLocalArtifacts({ finalFilePath });
+      return finalFilePath;
     } catch (error) {
       this.logger.withMetadata({ error, duration: Date.now() - startTime }).error('Book conversion failed');
       throw error;
@@ -461,7 +464,7 @@ export class PDFService {
   private async generateFullDocumentOutputFilePath() {
     const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
     const basePath = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
-    const filePath = join(basePath, `/${this._bookID.toString()}.pdf`);
+    const filePath = join(basePath, '/Full.pdf');
 
     // Ensure the dir exists before returning the file path
     await fs.mkdir(basePath, { recursive: true });
@@ -758,19 +761,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
     await fs.mkdir(dirPath, { recursive: true });
     await fs.writeFile(outPath, mergedData);
 
-    if (!this._useLocalStorage) {
-      // Stream the file to S3 — avoids holding a second Buffer copy in memory
-      const stream = createReadStream(outPath);
-      const uploader = this.storageService.createStreamUploader({
-        contentType: 'application/pdf',
-        key: outPath,
-        stream,
-      });
-      if (!uploader) throw new Error('Failed to create S3 stream uploader for content PDF');
-      await uploader.done();
-      // Remove the local temp copy after successful upload
-      await fs.unlink(outPath).catch(() => {});
-    }
+    if (!this._useLocalStorage) await this.streamFileToS3(outPath); // TODO: do we need this in S3?
 
     // Clean up all individual group PDFs now that merge is complete
     await Promise.all(sortedPages.map((p) => fs.unlink(p).catch(() => {})));
@@ -793,19 +784,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
     await fs.mkdir(dirPath, { recursive: true });
     await fs.writeFile(outPath, mergedData);
 
-    if (!this._useLocalStorage) {
-      // Stream the file to S3 — avoids holding a second Buffer copy in memory
-      const stream = createReadStream(outPath);
-      const uploader = this.storageService.createStreamUploader({
-        contentType: 'application/pdf',
-        key: outPath,
-        stream,
-      });
-      if (!uploader) throw new Error('Failed to create S3 stream uploader for content PDF');
-      await uploader.done();
-      // Remove the local temp copy after successful upload
-      await fs.unlink(outPath).catch(() => {});
-    }
+    if (!this._useLocalStorage) await this.streamFileToS3(outPath);
     return outPath;
   }
 
@@ -1708,6 +1687,28 @@ ${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
     //   throw error;
     // }
     // ────────────────────────────────────────────────────────────────────────────────────────────
+  }
+
+  private async streamFileToS3(outPath: string) {
+    // Stream the file to S3 — avoids holding a second Buffer copy in memory
+    const stream = createReadStream(outPath);
+    const uploader = this.storageService.createStreamUploader({
+      contentType: 'application/pdf',
+      key: fsPathToS3Key(outPath),
+      stream,
+    });
+    if (!uploader) throw new Error('Failed to create S3 stream uploader for content PDF');
+    await uploader?.done();
+  }
+
+  private async cleanupLocalArtifacts({ finalFilePath }: { finalFilePath: string }) {
+    const logData = { bookID: this._bookID.toString(), finalFilePath };
+    try {
+      await fs.unlink(finalFilePath);
+      this.logger.withMetadata(logData).info('Cleaned up local artifacts');
+    } catch (error) {
+      this.logger.withMetadata(logData).withError(error).warn('Failed to clean up local artifacts');
+    }
   }
 
   /**
