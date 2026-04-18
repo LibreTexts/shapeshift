@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { exit } from 'process';
 import express from 'express';
 import helmet from 'helmet';
 import rateLimit, { ipKeyGenerator } from 'express-rate-limit';
@@ -48,7 +49,10 @@ function shutdown() {
     console.log('Attempting graceful shutdown of Shapeshift API worker...');
     server.close(async () => {
       console.log('Shapeshift API worker shutdown successfully.');
+      exit(0);
     });
+  } else {
+    exit(0);
   }
 }
 

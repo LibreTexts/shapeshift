@@ -1,15 +1,50 @@
-FROM ghcr.io/puppeteer/puppeteer:latest
-LABEL org.opencontainers.image.source="https://github.com/LibreTexts/shapeshift"
+FROM yeslogic/prince:16.2-debian-12-slim AS build
 
 WORKDIR /usr/src/shapeshift
 
-# Install prod deps first for better caching
+# Install Node and NPM
+RUN apt-get update -y \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install all deps (dev included for build)
 COPY package*.json ./
-RUN npm ci
+RUN npm ci && npm cache clean --force
 
 # Build
 COPY . .
 RUN npm run build
 
-# Puppeteer image sets up Chrome; no executablePath needed
-ENTRYPOINT ["node", "build/workers/processor.js"]
+# ── Runtime stage ─────────────────────────────────────────────
+FROM yeslogic/prince:16.2-debian-12-slim
+
+LABEL org.opencontainers.image.source="https://github.com/LibreTexts/shapeshift"
+
+WORKDIR /usr/src/shapeshift
+
+# Install Node only (no build tools needed at runtime)
+RUN apt-get update -y \
+    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
+    && apt-get install -y --no-install-recommends nodejs \
+    && rm -rf /var/lib/apt/lists/* \
+    && apt-get purge -y curl \
+    && apt-get autoremove -y
+
+# Prod-only deps
+COPY package*.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+
+# Copy build output from build stage
+COPY --from=build /usr/src/shapeshift/build ./build
+# Bundled code resolves styles via __dirname/../styles (relative to build/)
+RUN ln -s build/styles styles
+
+# Run as non-root
+RUN groupadd --system shapeshift && useradd --system --gid shapeshift shapeshift \
+    && chown -R shapeshift:shapeshift /usr/src/shapeshift
+USER shapeshift
+
+ENTRYPOINT ["node", "build/workers/processor.mjs"]

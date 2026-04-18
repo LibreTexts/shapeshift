@@ -10,7 +10,7 @@ import {
   Table,
   UpdatedAt,
 } from 'sequelize-typescript';
-import { JobStatus } from '../services/job';
+import { type JobStatus } from '../services/job';
 import { Optional } from 'sequelize';
 
 interface JobAttributes {

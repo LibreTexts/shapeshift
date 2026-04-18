@@ -1,14 +1,34 @@
-FROM node:lts-alpine3.23
-LABEL org.opencontainers.image.source="https://github.com/LibreTexts/shapeshift"
+FROM node:lts-alpine3.23 AS build
 
 WORKDIR /usr/src/shapeshift
 
-# Install prod deps first for better caching
+# Install all deps (dev included for build)
 COPY package*.json ./
-RUN npm ci
+RUN npm ci && npm cache clean --force
 
 # Build
 COPY . .
 RUN npm run build
 
-ENTRYPOINT ["node", "build/workers/api.js"]
+# ── Runtime stage ─────────────────────────────────────────────
+FROM node:lts-alpine3.23
+
+LABEL org.opencontainers.image.source="https://github.com/LibreTexts/shapeshift"
+
+WORKDIR /usr/src/shapeshift
+
+# Prod-only deps
+COPY package*.json ./
+RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
+
+# Copy build output from build stage
+COPY --from=build /usr/src/shapeshift/build ./build
+# Bundled code resolves styles via __dirname/../styles (relative to build/)
+RUN ln -s build/styles styles
+
+# Run as non-root
+RUN addgroup --system shapeshift && adduser --system --ingroup shapeshift shapeshift \
+    && chown -R shapeshift:shapeshift /usr/src/shapeshift
+USER shapeshift
+
+ENTRYPOINT ["node", "build/workers/api.mjs"]

@@ -1,4 +1,4 @@
-import { LicenseInfo } from '../util/licensing';
+import { LicenseInfo } from './licensing';
 import PageID from '../util/pageID';
 
 export type BookMatterType = 'Back' | 'Front';

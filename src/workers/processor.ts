@@ -15,17 +15,23 @@ export async function runProcess() {
   while (isActiveWorker) {
     const jobs = await queueClient.lookForJobs();
     for (const job of jobs) {
+      if (!isActiveWorker) break;
       // Delete the message immediately to prevent multiple workers from processing the same job
       // and/or if the job fails we don't want it to be retried indefinitely.
       await queueClient.deleteJobMessage(job.receiptHandle);
       await jobModel.run(job);
     }
   }
+  console.log('Shapeshift processor worker shut down gracefully.');
 }
 
-process.on('SIGTERM', () => {
-  console.log('Attempting graceful shutdown of Shapeshift worker...');
+function shutdown() {
+  console.log('Shutdown signal received, finishing current job...');
   isActiveWorker = false;
-});
+}
+
+// Register shutdown signal listeners
+const signals = { SIGHUP: 1, SIGINT: 2, SIGTERM: 15 };
+Object.keys(signals).forEach((signal) => process.on(signal, shutdown));
 
 runProcess();

@@ -7,7 +7,7 @@
   "scripts": {
     "dev:api": "tsx watch --clear-screen=false src/workers/api.ts",
     "dev:processor": "tsx watch --clear-screen=false src/workers/processor.ts",
-    "build": "rimraf ./build && tsc && cp -r src/styles build/styles",
+    "build": "rimraf ./build && tsdown src/workers/api.ts src/workers/processor.ts --format esm --dts -d ./build --root src && tsc-alias && cp -r src/styles build/styles",
     "lint": "eslint . --ext .ts",
     "lint-and-fix": "eslint . --ext .ts --fix",
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -41,6 +41,9 @@
     "prettier": "^3.2.5",
     "rimraf": "^5.0.5",
     "semantic-release": "^25.0.2",
+    "tsc-alias": "^1.8.16",
+    "tsdown": "^0.21.9",
+    "tsx": "^4.21.0",
     "typescript": "^5.3.3"
   },
   "dependencies": {
