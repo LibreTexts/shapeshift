@@ -112,7 +112,7 @@ export class DownloadController {
     const inFiveMinutes = new Date();
     inFiveMinutes.setMinutes(inFiveMinutes.getMinutes() + 5);
     return getSignedUrl({
-      dateLessThan: inFiveMinutes.toString(),
+      dateLessThan: inFiveMinutes.toISOString(),
       keyPairId: this.cloudFrontKeyPairId,
       privateKey: Buffer.from(this.cloudFrontPrivateKey, 'base64').toString('utf-8'),
       url: baseUrl,

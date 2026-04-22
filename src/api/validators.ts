@@ -1,8 +1,8 @@
 import zod, { ZodObject, ZodError } from 'zod';
 import { Request, Response, NextFunction } from 'express';
 
-const bookIDSchema = zod.stringFormat('BookID', /[a-z1-2]{3,9}[-][0-9]{2,10}/gi);
-const jobIDSchema = zod.string().length(12);
+const bookIDSchema = zod.stringFormat('BookID', /[a-z1-2]{3,9}[-][0-9]{2,10}/i);
+const jobIDSchema = zod.uuidv4();
 
 export const validators = {
   jobs: {
