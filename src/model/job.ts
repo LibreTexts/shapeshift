@@ -53,6 +53,7 @@ export class Job extends Model<JobAttributes, JobCreationAttributes> {
   @Column(DataType.STRING)
   declare url: string;
 
+  @Index({ order: 'DESC' })
   @CreatedAt
   declare createdAt: Date;
 
