@@ -58,17 +58,3 @@ router.route('/clear-queue').post(async (req, res) => {
 });
 
 export { router };
-
-// Extend Express Request type to include validated data
-declare global {
-  // eslint-disable-next-line @typescript-eslint/no-namespace
-  namespace Express {
-    interface Request {
-      validatedData?: {
-        body?: any;
-        query?: any;
-        params?: any;
-      };
-    }
-  }
-}

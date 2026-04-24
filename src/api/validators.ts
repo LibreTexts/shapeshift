@@ -63,11 +63,7 @@ export function validateZod(schema: ZodObject) {
       }
 
       // Store validated/transformed data in a custom property
-      req.validatedData = {
-        body: validationRes.data.body,
-        query: validationRes.data.query,
-        params: validationRes.data.params,
-      };
+      (req as any).validatedData = validationRes.data;
 
       next();
     } catch (err) {

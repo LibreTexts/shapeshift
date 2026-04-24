@@ -20,17 +20,17 @@ export class JobController {
   }
 
   public async create(req: ZodRequest<zod.infer<typeof validators.job.create>>, res: Response) {
-    const { isHighPriority = false, url } = req.validatedData?.body || {};
+    const { highPriority = false, url } = req.validatedData?.body ?? {};
     const jobModel = new JobService();
     const requesterIp = extractIPFromHeaders(req);
     const jobId = await jobModel.create({
-      isHighPriority,
+      isHighPriority: highPriority,
       requesterIp,
-      url,
+      url: url!,
     });
-    this.logger.withMetadata({ isHighPriority, jobId, requesterIp, url }).info('Job created.');
+    this.logger.withMetadata({ highPriority, jobId, requesterIp, url }).info('Job created.');
 
-    await this.queueClient.sendJobMessage({ isHighPriority, jobId });
+    await this.queueClient.sendJobMessage({ isHighPriority: highPriority, jobId });
 
     return res.status(200).send({
       data: {
@@ -58,12 +58,12 @@ export class JobController {
   }
 
   public async get(req: ZodRequest<zod.infer<typeof validators.job.get>>, res: Response) {
-    const { jobId } = req.validatedData?.params || {};
+    const jobID = req.validatedData?.params?.jobID;
     const jobModel = new JobService();
-    const job = await jobModel.get(jobId);
+    const job = await jobModel.get(jobID!);
     if (!job) {
       return res.status(404).send({
-        msg: `Job with identifier "${jobId}" not found.`,
+        msg: `Job with identifier "${jobID}" not found.`,
         status: 404,
       });
     }
