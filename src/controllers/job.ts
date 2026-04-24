@@ -42,16 +42,26 @@ export class JobController {
   }
 
   public async list(req: ZodRequest<zod.infer<typeof validators.jobs.list>>, res: Response) {
+    const limit = req.validatedData?.query?.limit ?? 100;
+    const offset = req.validatedData?.query?.offset ?? 0;
     const sort = req.validatedData?.query?.sort ?? 'desc';
     const statusFilter = req.validatedData?.query?.status;
-    const jobs = await Job.findAll({
+    const { count, rows } = await Job.findAndCountAll({
       attributes: ['bookID', 'id', 'status', 'isHighPriority', 'url', 'createdAt'],
-      limit: req.validatedData?.query?.limit ?? 100,
-      offset: req.validatedData?.query?.offset ?? 0,
+      limit,
+      offset,
       order: [['createdAt', sort.toUpperCase()]],
       ...(statusFilter && { where: { status: { [Op.in]: statusFilter } } }),
     });
-    return res.status(200).send({ data: jobs, status: 200 });
+    return res.status(200).send({
+      meta: {
+        offset,
+        limit,
+        total: count,
+      },
+      data: rows,
+      status: 200,
+    });
   }
 
   public async get(req: ZodRequest<zod.infer<typeof validators.job.get>>, res: Response) {
