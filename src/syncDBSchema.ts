@@ -1,8 +1,8 @@
 import 'dotenv/config';
 import { confirm } from '@inquirer/prompts';
-import { connectDatabase } from './model';
 import { exit } from 'process';
 import { Environment } from './lib/environment';
+import { sequelize } from './model';
 
 async function runSync() {
   Environment.load();
@@ -14,7 +14,7 @@ async function runSync() {
     console.log('Sync canceled.');
     return;
   }
-  await connectDatabase(true);
+  await sequelize.sync({ alter: true });
 }
 
 runSync()

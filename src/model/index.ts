@@ -43,9 +43,9 @@ sequelize.addModels([ApiCredential, Job]);
  *
  * @returns True if connection established, false if failed.
  */
-export async function connectDatabase(sync: boolean = false): Promise<boolean> {
+export async function connectDatabase(): Promise<boolean> {
   try {
-    await sequelize.sync({ alter: sync });
+    await sequelize.authenticate();
     console.log('[DB] Established database connection.');
   } catch (e) {
     console.error('[DB] Error establishing connection:', e);
