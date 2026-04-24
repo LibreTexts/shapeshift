@@ -14,6 +14,7 @@ import { type JobStatus } from '../services/job';
 import { Optional } from 'sequelize';
 
 interface JobAttributes {
+  bookID?: string;
   createdAt: Date;
   id: string;
   isHighPriority: boolean;
@@ -39,6 +40,9 @@ export class Job extends Model<JobAttributes, JobCreationAttributes> {
   @Index
   @Column(DataType.ENUM('created', 'inprogress', 'finished', 'failed'))
   declare status: JobStatus;
+
+  @Column(DataType.STRING)
+  declare bookID: string;
 
   @Column(DataType.BOOLEAN)
   declare isHighPriority: boolean;

@@ -82,6 +82,7 @@ export class JobService {
           return;
         }
 
+        await job.update({ bookID: bookID.toString() });
         const initPages = await bookModel.discoverPages(bookID.lib, bookID.pageNum);
         log.debug(`Discovered ${initPages.flat.length} pages for book ${bookID.toString()}`);
 

@@ -14,6 +14,7 @@
     "prepare": "husky",
     "prettier": "prettier --config .prettierrc 'src/**/*.ts' --write",
     "sync-db-schema": "tsx src/syncDBSchema.ts",
+    "migrate": "tsx",
     "build-backlog-per-instance": "rimraf ./bpi-dist && npx esbuild src/lambda/backlogPerInstance.ts --bundle --platform=node --target=node22 --format=cjs --outfile=bpi-dist/backlogPerInstance.js --minify --tree-shaking=true && cd bpi-dist && zip -9 -r ../backlogPerInstance.zip backlogPerInstance.js"
   },
   "author": "LibreTexts <info@libretexts.org>",

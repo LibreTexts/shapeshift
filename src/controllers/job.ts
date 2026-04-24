@@ -51,7 +51,7 @@ export class JobController {
 
     const jobs = await Job.findAll({
       where: whereClause,
-      attributes: ['id', 'status', 'isHighPriority', 'url', 'createdAt'],
+      attributes: ['bookID', 'id', 'status', 'isHighPriority', 'url', 'createdAt'],
       order: [['createdAt', sort.toUpperCase()]],
     });
     return res.status(200).send({ data: jobs, status: 200 });
@@ -70,6 +70,7 @@ export class JobController {
 
     return res.status(200).send({
       data: {
+        bookID: job.bookID,
         id: job.id,
         isHighPriority: job.isHighPriority,
         status: job.status,
