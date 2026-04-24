@@ -41,18 +41,15 @@ export class JobController {
     });
   }
 
-  public async listOpen(req: ZodRequest<zod.infer<typeof validators.jobs.listOpen>>, res: Response) {
+  public async list(req: ZodRequest<zod.infer<typeof validators.jobs.list>>, res: Response) {
     const sort = req.validatedData?.query?.sort ?? 'desc';
     const statusFilter = req.validatedData?.query?.status;
-
-    const whereClause = statusFilter
-      ? { status: statusFilter }
-      : { status: { [Op.in]: ['created', 'inprogress', 'failed'] } };
-
     const jobs = await Job.findAll({
-      where: whereClause,
       attributes: ['bookID', 'id', 'status', 'isHighPriority', 'url', 'createdAt'],
+      limit: req.validatedData?.query?.limit ?? 100,
+      offset: req.validatedData?.query?.offset ?? 0,
       order: [['createdAt', sort.toUpperCase()]],
+      ...(statusFilter && { where: { status: { [Op.in]: statusFilter } } }),
     });
     return res.status(200).send({ data: jobs, status: 200 });
   }

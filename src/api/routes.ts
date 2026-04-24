@@ -35,8 +35,8 @@ router
   );
 router
   .route('/jobs')
-  .get(apiKeyAuth, validateZod(validators.jobs.listOpen), (req, res) =>
-    jobController.listOpen(req as ZodRequest<zod.infer<typeof validators.jobs.listOpen>>, res),
+  .get(apiKeyAuth, validateZod(validators.jobs.list), (req, res) =>
+    jobController.list(req as ZodRequest<zod.infer<typeof validators.jobs.list>>, res),
   );
 router.route('/job').post(validateZod(validators.job.create), (req, res) => jobController.create(req, res));
 router.route('/job/:jobID').get(validateZod(validators.job.get), (req, res) => jobController.get(req, res));

@@ -6,10 +6,17 @@ const jobIDSchema = zod.uuidv4();
 
 export const validators = {
   jobs: {
-    listOpen: zod.object({
+    list: zod.object({
       query: zod.object({
-        status: zod.enum(['created', 'inprogress', 'failed']).optional(),
+        limit: zod.coerce.number().int().nonnegative().default(100),
+        offset: zod.coerce.number().int().nonnegative().default(0),
         sort: zod.enum(['asc', 'desc']).default('desc'),
+        status: zod
+          .preprocess(
+            (val) => (typeof val === 'string' ? val.split(',') : val),
+            zod.array(zod.enum(['created', 'inprogress', 'failed', 'finished'])),
+          )
+          .optional(),
       }),
     }),
   },
