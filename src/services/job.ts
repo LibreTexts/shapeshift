@@ -83,39 +83,21 @@ export class JobService {
         }
 
         await job.update({ bookID: bookID.toString() });
-        const initPages = await bookModel.discoverPages(bookID.lib, bookID.pageNum);
-        log.debug(`Discovered ${initPages.flat.length} pages for book ${bookID.toString()}`);
+        const pages = await bookModel.discoverPages(bookID.lib, bookID.pageNum);
+        log.debug(`Discovered ${pages.flat.length} pages for book ${bookID.toString()}`);
 
-        const coverPageInfo = initPages.flat.find((page) => page.pageID.toString() === bookID.toString());
+        const coverPageInfo = pages.flat.find((page) => page.pageID.toString() === bookID.toString());
         if (!coverPageInfo) {
           throw new Error(`Cover page with ID ${bookID.toString()} not found in discovered pages.`);
         }
 
-        // Check for front/back matter and create if missing
-        let didCreateMatter = false;
-        const frontMatterExists = bookModel.checkMatterExists(initPages, 'Front');
-        const backMatterExists = bookModel.checkMatterExists(initPages, 'Back');
-
-        if (!frontMatterExists) {
-          log.warn(`Front matter is missing for book ${bookID.toString()}. Creating front matter...`);
-          await bookModel.createMatter({ mode: 'Front', coverPageInfo });
-          didCreateMatter = true;
-        } else {
-          log.debug(`Front matter already exists for book ${bookID.toString()}. Skipping creation.`);
+        if (!bookModel.checkMatterExists(pages, 'Front')) {
+          log.warn(`Front matter is missing for book ${bookID.toString()}.`);
         }
 
-        if (!backMatterExists) {
-          log.warn(`Back matter is missing for book ${bookID.toString()}. Creating back matter...`);
-          await bookModel.createMatter({ mode: 'Back', coverPageInfo });
-          didCreateMatter = true;
-        } else {
-          log.debug(`Back matter already exists for book ${bookID.toString()}. Skipping creation.`);
+        if (!bookModel.checkMatterExists(pages, 'Back')) {
+          log.warn(`Back matter is missing for book ${bookID.toString()}.`);
         }
-
-        // If we created matter, we need to re-discover pages to get updated structure
-        const pages = didCreateMatter
-          ? await bookModel.discoverPages(bookID.lib, bookID.pageNum, { forceRefresh: true })
-          : initPages;
 
         // <generate pdf>
         const pdfService = new PDFService(bookID, { useLocalStorage });
