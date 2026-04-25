@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { readFileSync, createReadStream } from 'node:fs';
+import { readFileSync, createReadStream, writeFileSync } from 'node:fs';
 import pLimit from 'p-limit';
 import { v4 as uuid } from 'uuid';
 import { join, resolve } from 'node:path';
@@ -125,6 +125,7 @@ type PrerenderedTask = { task: ConversionTask; renderedBody: string };
 
 export class PDFService {
   private _bookID!: PageID;
+  private readonly _useEnvironmentPrinceLicense: boolean = false;
   private _useLocalStorage: boolean = false;
   private _convertedPagePaths: string[] = [];
   private readonly logger: LogLayer;
@@ -145,6 +146,29 @@ export class PDFService {
 
     this.logger = logService.child().withContext({ logSource: this.logName, bookID: this._bookID.toString() });
     this.storageService = new StorageService();
+
+    const encodedPrinceLicense = Environment.getOptional('PRINCE_LICENSE_ENCODED');
+    if (encodedPrinceLicense) {
+      this._useEnvironmentPrinceLicense = true;
+      this.initEnvironmentPrinceLicense(encodedPrinceLicense);
+    }
+  }
+
+  private initEnvironmentPrinceLicense(encodedLicense: string) {
+    // check if license is initialized already
+    try {
+      readFileSync('./prince_license.dat', 'utf-8');
+      return;
+    } catch (e) {
+      this.logger.info('Initializing Prince license from environment variable.');
+    }
+
+    try {
+      const licenseStr = Buffer.from(encodedLicense, 'base64').toString('utf-8');
+      writeFileSync('./prince_license.dat', licenseStr, { encoding: 'utf-8' });
+    } catch (e) {
+      this.logger.withError(e).warn('Error occured initializing Prince license from environment variable.');
+    }
   }
 
   /**
@@ -594,6 +618,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       const prince = new Prince({
         binary: Environment.getOptional('PRINCE_BINARY_PATH', '') || undefined,
       });
+      if (this._useEnvironmentPrinceLicense) prince.license('./prince_license.dat');
 
       const result = await prince
         .option('verbose', true)
