@@ -9,8 +9,18 @@
   }
 
   @bottom {
-    content: element(pageFooter);
+    content: counter(page) string(sectionNum, first);
+    font-size: 16px;
+    font-weight: 700;
+    color: #333;
+    text-align: center;
   }
+}
+
+/* Pages with no header/footer (TitlePage, InfoPage, etc.) */
+@page no-margin-content {
+  @top { content: normal; }
+  @bottom { content: normal; }
 }
 
 /* Running elements — pulled from body flow into @page margin boxes by Prince */
@@ -18,13 +28,14 @@
   position: running(pageHeader);
 }
 
-#libre-pdf-footer {
-  position: running(pageFooter);
+/* Assigns the no-margin-content named page to suppress header/footer */
+.no-margin-content {
+  page: no-margin-content;
 }
 
-/* Prince page counter */
-.pageNumber::after {
-  content: counter(page);
+/* Sets the section number string for @page @bottom via string-set. */
+.section-marker {
+  string-set: sectionNum attr(data-section);
 }
 
 html, body {

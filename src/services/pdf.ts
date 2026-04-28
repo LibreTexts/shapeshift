@@ -13,7 +13,6 @@ import {
   pdfIndexStyles,
   pdfGlossaryStyles,
   pdfHeaderCSS,
-  pdfFooterCSS,
   pdfDetailedLicensingStyles,
 } from '../util/pdfHelpers';
 import { buildTagIndex, generateIndexHTML } from '../util/indexHelpers';
@@ -302,6 +301,7 @@ export class PDFService {
       let cumulativeOffset = 0;
       for (const { group, pageCount } of pass1Counts) {
         groupOffsets.set(group.sortKey, cumulativeOffset);
+        if (group.tasks.every((t) => !this.getShouldShowMarginContent(t.pageInfo))) continue;
         cumulativeOffset += pageCount;
       }
       this.logger
@@ -579,13 +579,15 @@ export class PDFService {
       );
       const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(pageHeadHTML));
 
-      const headerHTML = this.getShouldShowHeader(pageInfo) ? generatePDFHeader(ImageConstants['default']) : '';
+      const showMarginContent = this.getShouldShowMarginContent(pageInfo);
+      const headerHTML = showMarginContent ? generatePDFHeader(ImageConstants['default']) : '';
       const sectionNum = extractPageNumberPrefix(pageInfo.title).replace(/\.$/, '');
-      const footerHTML = generatePDFFooter({ sectionNum });
+      const footerHTML = showMarginContent ? generatePDFFooter({ sectionNum }) : '';
 
-      // Wrap the page content in a complete HTML document with header/footer running elements.
-      // Prince's running element CSS (in pdf-page.css) pulls #libre-pdf-header and
-      // #libre-pdf-footer out of body flow and places them in the @page margin boxes.
+      // Wrap the page content in a complete HTML document with header/footer margin elements.
+      // Prince's running element CSS (in pdf-page.css) pulls #libre-pdf-header out of body
+      // flow into the @page @top margin box. The footer uses string-set + counter(page) in
+      // the @page @bottom margin box directly. See pdf-page.css for details.
       // pageTailHTML includes post-body scripts that must run after the content is in the DOM.
       const wrappedHTML = `
 <!DOCTYPE html>
@@ -597,15 +599,14 @@ export class PDFService {
   <style>${pdfTableCSS}</style>
   <style>${pdfHeaderCSS}</style>
   <style>:root { --pdf-main-color: ${mainColor}; }</style>
-  <style>${pdfFooterCSS}</style>
-  ${pageOffset ? `<style>html { counter-reset: page ${pageOffset}; }</style>` : ''}
+  ${pageOffset ? `<style>html { counter-reset: page ${pageOffset + 1}; }</style>` : ''}
   ${additionalCSS ? `<style>${additionalCSS}</style>` : ''}
   ${cleanedHeadHTML}
 </head>
-<body>
+<body${showMarginContent ? '' : ' class="no-margin-content"'}>
 ${headerHTML}
-${renderedBodyHTML}
 ${footerHTML}
+${renderedBodyHTML}
 ${stripBlocklistedScripts(pageTailHTML)}
 </body>
 </html>
@@ -1464,7 +1465,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
     return parent === this._rootPageID ? current : null;
   }
 
-  public getShouldShowHeader(pageInfo: BookPageInfo): boolean {
+  public getShouldShowMarginContent(pageInfo: BookPageInfo): boolean {
     return !['TitlePage', 'InfoPage'].includes(pageInfo.title);
   }
 
@@ -1661,14 +1662,15 @@ ${stripBlocklistedScripts(pageTailHTML)}
             : (preRendered ?? (await prerenderMath(rawBody, t.pageInfo))),
         );
         const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(t.pageInfo.head));
-        const headerHTML = this.getShouldShowHeader(t.pageInfo) ? generatePDFHeader(ImageConstants['default']) : '';
+        const shouldShowMarginContent = this.getShouldShowMarginContent(t.pageInfo);
+        const headerHTML = shouldShowMarginContent ? generatePDFHeader(ImageConstants['default']) : '';
         const sectionNum = extractPageNumberPrefix(t.pageInfo.title).replace(/\.$/, '');
-        const footerHTML = generatePDFFooter({ sectionNum });
+        const footerHTML = shouldShowMarginContent ? generatePDFFooter({ sectionNum }) : '';
 
         // Inject counter-reset only in the first file — Prince treats multi-file input as one
         // continuous document, so resetting in each file would restart numbering per-page.
         const pageCounterCSS =
-          i === 0 && pageOffset ? `<style>html { counter-reset: page ${pageOffset}; }</style>` : '';
+          i === 0 && pageOffset ? `<style>html { counter-reset: page ${pageOffset + 1}; }</style>` : '';
 
         const wrappedHTML = `
 <!DOCTYPE html>
@@ -1680,15 +1682,14 @@ ${stripBlocklistedScripts(pageTailHTML)}
   <style>${pdfTableCSS}</style>
   <style>${pdfHeaderCSS}</style>
   <style>:root { --pdf-main-color: #127BC4; }</style>
-  <style>${pdfFooterCSS}</style>
   ${directoryHTML ? `<style>${pdfTOCStyles}</style>` : ''}
   ${pageCounterCSS}
   ${cleanedHeadHTML}
 </head>
 <body>
 ${headerHTML}
-${renderedBody}
 ${footerHTML}
+${renderedBody}
 ${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
 </body>
 </html>
@@ -1757,7 +1758,6 @@ ${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
     //   <style>${pdfPageCSS}</style>
     //   <style>${pdfHeaderCSS}</style>
     //   <style>:root { --pdf-main-color: #127BC4; }</style>
-    //   <style>${pdfFooterCSS}</style>
     //   ${cleanedHeadHTML}
     // </head>
     // <body>

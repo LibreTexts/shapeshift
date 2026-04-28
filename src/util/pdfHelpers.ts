@@ -47,7 +47,6 @@ export function generateFontCSS(): string {
 // CSS loaded at module init and inlined into HTML sent to Prince.
 // Note: changes to these files require a server restart in development.
 export const pdfHeaderCSS = readFileSync(join(__dirname, '../styles/pdf-header.css'), 'utf-8');
-export const pdfFooterCSS = readFileSync(join(__dirname, '../styles/pdf-footer.css'), 'utf-8');
 const pdfCoverCSS = readFileSync(join(__dirname, '../styles/pdf-cover.css'), 'utf-8');
 const pdfCoverExtraPaddingCSS = readFileSync(join(__dirname, '../styles/pdf-cover-extra-padding.css'), 'utf-8');
 export const pdfTOCStyles = readFileSync(join(__dirname, '../styles/pdf-toc.css'), 'utf-8');
@@ -181,22 +180,15 @@ export function generatePDFHeader(headerImg: string) {
 }
 
 /**
- * Returns the footer HTML for a content page, wrapped in a Prince running element container.
- * Must be placed in the <body> — Prince's `position: running(pageFooter)` (in pdf-page.css)
- * removes it from flow and places it in the @page @bottom margin box.
+ * Returns a hidden marker element that sets the section number for the page footer.
+ * Prince's `string-set` (in pdf-page.css) captures the `data-section` attribute value,
+ * which is then rendered alongside `counter(page)` in the @page @bottom margin box.
  *
- * Shows the PDF page number centered at the bottom, optionally followed by the section
- * numeration extracted from the page title (e.g., "41 | 2.3.2").
+ * Must be placed in the <body> before content so the string is set on the first page.
  */
 export function generatePDFFooter({ sectionNum }: { sectionNum: string }) {
   const sectionSuffix = sectionNum ? ` | ${sectionNum}` : '';
-  return `
-    <div id="libre-pdf-footer"><div id="libreFooter">
-      <div class="footer-pagenum">
-        <div class="pageNumber"></div>${sectionSuffix}
-      </div>
-    </div></div>
-  `;
+  return `<span class="section-marker" data-section="${sectionSuffix}"></span>`;
 }
 
 export function generatePDFCoverHTML({
