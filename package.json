@@ -84,7 +84,7 @@
     "sequelize": "^6.37.8",
     "sequelize-typescript": "^2.1.6",
     "swagger-ui-express": "^5.0.1",
-    "uuid": "^11.1.0",
+    "uuid": "^14.0.0",
     "xml-formatter": "^3.6.6",
     "yargs": "^17.7.2",
     "zod": "^4.1.12"
