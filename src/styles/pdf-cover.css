@@ -1,55 +1,76 @@
+* {
+  box-sizing: border-box;
+  print-color-adjust: exact;
+}
+
+html, body {
+  height: 100%;
+  width: 100%;
+}
+
 body {
   margin: 0;
-  height: 100vh;
-  width: 100vw;
   display: flex;
   background-color: #127bc4;
   font-family: 'Atkinson Hyperlegible', sans-serif;
   align-content: stretch;
 }
 
-* {
-  white-space: pre-wrap;
-  box-sizing: border-box;
-  /*border: 1px solid black;*/
-  print-color-adjust: exact;
-}
-
 #frontContainer, #backContainer {
   display: flex;
-  flex: 1;
+  flex: 1 1 0%;
+  min-width: 0;
   flex-direction: column;
   justify-content: space-evenly;
-  /*width: 800px;*/
   color: white;
-  padding: 80px 50px;
+  padding: 8% 5%;
   background-size: 100% 100%;
   background-repeat: no-repeat;
 }
 
 #spine {
   display: flex;
-  /*border: 1px dashed black;*/
+  flex-shrink: 0;
   writing-mode: vertical-rl;
-  padding: 80px 0;
+  padding: 5% 0;
   align-items: center;
   background-repeat: no-repeat;
   background-size: 100% 100%;
   overflow: hidden;
   color: white;
+  gap: 16%;
+}
+
+#spine > div:first-child {
+  flex: 3;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  overflow: visible;
+}
+
+#spineTitle {
+  margin: 0;
 }
 
 #spineCite > img {
-  max-width: 100%;
-  max-height: 6vh;
-  /*margin-top: 20px;*/
+  max-height: 100%;
+  max-width: 3vh;
+  object-fit: contain;
 }
 
-#spine > div {
-  flex: 1;
-  width: 100%;
+#spineCite {
+  flex: 2;
+  min-width: 0;
   display: flex;
   align-items: center;
+  justify-content: space-between;
+  font-size: 60%;
+}
+
+#spineCiteAuthorName {
+  margin-right: 10%;
+  text-align: end;
 }
 
 #frontContainer > div, #backContainer > div {
@@ -57,40 +78,37 @@ body {
   flex-direction: column;
   justify-content: center;
   flex: 1;
-  margin-right: 190px;
+  margin-right: 20%;
 }
 
 #backContainer > div {
   align-items: center;
 }
 
-#spine > div:first-child {
-  margin-bottom: 70px;
-}
 
 #backContainer > div {
-  margin-left: 190px;
-  margin-right: unset;
+  margin-left: 20%;
+  margin-right: 0;
 }
 
 #frontTitle {
-  font-size: 50px;
+  font-size: 48px;
   text-transform: uppercase;
 }
 
 #frontCite {
-  font-size: 28px;
+  font-size: 24px;
 }
 
 #backLogo {
-  max-height: 70%;
-  max-width: 80%;
+  max-height: 80%;
+  max-width: 90%;
   object-fit: contain;
 }
 
 div#backOverview {
   flex: 1;
-  margin: 20px;
+  margin: 2%;
   text-align: justify;
   display: flex;
   justify-content: center;
@@ -101,6 +119,3 @@ div#backOverview {
   align-self: flex-end;
 }
 
-#spineCite {
-  font-size: 80%;
-}

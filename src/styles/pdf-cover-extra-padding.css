@@ -1,8 +1,8 @@
 /* Overrides for CaseWrap (hardcover) and PerfectBound covers that require extra bleed padding */
 #frontContainer, #backContainer {
-  padding: 117px 50px;
+  padding: 12% 5%;
 }
 
 #spine {
-  padding: 117px 0;
+  padding: 12% 0;
 }

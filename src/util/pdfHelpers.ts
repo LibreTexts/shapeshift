@@ -267,32 +267,8 @@ function _generatePDFBackCoverContent(currentPage: BookPageInfo) {
       <div>${logoSrc ? `<img id="backLogo" src="${logoSrc}">` : ''}</div>
       <div>
         <div id="backOverview">${currentPage.summary ?? ''}</div>
-        <canvas id="canvas"></canvas>
       </div>
     </div>
-    <script src="https://cdn.libretexts.net/shapeshift/qrcode.js"></script>
-    <script>
-      QRCode.toCanvas(
-        document.getElementById('canvas'),
-        '${currentPage.url}',
-        {
-          color: {
-            dark: '#127BC4',
-            light: '#FFF',
-          },
-          errorCorrectionLevel: 'low',
-          margin: 2,
-          scale: 2,
-        },
-        function (error) {
-          if (error) {
-            console.error(error);
-            return;
-          }
-          console.log('success!');
-        },
-      );
-    </script>
   `;
 }
 
@@ -310,11 +286,19 @@ function _generatePDFSpineContent({
   dimensions: PDFCoverDimensions;
 }) {
   const spinePercent = (dimensions.spineWidth / dimensions.totalWidth) * 100;
-  const spineFontSize = Math.min((dimensions.spineWidth / dimensions.totalWidth) * 500, 40);
+  // Font size is 25% of the physical spine width so a single line of text
+  // fits within the narrow dimension after writing-mode rotation. Cap at
+  // 18px for very thick books to avoid oversized text.
+  const spineFontSize = Math.min(dimensions.spineWidth * 96 * 0.25, 18);
   return `
     <div id="spine">
-      <div>${currentPage.printInfo.spineTitle || currentPage.printInfo.title || currentPage.title || 'Unknown'}</div>
-      <div id="spineCite"><b style="flex:1; text-align: center">${currentPage.printInfo.authorName || 'Unknown'}</b><img src="https://cdn.libretexts.net/shapeshift/stacked_logo.png" /></div>
+      <div id="spineTitleContainer">
+        <p id="spineTitle">${currentPage.printInfo.spineTitle || currentPage.printInfo.title || currentPage.title || 'Unknown'}</p>
+      </div>
+      <div id="spineCite">
+        <b id="spineCiteAuthorName">${currentPage.printInfo.authorName || 'Unknown'}</b>
+        <img src="https://cdn.libretexts.net/shapeshift/stacked_logo.png" />
+      </div>
     </div>
     <style>
       #spine {
