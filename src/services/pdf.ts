@@ -1,5 +1,5 @@
 import fs from 'node:fs/promises';
-import { readFileSync, createReadStream, writeFileSync } from 'node:fs';
+import { readFileSync, createReadStream, writeFileSync, createWriteStream } from 'node:fs';
 import pLimit from 'p-limit';
 import { v4 as uuid } from 'uuid';
 import { join, resolve } from 'node:path';
@@ -38,6 +38,9 @@ import { fileURLToPath } from 'node:url';
 import { decode } from 'html-entities';
 import { generateDetailedLicensingHTML } from '../util/detailedLicensingHelpers';
 import axios from 'axios';
+import { PassThrough } from 'node:stream';
+import Archiver from 'archiver';
+import { Upload } from '@aws-sdk/lib-storage';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -404,6 +407,10 @@ export class PDFService {
         coverFilePath: `${coversPath}/Main.pdf`,
         contentFilePath,
       });
+      await this.mergeToPublicationZipAndWrite({
+        coversDirPath: coversPath,
+        contentFilePath,
+      });
       await this.cleanupWorkdir();
       if (!this._useLocalStorage) await this.cleanupLocalArtifacts({ finalFilePath });
       return finalFilePath;
@@ -489,6 +496,16 @@ export class PDFService {
     const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
     const basePath = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
     const filePath = join(basePath, '/Full.pdf');
+
+    // Ensure the dir exists before returning the file path
+    await fs.mkdir(basePath, { recursive: true });
+    return filePath;
+  }
+
+  private async generatePublicationZipOutputFilePath() {
+    const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+    const basePath = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
+    const filePath = join(basePath, '/Publication.zip');
 
     // Ensure the dir exists before returning the file path
     await fs.mkdir(basePath, { recursive: true });
@@ -810,6 +827,56 @@ ${stripBlocklistedScripts(pageTailHTML)}
     await fs.writeFile(outPath, mergedData);
 
     if (!this._useLocalStorage) await this.streamFileToS3(outPath);
+    return outPath;
+  }
+
+  private async mergeToPublicationZipAndWrite({
+    contentFilePath,
+    coversDirPath,
+  }: {
+    contentFilePath: string;
+    coversDirPath: string;
+  }) {
+    const outPath = await this.generatePublicationZipOutputFilePath();
+    const output = !this._useLocalStorage ? new PassThrough() : createWriteStream(outPath);
+    output.on('close', () => {
+      this.logger.info('Publication.zip output write stream closed.');
+    });
+    const archive = Archiver('zip', { zlib: { level: 9 } });
+    archive.on('error', (err) => {
+      this.logger.withError(err).error('Encountered an error preparing final Publication.zip.');
+      output.destroy(err);
+    });
+    archive.pipe(output);
+
+    let uploader: Upload | undefined;
+    if (!this._useLocalStorage) {
+      uploader = this.storageService.createStreamUploader({
+        contentType: 'application/zip',
+        key: fsPathToS3Key(outPath),
+        stream: output as PassThrough,
+      });
+    }
+
+    // <write files>
+    archive.file(contentFilePath, { name: 'Content.pdf' });
+    PDF_COVER_TYPES.forEach((coverType) => {
+      if (coverType === 'Main') return;
+      archive.file(`${coversDirPath}/${coverType}.pdf`, { name: `Cover_${coverType}.pdf` });
+    });
+    // </write files>
+
+    if (!this._useLocalStorage) {
+      // WARN: don't actually await here: can cause deadlock with storage service streaming upload
+      archive.finalize();
+      this.logger.info('Uploading Publication.zip to storage service...');
+      await uploader?.done();
+      this.logger.info('Finished upload Publication.zip to storage service.');
+    } else {
+      await archive.finalize();
+    }
+
+    this.logger.info('Finished writing Publication.zip output.');
     return outPath;
   }
 
