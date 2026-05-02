@@ -71,7 +71,7 @@
     "helmet": "^8.1.0",
     "html-entities": "^2.6.0",
     "js-beautify": "^1.15.4",
-    "loglayer": "^6.6.0",
+    "loglayer": "^9.1.0",
     "mime": "^4.1.0",
     "mongodb": "^7.1.1",
     "mysql2": "^3.14.2",
