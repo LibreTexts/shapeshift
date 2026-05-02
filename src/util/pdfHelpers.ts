@@ -1,12 +1,54 @@
+import { readFile, writeFile } from 'node:fs/promises';
 import { readFileSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
+import { PDFDocument } from 'pdf-lib';
 import { BookPageInfo } from '../types/book';
 import { PDFCoverOpts, PDFCoverType, PDFCoverDimensions } from '../types/pdf';
+const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export const PDF_COVER_TYPES = ['Amazon', 'CaseWrap', 'CoilBound', 'Main', 'PerfectBound'] as const;
+
+export async function countPDFPages(filePath: string): Promise<number> {
+  const bytes = await readFile(filePath);
+  const doc = await PDFDocument.load(bytes);
+  return doc.getPageCount();
+}
+
+export async function extractPDFPages({
+  inputPath,
+  outputPath,
+  pageEnd,
+  pageStart,
+}: {
+  inputPath: string;
+  outputPath: string;
+  /** Last page to include (1-based, inclusive). Defaults to last page of document. */
+  pageEnd?: number;
+  /** First page to include (1-based, inclusive). Defaults to 1. */
+  pageStart?: number;
+}) {
+  const srcBytes = await readFile(inputPath);
+  const srcDoc = await PDFDocument.load(srcBytes);
+  const totalPages = srcDoc.getPageCount();
+
+  const start = Math.max((pageStart ?? 1) - 1, 0); // convert to 0-based
+  const end = Math.min((pageEnd ?? totalPages) - 1, totalPages - 1); // convert to 0-based
+
+  if (start > end || start >= totalPages) {
+    throw new Error(`Invalid page range: pageStart=${pageStart}, pageEnd=${pageEnd}, totalPages=${totalPages}`);
+  }
+
+  const indices = Array.from({ length: end - start + 1 }, (_, i) => start + i);
+  const destDoc = await PDFDocument.create();
+  const copiedPages = await destDoc.copyPages(srcDoc, indices);
+  for (const page of copiedPages) {
+    destDoc.addPage(page);
+  }
+
+  const destBytes = await destDoc.save();
+  await writeFile(outputPath, destBytes);
+}
 
 /**
  * Generates @font-face CSS for Atkinson Hyperlegible using absolute file:// URLs.
@@ -126,7 +168,11 @@ export function getCoverDimensions(coverType: PDFCoverType, numPages: number | n
 
   switch (coverType) {
     case 'Main':
-      return { spineWidth: 0, totalWidth: PDF_PAGE_WIDTH_IN, height: PDF_PAGE_HEIGHT_IN };
+      return {
+        spineWidth: 0,
+        totalWidth: PDF_PAGE_WIDTH_IN,
+        height: PDF_PAGE_HEIGHT_IN,
+      };
 
     case 'Amazon': {
       const spineWidth = pages * AMAZON_PAGE_THICKNESS_IN;
@@ -138,7 +184,11 @@ export function getCoverDimensions(coverType: PDFCoverType, numPages: number | n
     }
 
     case 'CoilBound':
-      return { spineWidth: 0, totalWidth: COILBOUND_TOTAL_COVER_WIDTH_IN, height: COVER_PAPERBACK_HEIGHT_IN };
+      return {
+        spineWidth: 0,
+        totalWidth: COILBOUND_TOTAL_COVER_WIDTH_IN,
+        height: COVER_PAPERBACK_HEIGHT_IN,
+      };
 
     case 'CaseWrap': {
       const spineWidth =
@@ -206,8 +256,16 @@ export function generatePDFCoverHTML({
 
   const frontContent = _generatePDFFrontCoverContent(bookInfo);
   const backContent = _generatePDFBackCoverContent(bookInfo);
-  const spine = _generatePDFSpineContent({ currentPage: bookInfo, opt, dimensions });
-  const headStyles = _generatePDFCoverHeadStyles({ currentPage: bookInfo, opt, dimensions });
+  const spine = _generatePDFSpineContent({
+    currentPage: bookInfo,
+    opt,
+    dimensions,
+  });
+  const headStyles = _generatePDFCoverHeadStyles({
+    currentPage: bookInfo,
+    opt,
+    dimensions,
+  });
 
   return `
     <!DOCTYPE html>
@@ -320,10 +378,11 @@ export function _generatePDFCoverHeadStyles({
 
   return `
     <style>
-      @page {
+      @page cover-page {
         size: ${pageWidth} ${pageHeight};
         margin: 0;
       }
+      body { page: cover-page; }
     </style>
     <style>${pdfCoverCSS}</style>
     <style>${generateFontCSS()}</style>

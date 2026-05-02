@@ -14,13 +14,14 @@ import {
   pdfGlossaryStyles,
   pdfHeaderCSS,
   pdfDetailedLicensingStyles,
+  countPDFPages,
+  extractPDFPages,
 } from '../util/pdfHelpers';
 import { buildTagIndex, generateIndexHTML } from '../util/indexHelpers';
 import { parseGlossaryTable, buildGlossaryData, generateGlossaryHTML } from '../util/glossaryHelpers';
 import { ImageConstants } from '../util/imageConstants';
 import { sleep } from '../helpers';
 import { log as logService } from '../lib/log';
-import { PDFDocument } from 'pdf-lib';
 import { LogLayer } from 'loglayer';
 import { Environment } from '../lib/environment';
 import { StorageService } from '../lib/storageService';
@@ -57,7 +58,10 @@ const pdfFontCSS = generateFontCSS();
  */
 export const COVER_TYPE_CONFIG: Record<PDFCoverType, { opt?: PDFCoverOpts; usesPageCount: boolean }> = {
   Amazon: { usesPageCount: true },
-  CaseWrap: { opt: { extraPadding: true, hardcover: true }, usesPageCount: true },
+  CaseWrap: {
+    opt: { extraPadding: true, hardcover: true },
+    usesPageCount: true,
+  },
   CoilBound: { opt: { extraPadding: true, thin: true }, usesPageCount: true },
   Main: { usesPageCount: false },
   PerfectBound: { opt: { extraPadding: true }, usesPageCount: true },
@@ -101,10 +105,10 @@ const CIRCUIT_BREAKER_CONFIG = {
 };
 
 /**
- * Maximum number of content pages that may be packed into a single Prince invocation.
- * Large chapters beyond this limit are split into sequential sub-groups, each rendered
- * separately and merged by pdf-lib — avoiding excessive memory use in Prince for
- * books with very large chapters.
+ * Maximum number of content pages per chapter sub-group in a single Prince invocation.
+ * Large chapters beyond this limit are split into sequential sub-groups to bound
+ * per-invocation memory in Pass 1 (page counting). Pass 2 feeds all HTML files to
+ * a single Prince call regardless of group size.
  */
 const MAX_PAGES_PER_GROUP = 6;
 
@@ -115,13 +119,6 @@ const MAX_PAGES_PER_GROUP = 6;
  */
 const DEFAULT_PRINCE_CONCURRENCY = 4;
 
-/**
- * Number of individual group PDFs merged in each batch pass.
- * Bounds peak memory during merging to roughly MERGE_BATCH_SIZE × avg-group-pdf-size.
- * Tune via MERGE_BATCH_SIZE env var.
- */
-const DEFAULT_MERGE_BATCH_SIZE = 25;
-
 /** Represents the pre-rendered math output for a single ConversionTask. */
 type PrerenderedTask = { task: ConversionTask; renderedBody: string };
 
@@ -129,7 +126,6 @@ export class PDFService {
   private _bookID!: PageID;
   private readonly _useEnvironmentPrinceLicense: boolean = false;
   private _useLocalStorage: boolean = false;
-  private _convertedPagePaths: string[] = [];
   private readonly logger: LogLayer;
   private readonly logName = 'PDFService';
   private readonly storageService: StorageService;
@@ -146,7 +142,10 @@ export class PDFService {
       throw new Error('Book ID is required and must be a valid PageID instance');
     }
 
-    this.logger = logService.child().withContext({ logSource: this.logName, bookID: this._bookID.toString() });
+    this.logger = logService.child().withContext({
+      logSource: this.logName,
+      bookID: this._bookID.toString(),
+    });
     this.storageService = new StorageService();
 
     const encodedPrinceLicense = Environment.getOptional('PRINCE_LICENSE_ENCODED');
@@ -201,7 +200,10 @@ export class PDFService {
       const conversionTasks = this.buildTaskList(pagesInput);
       const pageGroups = this.groupTasksIntoChapters(conversionTasks);
       this.logger
-        .withMetadata({ totalTasks: conversionTasks.length, totalGroups: pageGroups.length })
+        .withMetadata({
+          totalTasks: conversionTasks.length,
+          totalGroups: pageGroups.length,
+        })
         .info('Built conversion task list and page groups');
 
       // ── Phase 1: Pre-render MathJax for all groups sequentially ──────────────
@@ -283,10 +285,14 @@ export class PDFService {
         } else if (!r.value.result.success) {
           pass1FailureCount++;
           this.logger
-            .withMetadata({ error: r.value.result.error, group: r.value.group.fileName })
+            .withMetadata({
+              error: r.value.result.error,
+              group: r.value.group.fileName,
+            })
             .error('Group failed Pass 1 after all retries');
         } else if (r.value.result.result) {
-          const pageCount = await this.countPdfPages(r.value.result.result);
+          // Pass 1 never uses htmlOnly, so the result is always a single PDF path.
+          const pageCount = await countPDFPages(r.value.result.result as string);
           pass1Counts.push({ group: r.value.group, pageCount });
         }
       }
@@ -295,22 +301,36 @@ export class PDFService {
         throw new Error(`Job failed in Pass 1: ${pass1FailureCount} group(s) failed to convert`);
       }
 
-      // Sort in the same order as mergeContentPagesAndWrite so offsets accumulate correctly
-      pass1Counts.sort((a, b) => a.group.sortKey.localeCompare(b.group.sortKey, undefined, { numeric: true }));
-      const groupOffsets = new Map<string, number>();
-      let cumulativeOffset = 0;
-      for (const { group, pageCount } of pass1Counts) {
-        groupOffsets.set(group.sortKey, cumulativeOffset);
-        if (group.tasks.every((t) => !this.getShouldShowMarginContent(t.pageInfo))) continue;
-        cumulativeOffset += pageCount;
+      // Identify the first group with visible page numbering so we can insert a
+      // counter-reset in its HTML. Suppressed pages (TitlePage, InfoPage)
+      // still increment it in prince, so we reset to 0 at the first visible page so
+      // numbering starts at 1.
+      const sortedPass1 = [...pass1Counts].sort((a, b) =>
+        a.group.sortKey.localeCompare(b.group.sortKey, undefined, {
+          numeric: true,
+        }),
+      );
+      const firstVisibleSortKey = sortedPass1.find(
+        ({ group }) => !group.tasks.every((t) => !this.getShouldShowMarginContent(t.pageInfo)),
+      )?.group.sortKey;
+      // Map each group to the pageOffset it needs: only the first visible group
+      // gets counter-reset: page 0 (so its first page displays "1"). All other
+      // groups omit counter-reset and let Prince auto-increment continuously.
+      const groupOffsets = new Map<string, number | undefined>();
+      for (const { group } of sortedPass1) {
+        groupOffsets.set(group.sortKey, group.sortKey === firstVisibleSortKey ? 0 : undefined);
       }
-      this.logger
-        .withMetadata({ totalGroups: pass1Counts.length, totalPages: cumulativeOffset })
-        .info('Pass 2: re-generating group PDFs with correct page offsets');
 
-      // ── Phase 2c: Pass 2 — re-render with correct --page-offset ──────────────
-      // Output paths are deterministic (generatePageOutputFilePath uses pageID + sortKey),
-      // so Pass 2 overwrites Pass 1 files without a separate deletion step.
+      const totalPages = sortedPass1.reduce((sum, { pageCount }) => sum + pageCount, 0);
+      this.logger
+        .withMetadata({ totalGroups: sortedPass1.length, totalPages })
+        .info('Pass 2: generating HTML for single Prince invocation');
+
+      // ── Phase 2c: Pass 2 — generate HTML temp files ──
+      // Each group produces one or more HTML files. All files are collected in
+      // sortKey order and passed to a single Prince invocation that produces the
+      // entire content PDF with a unified tagged structure tree.
+      type Pass2GroupResult = { group: PageGroup; htmlPaths: string[] };
       const pass2Results = await Promise.allSettled(
         pageGroups.map((group) =>
           princeLimit(async () => {
@@ -318,29 +338,34 @@ export class PDFService {
               throw new Error('Job exceeded maximum duration (4 hours)');
             }
             const prerendered = prerenderedMap.get(group.sortKey) ?? null;
-            const pageOffset = groupOffsets.get(group.sortKey) ?? 0;
+            const pageOffset = groupOffsets.get(group.sortKey);
             const result = await this.retryWithBackoff(
-              () => this.convertPageGroup(group, prerendered, pageOffset),
-              `Pass 2 group: ${group.fileName} (${group.tasks.length} page(s))`,
+              () => this.convertPageGroup(group, prerendered, pageOffset, true),
+              `Pass 2 HTML group: ${group.fileName} (${group.tasks.length} page(s))`,
             );
-            return { group, result };
+            if (!result.success || !result.result) {
+              throw result.error ?? new Error('No HTML paths returned');
+            }
+            const htmlPaths = Array.isArray(result.result) ? result.result : [result.result];
+            return { group, htmlPaths } satisfies Pass2GroupResult;
           }),
         ),
       );
 
-      // ── Phase 2d: Collect Pass 2 results ─────────────────────────────────────
+      // ── Phase 2d: Collect HTML paths, run single Prince invocation ───────────
       let failureCount = 0;
+      const pass2Groups: Pass2GroupResult[] = [];
       for (const r of pass2Results) {
         if (r.status === 'rejected') {
           failureCount++;
           this.logger.withMetadata({ error: r.reason }).error('Group Pass 2 promise rejected');
-        } else if (!r.value.result.success) {
+        } else if (!r.value.htmlPaths) {
           failureCount++;
           this.logger
-            .withMetadata({ error: r.value.result.error, group: r.value.group.fileName })
-            .error('Group failed Pass 2 after all retries');
+            .withMetadata({ group: r.value.group.fileName })
+            .error('Group failed Pass 2: no HTML paths returned');
         } else {
-          if (r.value.result.result) this._convertedPagePaths.push(r.value.result.result);
+          pass2Groups.push(r.value);
         }
       }
 
@@ -348,20 +373,68 @@ export class PDFService {
         throw new Error(`Job failed: ${failureCount} group(s) failed to convert`);
       }
 
-      // All pages converted successfully, merge and generate covers
-      this.logger.info('All pages converted, merging content');
-      const { filePath: contentFilePath, pageCount: numPages } = await this.mergeContentPagesAndWrite();
+      // Sort groups by sortKey, then flatten to a single ordered list of HTML paths.
+      pass2Groups.sort((a, b) =>
+        a.group.sortKey.localeCompare(b.group.sortKey, undefined, {
+          numeric: true,
+        }),
+      );
+      const allHTMLPaths = pass2Groups.flatMap((g) => g.htmlPaths);
 
-      // Generate covers with retry
-      this.logger.info('Generating covers');
-      const coverConfigs = PDF_COVER_TYPES.map((coverType) => ({
+      // ── Generate Main cover HTML and prepend to the Prince input ──────────
+      // The Main cover doesn't need a page count and must suppress header/footer.
+      const coverPageInfo = pagesMap.get(this._bookID.toString())!;
+      const mainCoverHTML = generatePDFCoverHTML({
+        bookInfo: coverPageInfo,
+        coverType: 'Main',
+        numPages: null,
+      });
+      const mainCoverTempPath = await this._createTempFile(mainCoverHTML);
+
+      this.logger
+        .withMetadata({ totalHTMLFiles: allHTMLPaths.length + 1 })
+        .info('All HTML generated, running single Prince invocation for full document');
+
+      const fullDocHTMLPaths = [mainCoverTempPath, ...allHTMLPaths];
+      const finalFilePath = await this.generateFullDocumentOutputFilePath();
+      const finalDir = getDirectoryPathFromFilePath(finalFilePath);
+      await fs.mkdir(finalDir, { recursive: true });
+      await this.runPrinceConversion({
+        inputPath: fullDocHTMLPaths,
+        outputPath: finalFilePath,
+        pageInfo: coverPageInfo,
+      });
+
+      const numPages = await countPDFPages(finalFilePath);
+      const contentPageCount = numPages - 1; // exclude Main cover
+
+      if (!this._useLocalStorage) await this.streamFileToS3(finalFilePath);
+
+      // Extract content-only pages (page 2 onward) for the publication zip.
+      // Tags/structure are not needed in this file: used for printers only.
+      const contentFilePath = await this.generateContentOutputFilePath();
+      const contentDir = getDirectoryPathFromFilePath(contentFilePath);
+      await fs.mkdir(contentDir, { recursive: true });
+      await extractPDFPages({
+        inputPath: finalFilePath,
+        outputPath: contentFilePath,
+        pageStart: 2,
+      });
+
+      if (!this._useLocalStorage) await this.streamFileToS3(contentFilePath);
+
+      // Clean up HTML temp files now that Prince has consumed them.
+      await Promise.all(fullDocHTMLPaths.map((p) => this._deleteTempFile(p).catch(() => {})));
+
+      this.logger.info('Full document and content PDF generated successfully');
+
+      // Generate print covers (Amazon, CaseWrap, CoilBound, PerfectBound) with retry.
+      this.logger.info('Generating publication covers');
+      const coverConfigs = PDF_COVER_TYPES.filter((t) => t !== 'Main').map((coverType) => ({
         coverType,
-        numPages: COVER_TYPE_CONFIG[coverType].usesPageCount ? numPages : null,
+        numPages: COVER_TYPE_CONFIG[coverType].usesPageCount ? contentPageCount : null,
         opt: COVER_TYPE_CONFIG[coverType].opt,
       }));
-
-      // TODO: does pages contain the cover page or only true content pages?
-      const coverPageInfo = pagesMap.get(this._bookID.toString());
 
       const coversPath = await this.ensureCoversDirectory();
       const coverResults = await Promise.allSettled(
@@ -369,7 +442,7 @@ export class PDFService {
           const result = await this.retryWithBackoff(
             async () =>
               await this.generateCover({
-                bookInfo: coverPageInfo!,
+                bookInfo: coverPageInfo,
                 coverType: config.coverType,
                 numPages: config.numPages,
                 opt: config.opt,
@@ -403,10 +476,6 @@ export class PDFService {
         })
         .info('Book conversion completed successfully');
 
-      const finalFilePath = await this.mergeToFullDocumentAndWrite({
-        coverFilePath: `${coversPath}/Main.pdf`,
-        contentFilePath,
-      });
       await this.mergeToPublicationZipAndWrite({
         coversDirPath: coversPath,
         contentFilePath,
@@ -539,11 +608,14 @@ export class PDFService {
     // would break HTML attribute quoting. All other named entities — including curly
     // quotes like &ldquo; / &rdquo; / &rsquo; — are decoded to their unicode equivalents
     // so Prince receives plain text rather than literal entity strings.
-    return decode(raw.replaceAll('&quot;', 'QUOT_REPL'), { level: 'html5' }).replace(/QUOT_REPL/g, '&quot;');
+    return decode(raw.replaceAll('&quot;', 'QUOT_REPL'), {
+      level: 'html5',
+    }).replace(/QUOT_REPL/g, '&quot;');
   }
 
   private async convertPage({
     additionalCSS,
+    htmlOnly = false,
     mainColor = '#127BC4',
     pageBodyHTML,
     pageHeadHTML = '',
@@ -555,6 +627,8 @@ export class PDFService {
     sortKey,
   }: {
     additionalCSS?: string;
+    /** When true, writes the HTML to a persistent temp file and returns its path without invoking Prince. */
+    htmlOnly?: boolean;
     mainColor?: string;
     pageBodyHTML: string;
     pageHeadHTML?: string;
@@ -589,17 +663,19 @@ export class PDFService {
       // flow into the @page @top margin box. The footer uses string-set + counter(page) in
       // the @page @bottom margin box directly. See pdf-page.css for details.
       // pageTailHTML includes post-body scripts that must run after the content is in the DOM.
+      // TODO: lang attr for non-English texts
       const wrappedHTML = `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
+  <title>${pageInfo.printInfo?.title || pageInfo.title || 'Unknown'}</title>
   <style>${pdfFontCSS}</style>
   <style>${pdfPageCSS}</style>
   <style>${pdfTableCSS}</style>
   <style>${pdfHeaderCSS}</style>
   <style>:root { --pdf-main-color: ${mainColor}; }</style>
-  ${pageOffset ? `<style>html { counter-reset: page ${pageOffset + 1}; }</style>` : ''}
+  ${pageOffset !== undefined ? `<style>html { counter-reset: page ${pageOffset + 1}; }</style>` : ''}
   ${additionalCSS ? `<style>${additionalCSS}</style>` : ''}
   ${cleanedHeadHTML}
 </head>
@@ -612,9 +688,21 @@ ${stripBlocklistedScripts(pageTailHTML)}
 </html>
       `.trim();
 
+      if (htmlOnly) {
+        const htmlPath = await this._createTempFile(wrappedHTML);
+        this.logger.withMetadata({ htmlPath, sortKey }).debug('Generated HTML (htmlOnly).');
+        return htmlPath;
+      }
+
       const outputPath = await this.generatePageOutputFilePath(pageID, sortKey);
 
-      await this.withTempFile(wrappedHTML, (inputPath) => this.runPrinceConversion(inputPath, outputPath));
+      await this.withTempFile(wrappedHTML, (inputPath) =>
+        this.runPrinceConversion({
+          inputPath,
+          outputPath,
+          pageInfo,
+        }),
+      );
 
       this.logger.withMetadata({ outputPath }).info('Converted page.');
       return outputPath;
@@ -631,16 +719,34 @@ ${stripBlocklistedScripts(pageTailHTML)}
    * @param inputPath - path to the input HTML file to be converted
    * @param outputPath - desired path for the output PDF file
    */
-  private async runPrinceConversion(inputPath: string | string[], outputPath: string) {
+  private async runPrinceConversion({
+    inputPath,
+    outputPath,
+    pageInfo,
+  }: {
+    inputPath: string | string[];
+    outputPath: string;
+    pageInfo: BookPageInfo;
+  }) {
+    const inputCount = Array.isArray(inputPath) ? inputPath.length : 1;
+    const timeoutMs = Number.parseInt(Environment.getOptional('PRINCE_TIMEOUT_SECONDS', '60'), 10) * 1000;
+    const maxBufferBytes =
+      Number.parseInt(Environment.getOptional('PRINCE_MAX_BUFFER_GB', '3'), 10) * 1024 * 1024 * 1024;
+
     try {
       const prince = new Prince({
         binary: Environment.getOptional('PRINCE_BINARY_PATH', '') || undefined,
       });
+      prince.timeout(timeoutMs);
+      prince.maxbuffer(maxBufferBytes);
       if (this._useEnvironmentPrinceLicense) prince.license('./prince_license.dat');
 
+      const title = pageInfo.printInfo?.title || pageInfo.title || 'Unknown';
       const result = await prince
         .option('verbose', true)
         .option('javascript', true)
+        .option('tagged-pdf', true)
+        .option('pdf-title', title)
         .inputs(inputPath)
         .output(outputPath)
         .execute();
@@ -652,183 +758,40 @@ ${stripBlocklistedScripts(pageTailHTML)}
       }
     } catch (error) {
       // The prince npm wrapper rejects with { error, stdout, stderr }
-      const princeError = error as { error?: unknown; stdout?: Buffer; stderr?: Buffer };
+      const princeError = error as {
+        error?: unknown;
+        stdout?: Buffer;
+        stderr?: Buffer;
+      };
       const stderr = princeError?.stderr?.toString?.()?.trim();
-      const errorMessage =
-        princeError?.error instanceof Error
-          ? princeError.error.message
-          : typeof princeError?.error === 'string'
-            ? princeError.error
-            : JSON.stringify(error);
+      const innerError = princeError?.error as any;
+
+      // Surface timeout/killed signals explicitly — execFile kills the process
+      // on timeout but the prince wrapper doesn't distinguish it from other errors.
+      let errorMessage: string;
+      if (innerError?.killed || innerError?.signal === 'SIGTERM') {
+        errorMessage = `Prince process was killed (signal: ${innerError.signal ?? 'unknown'}, timeout: ${timeoutMs}ms, inputs: ${inputCount} file(s)). Likely exceeded timeout for large document.`;
+      } else if (innerError instanceof Error) {
+        errorMessage = innerError.message;
+      } else if (typeof innerError === 'string') {
+        errorMessage = innerError;
+      } else {
+        errorMessage = JSON.stringify(error);
+      }
+
       this.logger
-        .withMetadata({ inputPath, outputPath, errorMessage, princeOutput: stderr || undefined })
+        .withMetadata({
+          inputPath: Array.isArray(inputPath) ? `[${inputCount} files]` : inputPath,
+          outputPath,
+          errorMessage,
+          killed: innerError?.killed,
+          signal: innerError?.signal,
+          timeoutMs,
+          princeOutput: stderr || undefined,
+        })
         .error('Prince conversion failed');
       throw new Error(`Prince conversion failed: ${errorMessage}`);
     }
-  }
-
-  /** Returns the page count of an existing PDF file. Used between Pass 1 and Pass 2 to compute per-group page offsets. */
-  private async countPdfPages(filePath: string): Promise<number> {
-    const bytes = await fs.readFile(filePath);
-    const doc = await PDFDocument.load(bytes);
-    return doc.getPageCount();
-  }
-
-  /**
-   * Merges a list of PDF files into a single PDFDocument, processing them in
-   * batches of MERGE_BATCH_SIZE to bound peak memory usage.
-   *
-   * Without batching, loading all 250+ group PDFs simultaneously can exhaust
-   * available RAM (pdf-lib has no streaming API).  Batching keeps each pass to
-   * ~MERGE_BATCH_SIZE × avg-pdf-size in memory at a time.
-   *
-   * @returns The merged PDF as a Uint8Array and the total page count.
-   */
-  private async mergeFiles(
-    files: string[],
-    metadata?: {
-      author: string;
-      isContent?: boolean;
-      isPreview?: boolean;
-      title: string;
-    },
-  ): Promise<{ data: Uint8Array; pageCount: number }> {
-    const mergeBatchSize =
-      parseInt(Environment.getOptional('MERGE_BATCH_SIZE', String(DEFAULT_MERGE_BATCH_SIZE)), 10) ||
-      DEFAULT_MERGE_BATCH_SIZE;
-
-    if (files.length <= mergeBatchSize) {
-      return this._mergeFilesRaw(files, metadata);
-    }
-
-    // Two-tier batched merge: merge chunks → write batch temp files → merge batches
-    this.logger
-      .withMetadata({ totalFiles: files.length, mergeBatchSize })
-      .info('Large merge: using batched two-tier strategy');
-
-    const batchPaths: string[] = [];
-    try {
-      for (let i = 0; i < files.length; i += mergeBatchSize) {
-        const batch = files.slice(i, i + mergeBatchSize);
-        const { data } = await this._mergeFilesRaw(batch);
-        const batchPath = await this._writeTempPDF(data);
-        batchPaths.push(batchPath);
-        this.logger
-          .withMetadata({ batchIndex: Math.floor(i / mergeBatchSize), batchSize: batch.length })
-          .debug('Batch merged');
-      }
-      return await this._mergeFilesRaw(batchPaths, metadata);
-    } finally {
-      // Always clean up batch temp files even if final merge throws
-      await Promise.all(batchPaths.map((p) => fs.unlink(p).catch(() => {})));
-    }
-  }
-
-  /** Low-level merge: loads and copies all given PDF files into one document. */
-  private async _mergeFilesRaw(
-    files: string[],
-    metadata?: {
-      author: string;
-      isContent?: boolean;
-      isPreview?: boolean;
-      title: string;
-    },
-  ): Promise<{ data: Uint8Array; pageCount: number }> {
-    const outputDocument = await PDFDocument.create();
-    for (const filePath of files) {
-      const file = await fs.readFile(filePath);
-      const filePDF = await PDFDocument.load(file);
-      const filePages = await outputDocument.copyPages(filePDF, filePDF.getPageIndices());
-      for (let j = 0, k = filePages.length; j < k; j += 1) {
-        outputDocument.addPage(filePages[j]);
-      }
-    }
-
-    if (metadata?.title) {
-      let pdfTitle = metadata.title;
-      if (metadata?.isPreview) {
-        pdfTitle = `${pdfTitle} (Preview)`;
-      } else if (metadata?.isContent) {
-        pdfTitle = `${pdfTitle} (Inner Content)`;
-      }
-      outputDocument.setTitle(pdfTitle);
-    }
-    if (metadata?.author) outputDocument.setAuthor(metadata.author);
-
-    outputDocument.setProducer('LibreTexts Shapeshift');
-    outputDocument.setCreator('LibreTexts (libretexts.org)');
-    outputDocument.setCreationDate(new Date());
-
-    const data = await outputDocument.save();
-    return { data, pageCount: outputDocument.getPageCount() };
-  }
-
-  /** Writes a PDF Uint8Array to a uniquely-named temp file and returns its path. */
-  private async _writeTempPDF(data: Uint8Array): Promise<string> {
-    const tempDir = resolve('.tmp');
-    await fs.mkdir(tempDir, { recursive: true });
-    const tempPath = join(tempDir, `merge_batch_${uuid()}.pdf`);
-    await fs.writeFile(tempPath, data);
-    return tempPath;
-  }
-
-  /**
-   * Merges all converted content page PDFs, uploads to storage, and cleans up
-   * workdir intermediates.
-   *
-   * @returns The output file path and total page count (avoiding a redundant PDF reload).
-   */
-  private async mergeContentPagesAndWrite(): Promise<{ filePath: string; pageCount: number }> {
-    const extractFileName = (filePath: string) => {
-      const split = filePath.split('/');
-      return split[split.length - 1];
-    };
-
-    const isSplittable = (filePath: string) => !!filePath.split('/').length;
-    const sortedPages = this._convertedPagePaths
-      .filter((p) => isSplittable(p))
-      .sort((aRaw, bRaw) => {
-        const a = extractFileName(aRaw);
-        const b = extractFileName(bRaw);
-        return a.localeCompare(b, undefined, {
-          numeric: true,
-          sensitivity: 'base',
-        });
-      });
-
-    const { data: mergedData, pageCount } = await this.mergeFiles(sortedPages);
-    const outPath = await this.generateContentOutputFilePath();
-
-    // Write merged PDF to its final local path first (needed by both storage paths)
-    const dirPath = getDirectoryPathFromFilePath(outPath);
-    await fs.mkdir(dirPath, { recursive: true });
-    await fs.writeFile(outPath, mergedData);
-
-    if (!this._useLocalStorage) await this.streamFileToS3(outPath); // TODO: do we need this in S3?
-
-    // Clean up all individual group PDFs now that merge is complete
-    await Promise.all(sortedPages.map((p) => fs.unlink(p).catch(() => {})));
-
-    return { filePath: outPath, pageCount };
-  }
-
-  private async mergeToFullDocumentAndWrite({
-    contentFilePath,
-    coverFilePath,
-  }: {
-    contentFilePath: string;
-    coverFilePath: string;
-  }) {
-    const { data: mergedData } = await this.mergeFiles([coverFilePath, contentFilePath]);
-    const outPath = await this.generateFullDocumentOutputFilePath();
-
-    // Write merged PDF to its final local path first (needed by both storage paths)
-    const dirPath = getDirectoryPathFromFilePath(outPath);
-    await fs.mkdir(dirPath, { recursive: true });
-    await fs.writeFile(outPath, mergedData);
-
-    if (!this._useLocalStorage) await this.streamFileToS3(outPath);
-    return outPath;
   }
 
   private async mergeToPublicationZipAndWrite({
@@ -863,7 +826,9 @@ ${stripBlocklistedScripts(pageTailHTML)}
     archive.file(contentFilePath, { name: 'Content.pdf' });
     PDF_COVER_TYPES.forEach((coverType) => {
       if (coverType === 'Main') return;
-      archive.file(`${coversDirPath}/${coverType}.pdf`, { name: `Cover_${coverType}.pdf` });
+      archive.file(`${coversDirPath}/${coverType}.pdf`, {
+        name: `Cover_${coverType}.pdf`,
+      });
     });
     // </write files>
 
@@ -1023,7 +988,11 @@ ${stripBlocklistedScripts(pageTailHTML)}
 
       await this.withTempFile(content, async (inputPath) => {
         this.logger.withMetadata({ coverType, url: bookInfo.url, inputPath, outputPath }).info('Generating cover...');
-        await this.runPrinceConversion(inputPath, outputPath);
+        await this.runPrinceConversion({
+          inputPath,
+          outputPath,
+          pageInfo: bookInfo, // FIXME: override PDF document title
+        });
       });
 
       this.logger.withMetadata({ coverType, url: bookInfo.url, outputPath }).info('Generated cover.');
@@ -1035,11 +1004,13 @@ ${stripBlocklistedScripts(pageTailHTML)}
   }
 
   private async generateTableOfContents({
+    htmlOnly = false,
     pageInfo,
     isMainTOC = false,
     sortKey,
     pageOffset,
   }: {
+    htmlOnly?: boolean;
     pageInfo: BookPageInfo;
     isMainTOC?: boolean;
     sortKey: string;
@@ -1065,6 +1036,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         `;
 
         const outputPath = await this.convertPage({
+          htmlOnly,
           pageID: pageInfo.pageID,
           pageInfo,
           pageBodyHTML: tocBodyHTML,
@@ -1090,6 +1062,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         }
 
         const outputPath = await this.convertPage({
+          htmlOnly,
           pageID: pageInfo.pageID,
           pageInfo,
           pageBodyHTML: updatedHTML,
@@ -1122,11 +1095,13 @@ ${stripBlocklistedScripts(pageTailHTML)}
    * fix: leading-article trimming ("a ", "an ", "the ") now works correctly.
    */
   private async generateIndex({
+    htmlOnly = false,
     pageInfo,
     allPages,
     sortKey,
     pageOffset,
   }: {
+    htmlOnly?: boolean;
     pageInfo: BookPageInfo;
     allPages: BookPageInfo[];
     sortKey: string;
@@ -1146,6 +1121,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       `;
 
       const outputPath = await this.convertPage({
+        htmlOnly,
         pageID: pageInfo.pageID,
         pageInfo,
         pageBodyHTML: indexBodyHTML,
@@ -1174,10 +1150,12 @@ ${stripBlocklistedScripts(pageTailHTML)}
    * or used a non-standard layout.
    */
   private async generateGlossary({
+    htmlOnly = false,
     pageInfo,
     sortKey,
     pageOffset,
   }: {
+    htmlOnly?: boolean;
     pageInfo: BookPageInfo;
     sortKey: string;
     pageOffset?: number;
@@ -1193,6 +1171,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           .withMetadata({ url: pageInfo.url })
           .warn('No parseable glossary table found — falling back to raw page rendering');
         return this.convertPage({
+          htmlOnly,
           pageID: pageInfo.pageID,
           pageInfo,
           pageBodyHTML: rawBody,
@@ -1213,6 +1192,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       `;
 
       const outputPath = await this.convertPage({
+        htmlOnly,
         pageID: pageInfo.pageID,
         pageInfo,
         pageBodyHTML: glossaryBodyHTML,
@@ -1230,10 +1210,12 @@ ${stripBlocklistedScripts(pageTailHTML)}
   }
 
   private async generateDetailedLicensing({
+    htmlOnly = false,
     pageInfo,
     sortKey,
     pageOffset,
   }: {
+    htmlOnly?: boolean;
     pageInfo: BookPageInfo;
     sortKey: string;
     pageOffset?: number;
@@ -1260,6 +1242,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       `;
 
       const outputPath = await this.convertPage({
+        htmlOnly,
         pageID: pageInfo.pageID,
         pageInfo,
         pageBodyHTML: licensingBodyHTML,
@@ -1298,7 +1281,12 @@ ${stripBlocklistedScripts(pageTailHTML)}
     // Log all back matter pages for debugging
     const backMatterPages = pages.filter((p) => p.matterType === 'Back');
     this.logger
-      .withMetadata({ backMatterPages: backMatterPages.map((p) => ({ title: p.title, url: p.url })) })
+      .withMetadata({
+        backMatterPages: backMatterPages.map((p) => ({
+          title: p.title,
+          url: p.url,
+        })),
+      })
       .info('Back matter pages discovered');
 
     // Process flat array with correct ordering and TOC placement
@@ -1562,7 +1550,8 @@ ${stripBlocklistedScripts(pageTailHTML)}
   }
 
   /**
-   * Converts a PageGroup to a PDF file on disk.
+   * Converts a PageGroup to a PDF file on disk, or (when `htmlOnly` is true) generates
+   * HTML temp files and returns their paths without invoking Prince.
    *
    * Single-task groups (front/back matter, TOC, Index, Glossary, orphan pages) delegate
    * to the existing per-task conversion methods.
@@ -1574,38 +1563,47 @@ ${stripBlocklistedScripts(pageTailHTML)}
    *
    * @param prerendered - Pre-rendered math results from Phase 1, keyed per task.
    *   When provided, math rendering is skipped inside this method.
+   * @param htmlOnly - When true, returns HTML temp file paths instead of running Prince.
+   *   Callers are responsible for cleaning up the temp files.
    */
   private async convertPageGroup(
     group: PageGroup,
     prerendered: PrerenderedTask[] | null = null,
     pageOffset?: number,
-  ): Promise<string | null> {
+    htmlOnly = false,
+  ): Promise<string | string[] | null> {
     const task = group.tasks[0];
 
-    // Single-task path — dispatch to existing per-task conversion methods
+    // Single-task path — dispatch to existing per-task conversion methods.
+    // Each returns a single path (PDF or HTML depending on htmlOnly).
     if (group.tasks.length === 1) {
+      let result: string | null = null;
       if (task.type === 'toc') {
-        return this.generateTableOfContents({
+        result = await this.generateTableOfContents({
+          htmlOnly,
           pageInfo: task.pageInfo,
           isMainTOC: task.subtype === 'main-toc',
           sortKey: task.sortKey,
           pageOffset,
         });
       } else if (task.type === 'index') {
-        return this.generateIndex({
+        result = await this.generateIndex({
+          htmlOnly,
           pageInfo: task.pageInfo,
           allPages: this._allPages,
           sortKey: task.sortKey,
           pageOffset,
         });
       } else if (task.type === 'glossary') {
-        return this.generateGlossary({
+        result = await this.generateGlossary({
+          htmlOnly,
           pageInfo: task.pageInfo,
           sortKey: task.sortKey,
           pageOffset,
         });
       } else if (task.type === 'detailed-licensing') {
-        return this.generateDetailedLicensing({
+        result = await this.generateDetailedLicensing({
+          htmlOnly,
           pageInfo: task.pageInfo,
           sortKey: task.sortKey,
           pageOffset,
@@ -1620,7 +1618,8 @@ ${stripBlocklistedScripts(pageTailHTML)}
           title: task.pageInfo.title,
         });
 
-        return this.convertPage({
+        result = await this.convertPage({
+          htmlOnly,
           pageID: task.pageID,
           pageInfo: task.pageInfo,
           pageBodyHTML: directoryHTML ?? rawBody,
@@ -1632,6 +1631,10 @@ ${stripBlocklistedScripts(pageTailHTML)}
           pageOffset,
         });
       }
+
+      // Wrap single-task result in an array for htmlOnly so callers always get string[].
+      if (htmlOnly && result) return [result];
+      return result;
     }
 
     // Multi-file path — one HTML file per page, one Prince invocation for the chapter group.
@@ -1641,7 +1644,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
     try {
       this.logger
         .withMetadata({ sortKey: group.sortKey, pageCount: group.tasks.length })
-        .info('Converting chapter group (multi-file)');
+        .info(`${htmlOnly ? 'Generating HTML for' : 'Converting'} chapter group (multi-file)`);
 
       for (let i = 0; i < group.tasks.length; i++) {
         const t = group.tasks[i];
@@ -1670,13 +1673,15 @@ ${stripBlocklistedScripts(pageTailHTML)}
         // Inject counter-reset only in the first file — Prince treats multi-file input as one
         // continuous document, so resetting in each file would restart numbering per-page.
         const pageCounterCSS =
-          i === 0 && pageOffset ? `<style>html { counter-reset: page ${pageOffset + 1}; }</style>` : '';
+          i === 0 && pageOffset !== undefined ? `<style>html { counter-reset: page ${pageOffset + 1}; }</style>` : '';
 
+        // TODO: lang attr for non-English texts
         const wrappedHTML = `
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
   <meta charset="UTF-8">
+  <title>${t.pageInfo.printInfo?.title || t.pageInfo.title || 'Unknown'}</title>
   <style>${pdfFontCSS}</style>
   <style>${pdfPageCSS}</style>
   <style>${pdfTableCSS}</style>
@@ -1698,8 +1703,15 @@ ${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
         tempPaths.push(await this._createTempFile(wrappedHTML));
       }
 
+      // In htmlOnly mode, return the temp paths for the caller to pass to Prince later.
+      if (htmlOnly) return tempPaths;
+
       const outputPath = await this.generatePageOutputFilePath(task.pageID, group.sortKey);
-      await this.runPrinceConversion(tempPaths, outputPath);
+      await this.runPrinceConversion({
+        inputPath: tempPaths,
+        outputPath,
+        pageInfo: task.pageInfo,
+      });
 
       this.logger
         .withMetadata({ outputPath, pageCount: group.tasks.length })
@@ -1712,7 +1724,10 @@ ${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
         .error('Multi-file chapter group conversion failed');
       throw error;
     } finally {
-      await Promise.all(tempPaths.map((p) => this._deleteTempFile(p).catch(() => {})));
+      // Only clean up temp files when Prince was run (not in htmlOnly mode).
+      if (!htmlOnly) {
+        await Promise.all(tempPaths.map((p) => this._deleteTempFile(p).catch(() => {})));
+      }
     }
 
     // ── PACKING DISABLED ────────────────────────────────────────────────────────────────────────
@@ -1751,7 +1766,7 @@ ${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
     //
     //   const wrappedHTML = `
     // <!DOCTYPE html>
-    // <html>
+    // <html lang="en">
     // <head>
     //   <meta charset="UTF-8">
     //   <style>${pdfFontCSS}</style>
