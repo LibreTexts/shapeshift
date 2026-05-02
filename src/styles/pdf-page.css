@@ -2,7 +2,6 @@
   size: 8.5in 11in;
   margin: 0.75in 0.625in 0.9in; /* top, horizontal, bottom */
   padding: 0;
-  print-color-adjust: exact;
 
   @top {
     content: element(pageHeader);
@@ -56,10 +55,6 @@ body {
 
 #elm-main-content {
   padding: 0 !important;
-}
-
-* {
-  print-color-adjust: exact;
 }
 
 /* Override CMS theme stylesheets which set link colors to white for site navigation */

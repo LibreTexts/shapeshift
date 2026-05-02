@@ -23,9 +23,6 @@ export function createPdfFooter(
   <head>
     <title>PDF Footer</title>
     <style>
-      * {
-        print-color-adjust: exact;
-      }
       a {
         text-decoration:none;
         color: white;
@@ -127,9 +124,6 @@ export function createPdfHeader(headerImg?: string) {
     <head>
       <title>PDF Header</title>
       <style>
-        * {
-          print-color-adjust: exact;
-        }
           #header {
             padding: 0 !important;
             margin: 0 !important;

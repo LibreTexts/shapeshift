@@ -29,7 +29,6 @@ thead th {
   color: #ffffff;
   font-weight: bold;
   border-color: var(--pdf-main-color, #127bc4);
-  print-color-adjust: exact;
 }
 
 thead tr {
@@ -39,7 +38,6 @@ thead tr {
 /* Alternating row fill — light neutral tint for visual rhythm without color-only reliance */
 tbody tr:nth-child(even) {
   background-color: #f0f6fb;
-  print-color-adjust: exact;
 }
 
 /* Prevent table rows from splitting across page breaks */
