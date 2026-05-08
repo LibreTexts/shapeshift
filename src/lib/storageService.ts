@@ -34,6 +34,7 @@ export class StorageService {
           Body: data,
           ContentType: contentType,
           Key: key,
+          CacheControl: 'public, max-age=15768000, s-maxage=20',
         },
       });
       await uploader.done();
@@ -54,6 +55,7 @@ export class StorageService {
           Body: stream,
           ContentType: contentType,
           Key: key,
+          CacheControl: 'public, max-age=15768000, s-maxage=20',
         },
       });
     } catch (err) {
