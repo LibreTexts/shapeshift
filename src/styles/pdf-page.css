@@ -25,6 +25,7 @@
 /* Running elements — pulled from body flow into @page margin boxes by Prince */
 #libre-pdf-header {
   position: running(pageHeader);
+  -prince-pdf-tag-type: Artifact;
 }
 
 /* Assigns the no-margin-content named page to suppress header/footer */

@@ -223,7 +223,7 @@ export function generatePDFHeader(headerImg: string) {
   return `
     <div id="libre-pdf-header">
       <div id="libreHeader">
-        <a href="https://libretexts.org"><img src="data:image/png;base64,${headerImg}" /></a>
+        <img alt="" src="data:image/png;base64,${headerImg}" />
       </div>
     </div>
   `;
@@ -314,7 +314,7 @@ function _generatePDFBackCoverContent(currentPage: BookPageInfo) {
   }
   return `
     <div id="backContainer">
-      <div>${logoSrc ? `<img id="backLogo" src="${logoSrc}">` : ''}</div>
+      <div>${logoSrc ? `<img alt="" id="backLogo" src="${logoSrc}">` : ''}</div>
       <div>
         <div id="backOverview">${currentPage.summary ?? ''}</div>
       </div>
@@ -347,7 +347,7 @@ function _generatePDFSpineContent({
       </div>
       <div id="spineCite">
         <b id="spineCiteAuthorName">${currentPage.printInfo.authorName || 'Unknown'}</b>
-        <img src="https://cdn.libretexts.net/shapeshift/stacked_logo.png" />
+        <img alt="" src="https://cdn.libretexts.net/shapeshift/stacked_logo.png" />
       </div>
     </div>
     <style>
