@@ -2,7 +2,7 @@ import fs from 'node:fs/promises';
 import { readFileSync, createReadStream, writeFileSync, createWriteStream } from 'node:fs';
 import pLimit from 'p-limit';
 import { v4 as uuid } from 'uuid';
-import { join, resolve } from 'node:path';
+import { basename, join, resolve } from 'node:path';
 import {
   generatePDFCoverHTML,
   generatePDFHeader,
@@ -206,7 +206,7 @@ export class PDFService {
         })
         .info('Built conversion task list and page groups');
 
-      // ── Phase 1: Pre-render MathJax for all groups sequentially ──────────────
+      // ── Phase 1: Pre-render MathJax for all groups sequentially ──
       // currentPageNumberPrefix is a module-level global in mathjax.ts; concurrent
       // renders would race on it.  We complete all math work before spawning any
       // Prince processes so Phase 2 is free of MathJax state.
@@ -243,7 +243,7 @@ export class PDFService {
         }
       }
 
-      // ── Phase 2: Convert groups in two passes to produce correct page numbers ─
+      // ── Phase 2: Convert groups in two passes to produce correct page numbers ──
       //
       // Pass 1 renders all groups at default page numbering so we can count pages per
       // group. Pass 2 re-renders with --page-offset set to the cumulative page count
@@ -257,7 +257,7 @@ export class PDFService {
         .withMetadata({ totalGroups: pageGroups.length, princeConcurrency })
         .info('Pass 1: generating group PDFs to measure page counts');
 
-      // ── Phase 2a: Pass 1 ─────────────────────────────────────────────────────
+      // ── Phase 2a: Pass 1 ──
       const pass1Results = await Promise.allSettled(
         pageGroups.map((group) =>
           princeLimit(async () => {
@@ -274,7 +274,7 @@ export class PDFService {
         ),
       );
 
-      // ── Phase 2b: Count pages per group, compute cumulative offsets ───────────
+      // ── Phase 2b: Count pages per group, compute cumulative offsets ──
       type GroupCount = { group: PageGroup; pageCount: number };
       let pass1FailureCount = 0;
       const pass1Counts: GroupCount[] = [];
@@ -352,7 +352,7 @@ export class PDFService {
         ),
       );
 
-      // ── Phase 2d: Collect HTML paths, run single Prince invocation ───────────
+      // ── Phase 2d: Collect HTML paths ──
       let failureCount = 0;
       const pass2Groups: Pass2GroupResult[] = [];
       for (const r of pass2Results) {
@@ -381,7 +381,33 @@ export class PDFService {
       );
       const allHTMLPaths = pass2Groups.flatMap((g) => g.htmlPaths);
 
-      // ── Generate Main cover HTML and prepend to the Prince input ──────────
+      // ── Phase 2e: Rewrite internal fragment links to include target filenames ──
+      // Prince's multi-file input doesn't resolve bare #id fragments across files.
+      // We rewrite href="#page-{id}" → href="targetfile.html#page-{id}" so Prince
+      // can resolve each link to the correct input file.
+      const anchorToFile = new Map<string, string>();
+      for (const { group, htmlPaths } of pass2Groups) {
+        for (let i = 0; i < group.tasks.length; i++) {
+          const filePath = htmlPaths[i];
+          if (filePath) {
+            anchorToFile.set(`page-${group.tasks[i].pageID}`, basename(filePath));
+          }
+        }
+      }
+      await Promise.all(
+        allHTMLPaths.map(async (htmlPath) => {
+          const content = await fs.readFile(htmlPath, 'utf-8');
+          const rewritten = content.replace(/href="#(page-[^"]+)"/g, (_match, anchor) => {
+            const targetFile = anchorToFile.get(anchor);
+            return targetFile ? `href="${targetFile}#${anchor}"` : `href="#${anchor}"`;
+          });
+          if (rewritten !== content) {
+            await fs.writeFile(htmlPath, rewritten);
+          }
+        }),
+      );
+
+      // ── Phase 3: Generate Main cover HTML and prepend to the Prince input ──
       // The Main cover doesn't need a page count and must suppress header/footer.
       const coverPageInfo = pagesMap.get(this._bookID.toString())!;
       const mainCoverHTML = generatePDFCoverHTML({
@@ -391,10 +417,10 @@ export class PDFService {
       });
       const mainCoverTempPath = await this._createTempFile(mainCoverHTML);
 
+      // ── Phase 4: Run Prince conversion ──
       this.logger
         .withMetadata({ totalHTMLFiles: allHTMLPaths.length + 1 })
         .info('All HTML generated, running single Prince invocation for full document');
-
       const fullDocHTMLPaths = [mainCoverTempPath, ...allHTMLPaths];
       const finalFilePath = await this.generateFullDocumentOutputFilePath();
       const finalDir = getDirectoryPathFromFilePath(finalFilePath);
@@ -404,12 +430,9 @@ export class PDFService {
         outputPath: finalFilePath,
         pageInfo: coverPageInfo,
       });
-
-      const numPages = await countPDFPages(finalFilePath);
-      const contentPageCount = numPages - 1; // exclude Main cover
-
       if (!this._useLocalStorage) await this.streamFileToS3(finalFilePath);
 
+      // ── Phase 5: Generate additional assets like Content file and covers ──
       // Extract content-only pages (page 2 onward) for the publication zip.
       // Tags/structure are not needed in this file: used for printers only.
       const contentFilePath = await this.generateContentOutputFilePath();
@@ -420,16 +443,16 @@ export class PDFService {
         outputPath: contentFilePath,
         pageStart: 2,
       });
-
       if (!this._useLocalStorage) await this.streamFileToS3(contentFilePath);
 
       // Clean up HTML temp files now that Prince has consumed them.
       await Promise.all(fullDocHTMLPaths.map((p) => this._deleteTempFile(p).catch(() => {})));
-
       this.logger.info('Full document and content PDF generated successfully');
 
       // Generate print covers (Amazon, CaseWrap, CoilBound, PerfectBound) with retry.
       this.logger.info('Generating publication covers');
+      const numPages = await countPDFPages(finalFilePath);
+      const contentPageCount = numPages - 1; // exclude Main cover
       const coverConfigs = PDF_COVER_TYPES.filter((t) => t !== 'Main').map((coverType) => ({
         coverType,
         numPages: COVER_TYPE_CONFIG[coverType].usesPageCount ? contentPageCount : null,
@@ -599,8 +622,11 @@ export class PDFService {
     const isTableOfContents = pageInfo.pageID.pageNum === this._bookID.pageNum;
     const hasChildren = !!pageInfo.subpages?.length;
     const shouldRenderTitle = !(isInExcludedList || isTableOfContents || hasChildren);
-    const pageTitleElem = shouldRenderTitle ? `<h1>${pageInfo.title}</h1>` : '';
-    return `${pageTitleElem}${raw}`;
+    const anchor = `page-${pageInfo.pageID}`;
+    if (shouldRenderTitle) {
+      return `<h1 id="${anchor}">${pageInfo.title}</h1>${raw}`;
+    }
+    return `<span id="${anchor}" class="pdf-anchor">&#8203;</span>${raw}`;
   }
 
   private decodeHTML(raw: string) {
@@ -884,7 +910,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         const subPageDir = await this.getLevel(elem, level + 1, resolvedIsSubTOC);
         const subListSpacing = subPageDir?.length > 0 ? `libre-print-sublisting${level - 2}` : '';
         if (!elem.url || !elem.title) return '';
-        return `<li><div class="nobreak ${isSubtopic} ${subListSpacing}"><${prefix}><a href="${elem.url}">${elem.title}</a></${prefix}></div>${subPageDir}</li>`;
+        return `<li><div class="nobreak ${isSubtopic} ${subListSpacing}"><${prefix}><a href="#page-${elem.pageID}" title="${elem.title}">${elem.title}</a></${prefix}></div>${subPageDir}</li>`;
       }),
     );
     const inner = innerRaw.join('');
@@ -1232,12 +1258,18 @@ ${stripBlocklistedScripts(pageTailHTML)}
           .withMetadata({ bookID: pageInfo.pageID.toString() })
           .info('No detailed licensing report found or error encountered.');
       }
+
+      const anchorMap = new Map<string, string>();
+      for (const page of this._allPages) {
+        anchorMap.set(page.url, `#page-${page.pageID}`);
+      }
+
       const licensingBodyHTML = `
         <div id="libre-print-directory-header-container">
           <h1 id="libre-print-directory-header">Detailed Licensing</h1>
         </div>
         <div id="libre-detailed-licensing">
-          ${generateDetailedLicensingHTML(licensingReportRes.data)}
+          ${generateDetailedLicensingHTML(licensingReportRes.data, anchorMap)}
         </div>
       `;
 
@@ -1659,10 +1691,11 @@ ${stripBlocklistedScripts(pageTailHTML)}
         });
 
         const preRendered = prerendered?.find((p) => p.task._id === t._id)?.renderedBody;
+        const anchor = `<span id="page-${t.pageID}" class="pdf-anchor">&#8203;</span>`;
         const renderedBody = this.sanitizeImagesForPDF(
           directoryHTML != null
-            ? await prerenderMath(directoryHTML, t.pageInfo)
-            : (preRendered ?? (await prerenderMath(rawBody, t.pageInfo))),
+            ? `${anchor}${await prerenderMath(directoryHTML, t.pageInfo)}`
+            : (preRendered ?? (await prerenderMath(this.addPageTitle(t.pageInfo, rawBody), t.pageInfo))),
         );
         const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(t.pageInfo.head));
         const shouldShowMarginContent = this.getShouldShowMarginContent(t.pageInfo);

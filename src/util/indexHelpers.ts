@@ -37,6 +37,7 @@ const LEADING_ARTICLES = ['the ', 'an ', 'a '] as const;
 export interface IndexPage {
   pageName: string;
   pageLink: string;
+  pageAnchor: string;
 }
 
 export interface IndexTerm {
@@ -118,7 +119,7 @@ export function buildTagIndex(pages: BookPageInfo[]): IndexData {
       if (!termMap.has(displayName)) {
         termMap.set(displayName, []);
       }
-      termMap.get(displayName)!.push({ pageName: page.title, pageLink: page.url });
+      termMap.get(displayName)!.push({ pageName: page.title, pageLink: page.url, pageAnchor: `#page-${page.pageID}` });
     }
   }
 
@@ -178,7 +179,10 @@ export function generateIndexHTML(data: IndexData): string {
     const terms = group.terms
       .map((term) => {
         const pageLinks = term.pages
-          .map((p) => `<a href="${escapeAttr(p.pageLink)}" class="index-page-link">${escapeHTML(p.pageName)}</a>`)
+          .map(
+            (p) =>
+              `<a href="${escapeAttr(p.pageAnchor)}" title="${escapeAttr(p.pageName)}" class="index-page-link">${escapeHTML(p.pageName)}</a>`,
+          )
           .join('<br/>');
         return `
           <li class="index-entry">

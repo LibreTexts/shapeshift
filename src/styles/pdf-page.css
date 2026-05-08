@@ -63,6 +63,12 @@ a, a:visited {
   text-decoration: none;
 }
 
+/* Create PDF named destinations for page anchors. Used as a fallback mechanism
+   for PDF viewers that support named destination resolution. */
+h1[id^="page-"], .pdf-anchor {
+  -prince-pdf-destination: attr(id);
+}
+
 /* MathJax v4 pre-rendered SVG layout */
 mjx-container[jax="SVG"][display="true"] {
   display: block;
@@ -120,4 +126,13 @@ figure {
 .libre-print-directory {
   margin: 0;
   padding: 0 0 2%;
+
+
+/* Zero-width anchor target for internal PDF links — ensures Prince registers
+   a named destination without affecting visible layout */
+.pdf-anchor {
+  font-size: 0;
+  line-height: 0;
+}
+
 }
