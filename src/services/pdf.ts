@@ -1495,7 +1495,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
   }
 
   public getShouldShowMarginContent(pageInfo: BookPageInfo): boolean {
-    return !['TitlePage', 'InfoPage'].includes(pageInfo.title);
+    return !['InfoPage', 'ProgramPage', 'Title Page', 'TitlePage'].includes(pageInfo.title);
   }
 
   /**

@@ -43,8 +43,33 @@ html, body {
   padding: 0;
   width: 100%;
   font-family: 'Atkinson Hyperlegible', sans-serif;
-  font-size: 10pt;
+  font-size: 8.25pt;
 }
+
+h1 {
+  font-size: 20pt;
+}
+
+h2 {
+  font-size: 14.87pt;
+}
+
+h3 {
+  font-size: 13.22pt;
+}
+
+h4 {
+  font-size: 11.75pt;
+}
+
+h5 {
+  font-size: 10.44pt;
+}
+
+h6 {
+  font-size: 9.29pt;
+}
+
 
 /* overflow: hidden prevents Prince from generating a blank trailing page for short pages.
    With height: auto (no fixed height), body grows to fit actual content, so overflow: hidden
@@ -127,6 +152,37 @@ figure {
 .libre-print-directory {
   margin: 0;
   padding: 0 0 2%;
+}
+
+/* Content Elements */
+.box-objectives, .box-emphasis, .box-structure, .box-example, .box-exercise, .box-warning, .box-query, .box-note, .box-procedure, .box-definition, .box-theorem, .box-lemma, .box-notation, .box-proposition, .box-interactive {
+  display: block;
+  border-top: none;
+  border-bottom: none;
+  border-right: none;
+  padding: 0 10px 1px 8px;
+  margin-bottom: 0.8em !important;
+  margin-top: 2em !important;
+  orphans: 3;
+  border-radius: 4px 8px 8px 4px;
+  -moz-border-radius: 4px 8px 8px 4px;
+  -webkit-border-radius: 4px 8px 8px 4px;
+}
+
+.box-definition, .box-theorem, .box-lemma, .box-notation, .box-proposition {
+  background-color: hsl(124, 33%, 94%);
+  border-left: 4px solid hsl(132, 36%, 27%);
+}
+
+.box-example {
+  background-color: hsla(204, 83%, 97%, 1);
+  border-left: 4px solid hsla(204, 83%, 41%, 1);
+}
+
+.box-note {
+  background-color: hsl(180, 8%, 94%);
+  border-left: 4px solid hsl(180, 8%, 40%);
+}
 
 
 /* Zero-width anchor target for internal PDF links — ensures Prince registers
