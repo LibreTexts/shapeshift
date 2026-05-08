@@ -617,7 +617,16 @@ export class PDFService {
   }
 
   private addPageTitle(pageInfo: BookPageInfo, raw: string) {
-    const titleExclusions = ['Detailed Licensing', 'Glossary', 'Index', 'InfoPage', 'TitlePage', 'Table of Contents'];
+    const titleExclusions = [
+      'Detailed Licensing',
+      'Glossary',
+      'Index',
+      'InfoPage',
+      'Table of Contents',
+      'ProgramPage',
+      'Title Page',
+      'TitlePage',
+    ];
     const isInExcludedList = titleExclusions.some((e) => pageInfo.title.includes(e));
     const isTableOfContents = pageInfo.pageID.pageNum === this._bookID.pageNum;
     const hasChildren = !!pageInfo.subpages?.length;
