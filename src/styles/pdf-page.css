@@ -192,4 +192,9 @@ figure {
   line-height: 0;
 }
 
+/* Decorative box headings demoted from h1-h6 to <p> to avoid skipped heading
+   level violations in the PDF structure tree. Retains bold heading appearance. */
+p.box-heading {
+  font-weight: bold;
+  margin: 0.5em 0 0.25em;
 }

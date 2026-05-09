@@ -15,6 +15,8 @@ import { log as logService } from '../lib/log';
 import { LogLayer } from 'loglayer';
 import { Environment } from '../lib/environment';
 import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
+import * as cheerio from 'cheerio';
+import { demoteDecorativeHeadings } from '../util/htmlFilters';
 
 /**
  * Maximum number of concurrent page content fetches from the CXOne API.
@@ -402,6 +404,7 @@ export class BookService {
       const pagesRaw = pagesRespRaw.page;
 
       const pages = await this.getPageInfo(libName, pagesRaw, lib);
+      await this.preprocessHTML(pages);
       const result = {
         flat: this.flattenPagesObj(pages),
         tree: pages,
@@ -707,5 +710,116 @@ export class BookService {
     await fs.mkdir(dirPath, { recursive: true });
     await fs.writeFile(filePath, content, 'utf-8');
     return filePath;
+  }
+
+  private async preprocessHTML(pages: BookPageInfo) {
+    const limit = pLimit(4);
+    const proms: Promise<void>[] = [];
+    const queueFixesRecursive = (p: BookPageInfo) => {
+      proms.push(
+        limit(async () => {
+          const bodyRaw = p.body.join('');
+          if (!bodyRaw) return;
+          const headingsFixed = this.autofixHeadingLevels(bodyRaw);
+          const altTextFixed = this.autofixMissingAltText(headingsFixed);
+          const cmsMarkupFixed = this.autofixCMSMarkup(altTextFixed);
+          const interactiveReplaced = this.replaceInteractiveElements(cmsMarkupFixed);
+          p.body = [interactiveReplaced];
+        }),
+      );
+      if (!p.subpages?.length) return;
+      for (const subpage of p.subpages) {
+        queueFixesRecursive(subpage);
+      }
+    };
+    queueFixesRecursive(pages);
+    await Promise.all(proms);
+  }
+
+  /**
+   * Remove additional markup/attributes from CXone that may affect HTML parsing/a11y.
+   */
+  private autofixCMSMarkup(content: string) {
+    if (!content) return content;
+    const $ = cheerio.load(content, null, false);
+    const withSectionAttr = $('[mt-section]').toArray();
+    const withSectionOriginAttr = $('[mt-section-origin]').toArray();
+    for (const el of withSectionAttr) {
+      const e = $(el);
+      e.removeAttr('mt-section');
+    }
+    for (const el of withSectionOriginAttr) {
+      const e = $(el);
+      e.removeAttr('mt-section-origin');
+    }
+    return $.html();
+  }
+
+  /**
+   * Fixes heading levels in an HTML fragment to always start at h2, if any found. Assumes a h1 will be added later,
+   * i.e., the page title heading.
+   *
+   * Headings inside boxes (box-note, box-example, etc.) are decorative, not document structure headings.
+   * They are demoted to <p class="box-heading"> before the level remapping so they don't cause skipped-level
+   * violations in the structure tree.
+   */
+  private autofixHeadingLevels(content: string): string {
+    if (!content) return content;
+    const $ = cheerio.load(content, null, false);
+
+    demoteDecorativeHeadings($);
+
+    const headings = $('h1, h2, h3, h4, h5, h6').toArray();
+    if (!headings.length) return $.html();
+
+    // Collect distinct levels in order of first appearance, then map them to h2, h3, h4...
+    const distinctLevels: number[] = [];
+    for (const el of headings) {
+      const level = parseInt(el.name[1], 10);
+      if (!distinctLevels.includes(level)) distinctLevels.push(level);
+    }
+    distinctLevels.sort((a, b) => a - b);
+
+    const levelMap = new Map<number, number>();
+    for (let i = 0; i < distinctLevels.length; i++) {
+      levelMap.set(distinctLevels[i], Math.min(i + 2, 6)); // start at h2, cap at h6
+    }
+
+    for (const el of headings) {
+      const currentLevel = parseInt(el.name[1], 10);
+      el.name = `h${levelMap.get(currentLevel)}`;
+    }
+    return $.html();
+  }
+
+  /**
+   * Marks images/figures missing alt text as decorative. Actual alt text should be added
+   * in the source content, and we will not try to create it now.
+   */
+  private autofixMissingAltText(content: string): string {
+    if (!content) return content;
+    const $ = cheerio.load(content, null, false);
+    const elems = $('img').toArray();
+    for (const elem of elems) {
+      const e = $(elem);
+      if (e.attr('alt') === undefined) {
+        e.attr('alt', '');
+      }
+    }
+    return $.html();
+  }
+
+  private replaceInteractiveElements(content: string): string {
+    if (!content) return content;
+    const $ = cheerio.load(content, null, false);
+    const iframes = $('iframe').toArray();
+    for (const frame of iframes) {
+      const e = $(frame);
+      const sub = $('<p><i>This interactive element is only available in the web version of this textbook.</i></p>');
+      e.replaceWith(sub);
+    }
+    const canvi = $('canvas');
+    canvi.remove();
+    return $.html();
   }
 }
