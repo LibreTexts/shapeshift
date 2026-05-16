@@ -46,6 +46,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // CSS loaded at module init and inlined into HTML sent to Prince.
 // Note: changes to this file require a server restart in development.
+const princePdfCssPath = join(__dirname, '../styles/prince-pdf.css');
 const pdfPageCSS = readFileSync(join(__dirname, '../styles/pdf-page.css'), 'utf-8');
 const pdfTableCSS = readFileSync(join(__dirname, '../styles/pdf-tables.css'), 'utf-8');
 const pdfFontCSS = generateFontCSS();
@@ -782,6 +783,8 @@ ${stripBlocklistedScripts(pageTailHTML)}
         .option('javascript', true)
         .option('tagged-pdf', true)
         .option('pdf-title', title)
+        .option('style', princePdfCssPath)
+        .option('pdf-xmp-metadata', true, true)
         .inputs(inputPath)
         .output(outputPath)
         .execute();
