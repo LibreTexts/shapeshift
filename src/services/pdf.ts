@@ -990,13 +990,14 @@ ${stripBlocklistedScripts(pageTailHTML)}
     if (!pageTitle || !pageTitleParent) return null;
     pageTitle.attr('style', 'border-bottom: none !important');
 
-    const newTitle = $('<h1></h1>').text(pageType).attr('id', 'libre-print-directory-header');
+    const newTitle = $('<h1></h1>')
+      .text(pageType === 'Table of Contents' ? pageType : title)
+      .attr('id', 'libre-print-directory-header');
 
     const typeContainer = $('<div></div>').attr('id', 'libre-print-directory-header-container');
     typeContainer.append(newTitle);
     pageTitle.before(typeContainer);
-
-    if (pageType === 'Table of Contents') pageTitle.remove();
+    pageTitle.remove();
 
     // return the updated HTML
     return $.html();
@@ -1088,7 +1089,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       } else {
         const listing = await this.getLevel(pageInfo);
         const updatedHTML = this.processDirectoryPage({
-          html: `<h2 id="title">${pageInfo.title}</h2>${pageInfo.body.join('')}`,
+          html: `<h1 id="title">${pageInfo.title}</h1>${pageInfo.body.join('')}`,
           listing,
           tags: pageInfo.tags,
           title: pageInfo.title,
