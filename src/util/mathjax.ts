@@ -158,13 +158,13 @@ async function initMathJax(): Promise<MathJaxGlobal> {
     options: {
       ignoreHtmlClass: 'tex2jax_ignore',
       processHtmlClass: 'tex2jax_process',
-      // Remove assistiveMml from the render pipeline — the a11y component is not loaded,
-      // so SRE worker threads are never started and no speech HTML is generated.
       renderActions: {
         assistiveMml: [],
       },
-      enableSpeech: false,
       enableBraille: false,
+      sre: {
+        speech: 'shallow',
+      },
     },
     output: {
       scale: 0.85,
@@ -436,7 +436,19 @@ export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Prom
     // MathJax wraps the input in a full HTML document. Extract just the body content
     // since the caller provides (and expects back) a body fragment.
     const bodyMatch = result.match(/<body>([\s\S]*)<\/body>/);
-    return bodyMatch ? bodyMatch[1] : result;
+    const bodyContent = bodyMatch ? bodyMatch[1] : result;
+
+    // MathJax's speech worker puts speech text in data-semantic-speech-none on the
+    // <mjx-container> but not on the <svg>. Copy it to aria-label on the <svg> so
+    // Prince (via -prince-alt-text) and EPUB generators can use it as alt text.
+    const $ = cheerio.load(bodyContent, null, false);
+    $('mjx-container[data-semantic-speech-none]').each(function () {
+      const speech = $(this).attr('data-semantic-speech-none');
+      if (speech) {
+        $(this).find('svg').first().attr('aria-label', speech);
+      }
+    });
+    return $.html();
   } catch (err) {
     // Graceful degradation: return original HTML with raw LaTeX.
     //

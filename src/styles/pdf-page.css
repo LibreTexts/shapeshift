@@ -105,6 +105,8 @@ mjx-container[jax="SVG"][display="true"] {
 mjx-container svg {
   max-width: 100%;
   height: auto;
+  -prince-pdf-tag-type: Formula;
+  -prince-alt-text: attr(aria-label);
 }
 
 /* Constrain all content images to the printable column width and a sensible max height */
