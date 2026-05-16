@@ -467,6 +467,22 @@ export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Prom
 }
 
 /**
+ * Terminates MathJax worker threads (SRE speech engine) so the Node.js process
+ * can exit cleanly.
+ */
+export async function shutdownMathJax(): Promise<void> {
+  if (initPromise) {
+    try {
+      const mj = await initPromise;
+      mj.done();
+    } catch {
+      // Ignore — MathJax may not have finished initializing
+    }
+    initPromise = null;
+  }
+}
+
+/**
  * Removes MathJax `<script>` tags from head HTML to prevent double-processing.
  * After server-side pre-rendering, CMS-provided MathJax scripts are unnecessary
  * and could conflict with the already-rendered SVG output.

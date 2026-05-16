@@ -3,6 +3,7 @@ import { JobService } from '../services/job';
 import { QueueClient } from '../lib/queueClient';
 import { connectDatabase } from '../model';
 import { Environment } from '../lib/environment';
+import { shutdownMathJax } from '../util/mathjax';
 
 let isActiveWorker = true;
 
@@ -22,10 +23,13 @@ export async function runProcess() {
       await jobModel.run(job);
     }
   }
+  await shutdownMathJax();
   console.log('Shapeshift processor worker shut down gracefully.');
+  process.exit(0);
 }
 
 function shutdown() {
+  if (!isActiveWorker) return;
   console.log('Shutdown signal received, finishing current job...');
   isActiveWorker = false;
 }
