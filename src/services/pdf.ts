@@ -134,6 +134,7 @@ export class PDFService {
   private _parentMap: Map<string, string> = new Map();
   private _rootPageID: string = '';
   private _allPages: BookPageInfo[] = [];
+  private _urlToAnchor: Map<string, string> = new Map();
 
   constructor(bookID: PageID, opts: { useLocalStorage?: boolean } = {}) {
     this._bookID = bookID;
@@ -187,6 +188,7 @@ export class PDFService {
     if (!pagesInput?.flat?.length) return null;
     const { flat: pages } = pagesInput;
     this._allPages = pages;
+    this.buildUrlToAnchorMap();
     const startTime = Date.now();
     const pagesMap = new Map(pages.map((c) => [c.pageID.toString(), c] as [string, BookPageInfo]));
 
@@ -681,10 +683,12 @@ export class PDFService {
       // Entities in pageBodyHTML are decoded before prerenderMath so MathJax's liteDOM
       // never stores them verbatim (which causes double-encoding in outerHTML output).
       // The outer decodeHTML is a catch-all for any other content paths (TOC, Index, etc.).
-      const renderedBodyHTML = this.decodeHTML(
-        this.sanitizeImagesForPDF(
-          preRenderedBodyHTML ??
-            (await prerenderMath(this.decodeHTML(this.addPageTitle(pageInfo, pageBodyHTML)), pageInfo)),
+      const renderedBodyHTML = this.rewriteInternalLinks(
+        this.decodeHTML(
+          this.sanitizeImagesForPDF(
+            preRenderedBodyHTML ??
+              (await prerenderMath(this.decodeHTML(this.addPageTitle(pageInfo, pageBodyHTML)), pageInfo)),
+          ),
         ),
       );
       const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(pageHeadHTML));
@@ -949,6 +953,41 @@ ${stripBlocklistedScripts(pageTailHTML)}
         $el.attr('style', cleaned);
       } else {
         $el.removeAttr('style');
+      }
+    });
+    return $('body').html() ?? html;
+  }
+
+  /**
+   * Builds a map from page URLs to internal PDF anchors (`#page-{pageID}`).
+   */
+  private buildUrlToAnchorMap(): void {
+    this._urlToAnchor.clear();
+    for (const page of this._allPages) {
+      if (!page.url) continue;
+      const normalized = page.url.replace(/\/$/, '');
+      const anchor = `#page-${page.pageID}`;
+      this._urlToAnchor.set(normalized, anchor);
+      this._urlToAnchor.set(normalized + '/', anchor);
+    }
+  }
+
+  /**
+   * Rewrites hyperlinks in HTML that point to other pages within the same
+   * book to internal PDF fragment anchors (`#page-{pageID}`). Links that don't
+   * match any page URL in the book are left unchanged.
+   */
+  private rewriteInternalLinks(html: string): string {
+    if (!this._urlToAnchor.size) return html;
+    const $ = cheerio.load(html, { xmlMode: false });
+    $('a[href]').each((_, el) => {
+      const $el = $(el);
+      const href = $el.attr('href');
+      if (!href || href.startsWith('#')) return;
+      const hrefBase = href.split(/[?#]/)[0].replace(/\/$/, '');
+      const anchor = this._urlToAnchor.get(hrefBase) ?? this._urlToAnchor.get(hrefBase + '/');
+      if (anchor) {
+        $el.attr('href', anchor);
       }
     });
     return $('body').html() ?? html;
@@ -1705,10 +1744,12 @@ ${stripBlocklistedScripts(pageTailHTML)}
 
         const preRendered = prerendered?.find((p) => p.task._id === t._id)?.renderedBody;
         const anchor = `<span id="page-${t.pageID}" class="pdf-anchor">&#8203;</span>`;
-        const renderedBody = this.sanitizeImagesForPDF(
-          directoryHTML != null
-            ? `${anchor}${await prerenderMath(directoryHTML, t.pageInfo)}`
-            : (preRendered ?? (await prerenderMath(this.addPageTitle(t.pageInfo, rawBody), t.pageInfo))),
+        const renderedBody = this.rewriteInternalLinks(
+          this.sanitizeImagesForPDF(
+            directoryHTML != null
+              ? `${anchor}${await prerenderMath(directoryHTML, t.pageInfo)}`
+              : (preRendered ?? (await prerenderMath(this.addPageTitle(t.pageInfo, rawBody), t.pageInfo))),
+          ),
         );
         const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(t.pageInfo.head));
         const shouldShowMarginContent = this.getShouldShowMarginContent(t.pageInfo);
