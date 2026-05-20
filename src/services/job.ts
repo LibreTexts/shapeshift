@@ -64,10 +64,12 @@ export class JobService {
           'USE_LOCAL_STORAGE',
           Environment.getSystemEnvironment() === 'DEVELOPMENT' ? 'true' : 'false',
         ) === 'true';
-      log.debug(`USE_LOCAL_STORAGE is set to ${useLocalStorage}`);
+      if (Environment.getSystemEnvironment() === 'DEVELOPMENT') {
+        log.debug(`USE_LOCAL_STORAGE is set to ${useLocalStorage}`);
+      }
 
       const enabledFormats =
-        Environment.getSystemEnvironment() !== 'DEVELOPMENT'
+        Environment.getSystemEnvironment() === 'PRODUCTION'
           ? this.allFormats
           : (Environment.getOptional('ENABLED_FORMATS', this.allFormats.join(',')).split(',') as JobOutputFormat[]);
       log.debug(`ENABLED_FORMATS is set to ${enabledFormats.join(', ')}`);
