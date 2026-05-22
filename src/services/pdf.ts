@@ -698,6 +698,23 @@ export class PDFService {
       const sectionNum = extractPageNumberPrefix(pageInfo.title).replace(/\.$/, '');
       const footerHTML = showMarginContent ? generatePDFFooter({ sectionNum }) : '';
 
+      const sectionPageCSS =
+        sectionNum && showMarginContent
+          ? `<style>
+            @page sp-${pageID} {
+              counter-increment: spc-${pageID};
+              @bottom {
+                content: counter(page) " | ${sectionNum}." counter(spc-${pageID});
+                font-size: 16px;
+                font-weight: 700;
+                color: #333;
+                text-align: center;
+              }
+            }
+            body { page: sp-${pageID}; }
+            </style>`
+          : '';
+
       // Wrap the page content in a complete HTML document with header/footer margin elements.
       // Prince's running element CSS (in pdf-page.css) pulls #libre-pdf-header out of body
       // flow into the @page @top margin box. The footer uses string-set + counter(page) in
@@ -716,10 +733,11 @@ export class PDFService {
   <style>${pdfHeaderCSS}</style>
   <style>:root { --pdf-main-color: ${mainColor}; }</style>
   ${pageOffset !== undefined ? `<style>html { counter-reset: page ${pageOffset + 1}; }</style>` : ''}
+  ${sectionPageCSS}
   ${additionalCSS ? `<style>${additionalCSS}</style>` : ''}
   ${cleanedHeadHTML}
 </head>
-<body${showMarginContent ? '' : ' class="no-margin-content"'}>
+<body${!showMarginContent ? ' class="no-margin-content"' : ''}>
 ${headerHTML}
 ${footerHTML}
 ${renderedBodyHTML}
@@ -1762,6 +1780,23 @@ ${stripBlocklistedScripts(pageTailHTML)}
         const pageCounterCSS =
           i === 0 && pageOffset !== undefined ? `<style>html { counter-reset: page ${pageOffset + 1}; }</style>` : '';
 
+        // Per-section page numbering: each file gets a unique named page with its own counter.
+        const sectionPageCSS =
+          sectionNum && shouldShowMarginContent
+            ? `<style>
+              @page sp-${t.pageInfo.pageID} {
+                counter-increment: spc-${t.pageInfo.pageID};
+                @bottom {
+                  content: counter(page) " | ${sectionNum}." counter(spc-${t.pageInfo.pageID});
+                  font-size: 16px;
+                  font-weight: 700;
+                  color: #333;
+                  text-align: center;
+                }
+              }
+              body { page: sp-${t.pageInfo.pageID}; }
+              </style>`
+            : '';
         // TODO: lang attr for non-English texts
         const wrappedHTML = `
 <!DOCTYPE html>
@@ -1776,9 +1811,10 @@ ${stripBlocklistedScripts(pageTailHTML)}
   <style>:root { --pdf-main-color: #127BC4; }</style>
   ${directoryHTML ? `<style>${pdfTOCStyles}</style>` : ''}
   ${pageCounterCSS}
+  ${sectionPageCSS}
   ${cleanedHeadHTML}
 </head>
-<body>
+<body${!shouldShowMarginContent ? ' class="no-margin-content"' : ''}>
 ${headerHTML}
 ${footerHTML}
 ${renderedBody}
