@@ -17,6 +17,7 @@ const INDEX_TAG_EXCLUSIONS = [
   'license',
   'licenseversion',
   'lulu',
+  'program',
   'showtoc',
   'source',
   '@',
