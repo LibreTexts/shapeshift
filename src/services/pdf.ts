@@ -37,6 +37,7 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decode } from 'html-entities';
 import { generateDetailedLicensingHTML } from '../util/detailedLicensingHelpers';
+import { getLicenseDisplayTitle } from '../util/licensing';
 import axios from 'axios';
 import { PassThrough } from 'node:stream';
 import Archiver from 'archiver';
@@ -696,22 +697,22 @@ export class PDFService {
       const showMarginContent = this.getShouldShowMarginContent(pageInfo);
       const headerHTML = showMarginContent ? generatePDFHeader(ImageConstants['default']) : '';
       const sectionNum = extractPageNumberPrefix(pageInfo.title).replace(/\.$/, '');
-      const footerHTML = showMarginContent ? generatePDFFooter({ sectionNum }) : '';
+      const licenseTitle = getLicenseDisplayTitle(pageInfo.license);
+      const footerHTML = showMarginContent
+        ? generatePDFFooter({
+            sectionNum,
+            licenseTitle,
+          })
+        : '';
 
       const sectionPageCSS =
         sectionNum && showMarginContent
           ? `<style>
-            @page sp-${pageID} {
-              counter-increment: spc-${pageID};
-              @bottom {
-                content: counter(page) " | ${sectionNum}." counter(spc-${pageID});
-                font-size: 16px;
-                font-weight: 700;
-                color: #333;
-                text-align: center;
-              }
-            }
+            @page sp-${pageID} { counter-increment: spc-${pageID}; }
             body { page: sp-${pageID}; }
+            .pdf-footer-center::after {
+              content: counter(page) " | ${sectionNum}." counter(spc-${pageID});
+            }
             </style>`
           : '';
 
@@ -1773,7 +1774,13 @@ ${stripBlocklistedScripts(pageTailHTML)}
         const shouldShowMarginContent = this.getShouldShowMarginContent(t.pageInfo);
         const headerHTML = shouldShowMarginContent ? generatePDFHeader(ImageConstants['default']) : '';
         const sectionNum = extractPageNumberPrefix(t.pageInfo.title).replace(/\.$/, '');
-        const footerHTML = shouldShowMarginContent ? generatePDFFooter({ sectionNum }) : '';
+        const licenseTitle = getLicenseDisplayTitle(t.pageInfo.license);
+        const footerHTML = shouldShowMarginContent
+          ? generatePDFFooter({
+              sectionNum,
+              licenseTitle,
+            })
+          : '';
 
         // Inject counter-reset only in the first file — Prince treats multi-file input as one
         // continuous document, so resetting in each file would restart numbering per-page.
@@ -1784,17 +1791,11 @@ ${stripBlocklistedScripts(pageTailHTML)}
         const sectionPageCSS =
           sectionNum && shouldShowMarginContent
             ? `<style>
-              @page sp-${t.pageInfo.pageID} {
-                counter-increment: spc-${t.pageInfo.pageID};
-                @bottom {
-                  content: counter(page) " | ${sectionNum}." counter(spc-${t.pageInfo.pageID});
-                  font-size: 16px;
-                  font-weight: 700;
-                  color: #333;
-                  text-align: center;
-                }
-              }
+              @page sp-${t.pageInfo.pageID} { counter-increment: spc-${t.pageInfo.pageID}; }
               body { page: sp-${t.pageInfo.pageID}; }
+              .pdf-footer-center::after {
+                content: counter(page) " | ${sectionNum}." counter(spc-${t.pageInfo.pageID});
+              }
               </style>`
             : '';
         // TODO: lang attr for non-English texts

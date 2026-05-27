@@ -17,6 +17,29 @@ export function ccIconsSVGs(clauses: string[]): string {
   return '';
 }
 
+const LICENSE_DISPLAY_TITLES: Record<string, string> = {
+  arr: 'All Rights Reserved',
+  ccby: 'CC BY',
+  ccbync: 'CC BY-NC',
+  ccbyncnd: 'CC BY-NC-ND',
+  ccbyncsa: 'CC BY-NC-SA',
+  ccbynd: 'CC BY-ND',
+  ccbysa: 'CC BY-SA',
+  ck12: 'CK-12',
+  gnu: 'GPL',
+  gnudsl: 'GNU DSL',
+  gnufdl: 'GNU FDL',
+  gnugpl: 'GNU GPL',
+  multiple: 'Multiple Licenses',
+  publicdomain: 'Public Domain',
+};
+
+export function getLicenseDisplayTitle(license: LicenseInfo | null): string {
+  if (!license) return '';
+  const title = LICENSE_DISPLAY_TITLES[license.raw] ?? license.raw;
+  return license.version ? `${title} ${license.version}` : title;
+}
+
 export function getLicense(pageTags: string[]): LicenseInfo | null {
   if (!pageTags?.length) return null;
 

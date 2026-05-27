@@ -236,9 +236,22 @@ export function generatePDFHeader(headerImg: string) {
  *
  * Must be placed in the <body> before content so the string is set on the first page.
  */
-export function generatePDFFooter({ sectionNum }: { sectionNum: string }) {
+export function generatePDFFooter({ sectionNum, licenseTitle }: { sectionNum: string; licenseTitle: string }) {
   const sectionSuffix = sectionNum ? ` | ${sectionNum}` : '';
-  return `<span class="section-marker" data-section="${sectionSuffix}"></span>`;
+  const licenseContent = licenseTitle ?? '';
+  /*
+  FIXME: disabled for now; Prince doesn't support links in running footers well without structural errors
+  const pageURL = pageID ? `https://go.libretexts.org/${pageID.toString()}` : '';
+  const pageURLContent = pageURL ? `<a href="${pageURL}">${pageURL}</a>` : '';
+   */
+  return `
+    <span class="section-marker" data-section="${sectionSuffix}"></span>
+    <div id="libre-pdf-footer">
+      <div class="pdf-footer-left">${licenseContent}</div>
+      <div class="pdf-footer-center"></div>
+      <div class="pdf-footer-right"></div>
+    </div>
+  `;
 }
 
 export function generatePDFCoverHTML({

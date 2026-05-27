@@ -8,11 +8,7 @@
   }
 
   @bottom {
-    content: counter(page) string(sectionNum, first);
-    font-size: 16px;
-    font-weight: 700;
-    color: #333;
-    text-align: center;
+    content: element(pageFooter);
   }
 }
 
@@ -28,12 +24,55 @@
   -prince-pdf-tag-type: Artifact;
 }
 
+#libre-pdf-footer {
+  position: running(pageFooter);
+  display: flex;
+  align-items: baseline;
+  width: 100%;
+}
+
+#libre-pdf-footer a {
+  color: #5B5B5B !important;
+}
+
+.pdf-footer-left,
+.pdf-footer-center,
+.pdf-footer-right {
+  flex: 1;
+}
+
+.pdf-footer-left {
+  font-size: 8px;
+  color: #5B5B5B;
+  text-align: left;
+}
+
+.pdf-footer-center {
+  font-size: 16px;
+  font-weight: 700;
+  color: #333;
+  text-align: center;
+}
+
+.pdf-footer-center::after {
+  content: counter(page) string(sectionNum, first);
+}
+
+.pdf-footer-right {
+  font-size: 8px;
+  color: #5B5B5B;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 /* Assigns the no-margin-content named page to suppress header/footer */
 .no-margin-content {
   page: no-margin-content;
 }
 
-/* Sets the section number string for @page @bottom via string-set. */
+/* Sets the section number string for the footer center via string-set. */
 .section-marker {
   string-set: sectionNum attr(data-section);
 }
