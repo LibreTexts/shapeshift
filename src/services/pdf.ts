@@ -42,6 +42,7 @@ import axios from 'axios';
 import { PassThrough } from 'node:stream';
 import Archiver from 'archiver';
 import { Upload } from '@aws-sdk/lib-storage';
+import { isCoverpage } from '../util/bookHelpers';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -935,10 +936,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       resolvedIsSubTOC = true;
       level = 3;
     }
-    const twoColumn =
-      pageInfo.tags?.includes('columns:two') &&
-      (pageInfo.tags?.includes('coverpage:yes') || pageInfo.tags?.includes('coverpage:nocommons')) &&
-      level === 2;
+    const twoColumn = pageInfo.tags?.includes('columns:two') && isCoverpage(pageInfo) && level === 2;
     const prefix = level === 2 ? 'h2' : 'span';
     // Get subtitles
     const innerRaw = await Promise.all(
@@ -1039,7 +1037,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
 
     if (!tags?.length) return null;
     const pageType =
-      tags.includes('coverpage:yes') || tags.includes('coverpage:nocommons') || title?.includes('Table of Contents')
+      isCoverpage(tags) || title?.includes('Table of Contents')
         ? 'Table of Contents' // server-side TOC generation (deprecated)
         : tags.includes('article:topic-guide')
           ? 'Chapter Overview'
@@ -1510,13 +1508,15 @@ ${stripBlocklistedScripts(pageTailHTML)}
       }
     }
 
-    // Always emit an index task at the end of back matter, regardless of whether the
-    // book has a CXOne Index placeholder page.  Server-side index generation doesn't
-    // need a CXOne page to exist — it derives terms directly from content page tags.
-    // When a real CXOne Index page was found above, the task was already pushed and
-    // the check below is a no-op.
+    /**
+     * Always emit an index task at the end of back matter for a full book, regardless of whether the
+     * book has a CXOne Index placeholder page.  Server-side index generation doesn't
+     * need a CXOne page to exist — it derives terms directly from content page tags.
+     * When a real CXOne Index page was found above, the task was already pushed and
+     * the check below is a no-op.
+     */
     const hasIndexTask = conversionTasks.some((t) => t.type === 'index');
-    if (!hasIndexTask) {
+    if (!hasIndexTask && isCoverpage(tree)) {
       backMatterIdx += 1;
       const idxFileName = `9999:${backMatterIdx}`;
       conversionTasks.push({
