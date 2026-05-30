@@ -126,6 +126,7 @@ type PrerenderedTask = { task: ConversionTask; renderedBody: string };
 
 export class PDFService {
   private _bookID!: PageID;
+  private _jobID?: string;
   private readonly _useEnvironmentPrinceLicense: boolean = false;
   private _useLocalStorage: boolean = false;
   private readonly logger: LogLayer;
@@ -137,17 +138,19 @@ export class PDFService {
   private _allPages: BookPageInfo[] = [];
   private _urlToAnchor: Map<string, string> = new Map();
 
-  constructor(bookID: PageID, opts: { useLocalStorage?: boolean } = {}) {
+  constructor(bookID: PageID, jobID?: string, opts?: { useLocalStorage?: boolean }) {
     this._bookID = bookID;
-    this._useLocalStorage = opts.useLocalStorage ?? false;
+    this._jobID = jobID;
+    this._useLocalStorage = opts?.useLocalStorage ?? false;
 
     if (!bookID || !(bookID instanceof PageID)) {
       throw new Error('Book ID is required and must be a valid PageID instance');
     }
 
     this.logger = logService.child().withContext({
-      logSource: this.logName,
       bookID: this._bookID.toString(),
+      jobID: this._jobID,
+      logSource: this.logName,
     });
     this.storageService = new StorageService();
 

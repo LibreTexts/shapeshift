@@ -102,7 +102,7 @@ export class JobService {
         }
 
         // <generate pdf>
-        const pdfService = new PDFService(bookID, { useLocalStorage });
+        const pdfService = new PDFService(bookID, jobMsg.jobId, { useLocalStorage });
         let pdfPath: string | null = null;
         if (enabledFormats.includes('PDF')) {
           try {
