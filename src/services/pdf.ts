@@ -520,6 +520,64 @@ export class PDFService {
     }
   }
 
+  /**
+   * Converts a single content page to PDF. Produces a single Full.pdf with
+   * headers, footers, and math rendering, but no cover, front/back matter,
+   * print covers, or publication zip.
+   */
+  public async convertSinglePage(pageInfo: BookPageInfo): Promise<string | null> {
+    this._allPages = [pageInfo];
+    this._rootPageID = pageInfo.pageID.toString();
+    const startTime = Date.now();
+
+    try {
+      const preflightOk = await this.runPreflightChecks();
+      if (!preflightOk) {
+        throw new Error('Preflight checks failed: Prince binary is not properly configured');
+      }
+
+      // Pre-render math. Manually prepend the page title since addPageTitle()
+      // would suppress it (the page's ID matches _bookID in single-page mode).
+      const rawBody = pageInfo.body.join('');
+      const anchor = `page-${pageInfo.pageID}`;
+      const bodyWithTitle = `<h1 id="${anchor}">${pageInfo.title}</h1>${rawBody}`;
+      const renderedBody = await prerenderMath(this.decodeHTML(bodyWithTitle), pageInfo);
+
+      const sortKey = '0001';
+      const pdfPath = await this.convertPage({
+        pageID: pageInfo.pageID,
+        pageInfo,
+        pageBodyHTML: rawBody,
+        preRenderedBodyHTML: renderedBody,
+        pageHeadHTML: pageInfo.head,
+        pageTailHTML: pageInfo.tail,
+        sortKey,
+        pageOffset: 0,
+      });
+
+      if (!pdfPath) return null;
+
+      // Move workdir PDF to the final Full.pdf location
+      const finalPath = await this.generateFullDocumentOutputFilePath();
+      const finalDir = getDirectoryPathFromFilePath(finalPath);
+      await fs.mkdir(finalDir, { recursive: true });
+      await fs.rename(pdfPath, finalPath);
+
+      if (!this._useLocalStorage) await this.streamFileToS3(finalPath);
+
+      this.logger
+        .withMetadata({ duration: Date.now() - startTime })
+        .info('Single-page PDF conversion completed successfully');
+
+      await this.cleanupWorkdir();
+      if (!this._useLocalStorage) await this.cleanupLocalArtifacts({ finalFilePath: finalPath });
+      return finalPath;
+    } catch (error) {
+      this.logger.withMetadata({ error, duration: Date.now() - startTime }).error('Single-page PDF conversion failed');
+      throw error;
+    }
+  }
+
   private async retryWithBackoff<T>(
     operation: () => Promise<T>,
     context: string,

@@ -88,6 +88,26 @@ export class JobService {
         const pages = await bookModel.discoverPages(bookID.lib, bookID.pageNum);
         log.debug(`Discovered ${pages.flat.length} pages for book ${bookID.toString()}`);
 
+        // Single content page (no children) — generate a simple PDF only
+        const isSinglePage = pages.flat.length === 1;
+        if (isSinglePage) {
+          log.info(`Single page detected for ${bookID.toString()}, generating single-page PDF`);
+          if (enabledFormats.includes('PDF')) {
+            const pdfService = new PDFService(bookID, jobMsg.jobId, { useLocalStorage });
+            try {
+              const pdfPath = await pdfService.convertSinglePage(pages.tree);
+              log.info(`Single-page PDF generated at path: ${pdfPath}`);
+            } catch (pdfError) {
+              const errorMsg = pdfError instanceof Error ? pdfError.message : String(pdfError);
+              log.error(`Single-page PDF conversion failed: ${errorMsg}`);
+              await pdfService.cleanupWorkdir();
+              throw pdfError;
+            }
+          }
+          await this.finish(jobMsg);
+          return;
+        }
+
         const coverPageInfo = pages.flat.find((page) => page.pageID.toString() === bookID.toString());
         if (!coverPageInfo) {
           throw new Error(`Cover page with ID ${bookID.toString()} not found in discovered pages.`);
