@@ -29,7 +29,7 @@ const DEFAULT_CONTENT_FETCH_CONCURRENCY = 10;
 export class BookService {
   private readonly logger: LogLayer;
   private readonly logName: 'BookService';
-  private authorsCache = new Map<string, Promise<Record<string, any>>>();
+  private authorsCache = new Map<string, Record<string, any>>();
   private readonly DEFAULT_THUMBNAILS = {
     BACK_MATTER: 'https://cdn.libretexts.net/DefaultImages/Back%20matter.jpg',
     DEFAULT: 'https://cdn.libretexts.net/DefaultImages/default.png',
@@ -464,7 +464,6 @@ export class BookService {
 
     const printInfo = await this.resolvePrintInfo({
       authorTag,
-      lib: libName,
       tags: parsedTags,
     });
 
@@ -638,26 +637,21 @@ export class BookService {
     return tagsRaw.map((t) => t?.['@value']).filter((t): t is string => !!t);
   }
 
-  private getAuthors(lib: string): Promise<Record<string, any>> {
-    let cached = this.authorsCache.get(lib);
-    if (!cached) {
-      cached = fetch(`https://api.libretexts.org/endpoint/getAuthors/${lib}`, {
-        headers: { origin: 'shapeshift.libretexts.org' },
-      }).then((res) => res.json());
-      this.authorsCache.set(lib, cached);
-    }
-    return cached;
+  private async getAuthor(authorTag: string): Promise<Record<string, any> | null> {
+    const cached = this.authorsCache.get(authorTag);
+    if (cached) return cached;
+
+    const resp = await fetch(`https://commons.libretexts.org/api/v1/authors/key/${authorTag}`, {
+      headers: { origin: 'shapeshift.libretexts.org' },
+    });
+    const data = await resp.json();
+    if (data.err || !data.author) return null;
+
+    this.authorsCache.set(authorTag, data.author);
+    return data.author;
   }
 
-  public async resolvePrintInfo({
-    authorTag,
-    lib,
-    tags,
-  }: {
-    authorTag?: string;
-    lib: string;
-    tags: string[];
-  }): Promise<BookPrintInfo> {
+  public async resolvePrintInfo({ authorTag, tags }: { authorTag?: string; tags: string[] }): Promise<BookPrintInfo> {
     const info: BookPrintInfo = {
       attributionPrefix: '',
       authorName: '',
@@ -682,8 +676,7 @@ export class BookService {
       info.spineTitle = items[4] ?? '';
     }
     if (!info.authorName && authorTag) {
-      const authors = await this.getAuthors(lib);
-      const author = authors?.[authorTag];
+      const author = await this.getAuthor(authorTag);
       if (author) {
         info.authorName = author.name ?? '';
         info.companyName = author.companyname ?? '';
