@@ -29,6 +29,7 @@ const DEFAULT_CONTENT_FETCH_CONCURRENCY = 10;
 export class BookService {
   private readonly logger: LogLayer;
   private readonly logName: 'BookService';
+  private authorsCache = new Map<string, Promise<Record<string, any>>>();
   private readonly DEFAULT_THUMBNAILS = {
     BACK_MATTER: 'https://cdn.libretexts.net/DefaultImages/Back%20matter.jpg',
     DEFAULT: 'https://cdn.libretexts.net/DefaultImages/default.png',
@@ -637,6 +638,17 @@ export class BookService {
     return tagsRaw.map((t) => t?.['@value']).filter((t): t is string => !!t);
   }
 
+  private getAuthors(lib: string): Promise<Record<string, any>> {
+    let cached = this.authorsCache.get(lib);
+    if (!cached) {
+      cached = fetch(`https://api.libretexts.org/endpoint/getAuthors/${lib}`, {
+        headers: { origin: 'shapeshift.libretexts.org' },
+      }).then((res) => res.json());
+      this.authorsCache.set(lib, cached);
+    }
+    return cached;
+  }
+
   public async resolvePrintInfo({
     authorTag,
     lib,
@@ -670,11 +682,7 @@ export class BookService {
       info.spineTitle = items[4] ?? '';
     }
     if (!info.authorName && authorTag) {
-      // TODO: cache or move this
-      const authorsRaw = await fetch(`https://api.libretexts.org/endpoint/getAuthors/${lib}`, {
-        headers: { origin: 'shapeshift.libretexts.org' },
-      });
-      const authors = await authorsRaw.json();
+      const authors = await this.getAuthors(lib);
       const author = authors?.[authorTag];
       if (author) {
         info.authorName = author.name ?? '';
