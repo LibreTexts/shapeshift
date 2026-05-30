@@ -157,10 +157,6 @@ picture > img {
   width: auto;
 }
 
-figure {
-  max-width: 100%;
-}
-
 /* Packed-page separator: small visual break between logically distinct content pages
    that have been merged into a single Prince invocation for whitespace efficiency */
 .packed-page + .packed-page {
@@ -238,4 +234,24 @@ figure {
 p.box-heading {
   font-weight: bold;
   margin: 0.5em 0 0.25em;
+}
+
+figure {
+  display: flex;
+  align-items: center;
+  flex-direction: column;
+  margin: 0;
+  page-break-inside: avoid;
+  margin-bottom: 0.3em !important;
+  max-width: 100%;
+}
+
+figcaption {
+  caption-side: bottom;
+  text-align: justify;
+  font-size: 90%;
+  margin-left: 5%;
+  margin-right: 5%;
+  margin-top: 0.3em;
+  break-inside: avoid-page;
 }
