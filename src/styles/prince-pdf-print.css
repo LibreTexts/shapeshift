@@ -1,0 +1,19 @@
+@prince-pdf {
+  -prince-pdf-display-doc-title: true;
+}
+
+/* Suppress clickable link annotations */
+a {
+  -prince-pdf-link-type: none;
+}
+
+/* Black link text for print */
+a, a:visited {
+  color: #000000 !important;
+  text-decoration: none;
+}
+
+/* Style the parenthesized URL appended to links */
+.print-url {
+  font-size: 0.9em;
+}

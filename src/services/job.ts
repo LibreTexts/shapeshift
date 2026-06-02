@@ -7,6 +7,7 @@ import { CreationAttributes } from 'sequelize';
 import { ThinCCService } from './thinCC';
 import { log } from '../lib/log';
 import { EPUBService } from './epub';
+import { isCoverpage } from '../util/bookHelpers';
 
 export type JobOutputFormat = 'EPUB' | 'PDF' | 'ThinCC';
 
@@ -113,11 +114,11 @@ export class JobService {
           throw new Error(`Cover page with ID ${bookID.toString()} not found in discovered pages.`);
         }
 
-        if (!bookModel.checkMatterExists(pages, 'Front')) {
+        if (isCoverpage(pages.tree) && !bookModel.checkMatterExists(pages, 'Front')) {
           log.warn(`Front matter is missing for book ${bookID.toString()}.`);
         }
 
-        if (!bookModel.checkMatterExists(pages, 'Back')) {
+        if (isCoverpage(pages.tree) && !bookModel.checkMatterExists(pages, 'Back')) {
           log.warn(`Back matter is missing for book ${bookID.toString()}.`);
         }
 

@@ -49,6 +49,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 // CSS loaded at module init and inlined into HTML sent to Prince.
 // Note: changes to this file require a server restart in development.
 const princePdfCssPath = join(__dirname, '../styles/prince-pdf.css');
+const pdfPrintEditionCSS = readFileSync(join(__dirname, '../styles/prince-pdf-print.css'), 'utf-8');
 const pdfPageCSS = readFileSync(join(__dirname, '../styles/pdf-page.css'), 'utf-8');
 const pdfTableCSS = readFileSync(join(__dirname, '../styles/pdf-tables.css'), 'utf-8');
 const pdfFontCSS = generateFontCSS();
@@ -440,22 +441,74 @@ export class PDFService {
       });
       if (!this._useLocalStorage) await this.streamFileToS3(finalFilePath);
 
-      // ── Phase 5: Generate additional assets like Content file and covers ──
-      // Extract content-only pages (page 2 onward) for the publication zip.
-      // Tags/structure are not needed in this file: used for printers only.
+      // ── Phase 5: Generate print content PDF and covers for Publication.zip ──
+      // Re-use the same HTML files from Pass 2 with print-edition styling.
+      // Print edition: full URLs shown in square brackets after every link, links non-clickable, black text.
+      // We modify the HTML files directly (they are deleted shortly after anyway):
+      //  1. Inject print-edition CSS inline so it wins the cascade over existing styles.
+      //  2. Append the URL as text after each link using cheerio.
+      this.logger.info('Generating print edition content PDF');
+
+      // Build reverse map: anchor fragment → short URL (e.g. "#page-chem-123" → "go.libretexts.org/chem-123")
+      const anchorToShortUrl = new Map<string, string>();
+      for (const page of this._allPages) {
+        const anchor = `#page-${page.pageID}`;
+        anchorToShortUrl.set(anchor, `https://go.libretexts.org/${page.pageID}`);
+      }
+
+      await Promise.all(
+        fullDocHTMLPaths.map(async (htmlPath) => {
+          const html = await fs.readFile(htmlPath, 'utf-8');
+          const $ = cheerio.load(html, { xmlMode: false });
+
+          // Inject print-edition CSS at the end of <head> so it overrides earlier inlined styles
+          $('head').append(`<style>${pdfPrintEditionCSS}</style>`);
+
+          // Append URL in square brackets after each link
+          $('a[href]').each((_, el) => {
+            const $el = $(el);
+            const href = $el.attr('href');
+            if (!href) return;
+
+            let url: string | undefined;
+            if (href.startsWith('http')) {
+              // External link — use href directly
+              url = href;
+            } else {
+              // Internal link — use short URL via go.libretexts.org
+              // href may be "#page-{id}" or "filename.html#page-{id}"
+              const fragment = href.includes('#') ? '#' + href.split('#')[1] : href;
+              url = anchorToShortUrl.get(fragment);
+            }
+
+            if (url) {
+              $el.after(`<span class="print-url"> [${url}]</span>`);
+            }
+          });
+
+          await fs.writeFile(htmlPath, $.html());
+        }),
+      );
+      const printFullFilePath = join(getDirectoryPathFromFilePath(finalFilePath), 'Full_Print.pdf');
+      await this.runPrinceConversion({
+        inputPath: fullDocHTMLPaths,
+        outputPath: printFullFilePath,
+        pageInfo: coverPageInfo,
+        taggedPdf: false,
+      });
+
       const contentFilePath = await this.generateContentOutputFilePath();
-      const contentDir = getDirectoryPathFromFilePath(contentFilePath);
-      await fs.mkdir(contentDir, { recursive: true });
       await extractPDFPages({
-        inputPath: finalFilePath,
+        inputPath: printFullFilePath,
         outputPath: contentFilePath,
         pageStart: 2,
       });
       if (!this._useLocalStorage) await this.streamFileToS3(contentFilePath);
+      await fs.unlink(printFullFilePath).catch(() => {});
+      this.logger.info('Print edition content PDF generated successfully');
 
       // Clean up HTML temp files now that Prince has consumed them.
       await Promise.all(fullDocHTMLPaths.map((p) => this._deleteTempFile(p).catch(() => {})));
-      this.logger.info('Full document and content PDF generated successfully');
 
       // Generate print covers (Amazon, CaseWrap, CoilBound, PerfectBound) with retry.
       this.logger.info('Generating publication covers');
@@ -844,10 +897,12 @@ ${stripBlocklistedScripts(pageTailHTML)}
     inputPath,
     outputPath,
     pageInfo,
+    taggedPdf,
   }: {
     inputPath: string | string[];
     outputPath: string;
     pageInfo: BookPageInfo;
+    taggedPdf?: boolean;
   }) {
     const inputCount = Array.isArray(inputPath) ? inputPath.length : 1;
     const timeoutMs = Number.parseInt(Environment.getOptional('PRINCE_TIMEOUT_SECONDS', '60'), 10) * 1000;
@@ -863,10 +918,9 @@ ${stripBlocklistedScripts(pageTailHTML)}
       if (this._useEnvironmentPrinceLicense) prince.license('./prince_license.dat');
 
       const title = pageInfo.printInfo?.title || pageInfo.title || 'Unknown';
-      const result = await prince
-        .option('verbose', true)
-        .option('javascript', true)
-        .option('tagged-pdf', true)
+      const princeChain = prince.option('verbose', true).option('javascript', true);
+      if (taggedPdf !== false) princeChain.option('tagged-pdf', true);
+      const result = await princeChain
         .option('pdf-title', title)
         .option('style', princePdfCssPath)
         .option('pdf-xmp-metadata', true, true)
