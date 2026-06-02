@@ -4,10 +4,10 @@ import zod from 'zod';
 import { Op } from 'sequelize';
 import { Response } from 'express';
 import { validators } from '../api/validators';
-import { extractIPFromHeaders, ZodRequest } from '../helpers';
 import { LogLayer } from 'loglayer';
 import { log as logService } from '../lib/log';
 import { Job } from '../model';
+import { extractIPFromHeaders, ZodRequest } from '../util/util';
 
 export class JobController {
   private readonly logger: LogLayer;

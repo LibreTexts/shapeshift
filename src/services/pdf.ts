@@ -20,7 +20,6 @@ import {
 import { buildTagIndex, generateIndexHTML } from '../util/indexHelpers';
 import { parseGlossaryTable, buildGlossaryData, generateGlossaryHTML } from '../util/glossaryHelpers';
 import { ImageConstants } from '../util/imageConstants';
-import { sleep } from '../helpers';
 import { log as logService } from '../lib/log';
 import { LogLayer } from 'loglayer';
 import { Environment } from '../lib/environment';
@@ -43,6 +42,7 @@ import { PassThrough } from 'node:stream';
 import Archiver from 'archiver';
 import { Upload } from '@aws-sdk/lib-storage';
 import { isCoverpage } from '../util/bookHelpers';
+import { sleep } from '../util/util';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 

@@ -4,7 +4,6 @@ import { join, resolve } from 'node:path';
 import axios, { AxiosError } from 'axios';
 import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
 import { getLicense } from '../util/licensing';
-import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject, omit } from '../helpers';
 import { LibraryService } from './library';
 import { GetPagesResponse, PageExtended, Tags } from '@libretexts/cxone-expert-node';
 import { dynamicDetailedLicensingLayout, dynamicLicensingLayout, dynamicTOCLayout } from '../util/pageConstants';
@@ -17,6 +16,7 @@ import { Environment } from '../lib/environment';
 import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
 import * as cheerio from 'cheerio';
 import { demoteDecorativeHeadings } from '../util/htmlFilters';
+import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject, omit } from '../util/util';
 
 /**
  * Maximum number of concurrent page content fetches from the CXOne API.

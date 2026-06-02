@@ -1,7 +1,7 @@
 import { Environment } from './environment';
 import { log } from './log';
 import { RateLimiterMemory, RateLimiterRes } from 'rate-limiter-flexible';
-import { sleep } from '../helpers';
+import { sleep } from '../util/util';
 
 export class CXOneRateLimiter {
   private static _instance: RateLimiterMemory;

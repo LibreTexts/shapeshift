@@ -6,8 +6,8 @@ import { validateZod, validators } from './validators';
 import { apiKeyAuth } from './middleware/apiKeyAuth';
 import { DownloadController } from '../controllers/download';
 import zod from 'zod';
-import { ZodRequest } from '../helpers';
 import { QueueClient } from '../lib/queueClient';
+import { ZodRequest } from '../util/util';
 
 // <API routes>
 const router = express.Router();

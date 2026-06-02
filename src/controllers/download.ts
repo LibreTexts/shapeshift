@@ -3,11 +3,11 @@ import { log as logService } from '../lib/log';
 import { validators } from '../api/validators';
 import zod from 'zod';
 import { Response } from 'express';
-import { extractIPFromHeaders, ZodRequest } from '../helpers';
 import { StorageService } from '../lib/storageService';
 import { getSignedUrl } from '@aws-sdk/cloudfront-signer';
 import { Environment } from '../lib/environment';
 import { MongoClient } from 'mongodb';
+import { extractIPFromHeaders, ZodRequest } from '../util/util';
 
 let mongoClient: MongoClient | null = null;
 
