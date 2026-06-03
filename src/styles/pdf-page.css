@@ -42,9 +42,16 @@
 }
 
 .pdf-footer-left {
-  font-size: 8px;
+  font-size: 14px;
   color: #5B5B5B;
   text-align: left;
+}
+
+.pdf-footer-left img {
+  height: 14px;
+  margin-right: 2px;
+  width: auto;
+  vertical-align: middle;
 }
 
 .pdf-footer-center {

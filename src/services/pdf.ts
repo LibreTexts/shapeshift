@@ -36,7 +36,6 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decode } from 'html-entities';
 import { generateDetailedLicensingHTML } from '../util/detailedLicensingHelpers';
-import { getLicenseDisplayTitle } from '../util/licensing';
 import axios from 'axios';
 import { PassThrough } from 'node:stream';
 import Archiver from 'archiver';
@@ -812,11 +811,11 @@ export class PDFService {
       const showMarginContent = this.getShouldShowMarginContent(pageInfo);
       const headerHTML = showMarginContent ? generatePDFHeader(ImageConstants['default']) : '';
       const sectionNum = extractPageNumberPrefix(pageInfo.title).replace(/\.$/, '');
-      const licenseTitle = getLicenseDisplayTitle(pageInfo.license);
+      const licenseLabel = pageInfo.license?.label ?? '';
       const footerHTML = showMarginContent
         ? generatePDFFooter({
             sectionNum,
-            licenseTitle,
+            licenseLabel,
           })
         : '';
 
@@ -1889,11 +1888,11 @@ ${stripBlocklistedScripts(pageTailHTML)}
         const shouldShowMarginContent = this.getShouldShowMarginContent(t.pageInfo);
         const headerHTML = shouldShowMarginContent ? generatePDFHeader(ImageConstants['default']) : '';
         const sectionNum = extractPageNumberPrefix(t.pageInfo.title).replace(/\.$/, '');
-        const licenseTitle = getLicenseDisplayTitle(t.pageInfo.license);
+        const licenseLabel = t.pageInfo.license?.label ?? '';
         const footerHTML = shouldShowMarginContent
           ? generatePDFFooter({
               sectionNum,
-              licenseTitle,
+              licenseLabel,
             })
           : '';
 
