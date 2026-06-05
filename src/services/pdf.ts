@@ -471,7 +471,6 @@ export class PDFService {
 
             let url: string | undefined;
             if (href.startsWith('http')) {
-              // External link — use href directly
               url = href;
             } else {
               // Internal link — use short URL via go.libretexts.org
@@ -751,7 +750,8 @@ export class PDFService {
     const shouldRenderTitle = !(isInExcludedList || isTableOfContents || hasChildren);
     const anchor = `page-${pageInfo.pageID}`;
     if (shouldRenderTitle) {
-      return `<h1 id="${anchor}">${pageInfo.title}</h1>${raw}`;
+      const readOnlineURL = `https://go.libretexts.org/${pageInfo.pageID}`;
+      return `<h1 id="${anchor}">${pageInfo.title}</h1><p class="read-online"><a href="${readOnlineURL}"><img alt="" src="data:image/svg+xml;base64,${ImageConstants.linkIcon}" />Read on the web</a></p>${raw}`;
     }
     return `<span id="${anchor}" class="pdf-anchor">&#8203;</span>${raw}`;
   }

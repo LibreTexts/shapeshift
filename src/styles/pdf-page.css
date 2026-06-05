@@ -94,6 +94,19 @@ html, body {
 
 h1 {
   font-size: 20pt;
+  margin-bottom: 0.1em;
+}
+
+.read-online {
+  font-size: 9pt;
+  margin-bottom: 2.2em;
+}
+
+.read-online img {
+  height: 9pt;
+  margin-right: 2px;
+  width: auto;
+  vertical-align: -1.5pt;
 }
 
 h2 {
