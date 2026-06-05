@@ -1,3 +1,4 @@
+import { BookPageInfo } from '../types/book';
 import { ImageConstants } from './imageConstants';
 import { LicenseInfo } from '../types/licensing';
 
@@ -145,4 +146,92 @@ export function getLicense(pageTags: string[]): LicenseInfo | null {
       break;
   }
   return null; // not found
+}
+
+// TODO: non-English support
+export function renderAutoAttribution(page: BookPageInfo): string {
+  const { tags, printInfo, license, title, url, authorTag } = page;
+
+  // Parse tag-based overrides
+  const authorNames: string[] = [];
+  let sectionAuthorURL = '';
+  let sectionSource = '';
+
+  for (const tag of tags) {
+    if (tag.startsWith('author@')) {
+      authorNames.push(tag.replace('author@', ''));
+    } else if (tag.startsWith('authorURL@')) {
+      sectionAuthorURL = tag.replace('authorURL@', '');
+    } else if (tag.startsWith('source@')) {
+      sectionSource = tag.replace('source@', '');
+    }
+  }
+
+  // Join multiple author@ names: "A", "A & B", "A, B, & C"
+  let sectionAuthorTitle = '';
+  if (authorNames.length === 1) {
+    sectionAuthorTitle = authorNames[0];
+  } else if (authorNames.length === 2) {
+    sectionAuthorTitle = `${authorNames[0]} & ${authorNames[1]}`;
+  } else if (authorNames.length > 2) {
+    const allButLast = authorNames.slice(0, -1).join(', ');
+    sectionAuthorTitle = `${allButLast}, & ${authorNames[authorNames.length - 1]}`;
+  }
+
+  // License display
+  const licenseName = getLicenseDisplayTitle(license);
+  const licenseURL = license?.link ?? '';
+
+  // Source clause
+  let sourceClause: string;
+  if (sectionSource && sectionSource !== 'native') {
+    sourceClause = ` via <a rel="nofollow" href="${sectionSource}" target="_blank">source content</a> that was edited to the style and standards of the LibreTexts platform.`;
+  } else if (sectionSource === 'native') {
+    sourceClause = ' directly on the LibreTexts platform.';
+  } else {
+    sourceClause = '.';
+  }
+
+  if (authorTag) {
+    // Resolve author display name and URL with priority cascade
+    let authorDisplay = printInfo.authorName;
+    if (sectionAuthorTitle) authorDisplay = sectionAuthorTitle;
+
+    let authorDisplayURL = printInfo.authorURL;
+    if (sectionAuthorURL) authorDisplayURL = sectionAuthorURL;
+
+    // Author fragment
+    let authorFragment = '';
+    if (authorDisplay && authorDisplayURL) {
+      authorFragment = `<a rel="nofollow" target="_blank" href="${authorDisplayURL}">${authorDisplay}</a>`;
+    } else if (authorDisplay) {
+      authorFragment = authorDisplay;
+    }
+
+    // Program/publisher fragment (skip if same as author display name)
+    let programFragment = '';
+    if (printInfo.programName && printInfo.programName !== authorDisplay) {
+      if (printInfo.programURL) {
+        programFragment = ` (<a rel="nofollow" target="_blank" href="${printInfo.programURL}">${printInfo.programName}</a>)`;
+      } else {
+        programFragment = ` (${printInfo.programName})`;
+      }
+    }
+
+    return `
+      <hr class="autoattribution-divider" />
+      <div class="autoattribution">
+        <p>This page titled <a href="${url}" target="_blank">${title}</a> is shared under a <a rel="nofollow" href="${licenseURL}" target="_blank">${licenseName}</a> license and was authored, remixed, and/or curated by ${authorFragment}${programFragment}${sourceClause}</p>
+      </div>
+    `;
+  }
+
+  // Fallback: no authorTag
+  const fallbackAuthor = sectionAuthorTitle || 'LibreTexts';
+  return `
+    <hr class="autoattribution-divider" />
+    <div class="autoattribution">
+      <p><a href="${url}" target="_blank">${title}</a> is shared under a <a rel="nofollow" href="${licenseURL}" target="_blank">${licenseName}</a> license and was authored, remixed, and/or curated by ${fallbackAuthor}.</p>
+    </div>
+  `;
 }

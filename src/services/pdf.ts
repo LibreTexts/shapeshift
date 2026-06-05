@@ -42,6 +42,7 @@ import Archiver from 'archiver';
 import { Upload } from '@aws-sdk/lib-storage';
 import { isCoverpage } from '../util/bookHelpers';
 import { sleep } from '../util/util';
+import { renderAutoAttribution } from '../util/licensing';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -812,6 +813,7 @@ export class PDFService {
       const headerHTML = showMarginContent ? generatePDFHeader(ImageConstants['default']) : '';
       const sectionNum = extractPageNumberPrefix(pageInfo.title).replace(/\.$/, '');
       const licenseLabel = pageInfo.license?.label ?? '';
+      const autoAttribution = this.getShouldRenderAttribution(pageInfo) ? renderAutoAttribution(pageInfo) : '';
       const footerHTML = showMarginContent
         ? generatePDFFooter({
             sectionNum,
@@ -856,6 +858,7 @@ export class PDFService {
 ${headerHTML}
 ${footerHTML}
 ${renderedBodyHTML}
+${autoAttribution}
 ${stripBlocklistedScripts(pageTailHTML)}
 </body>
 </html>
@@ -1674,6 +1677,10 @@ ${stripBlocklistedScripts(pageTailHTML)}
     return !['InfoPage', 'ProgramPage', 'Title Page', 'TitlePage'].includes(pageInfo.title);
   }
 
+  private getShouldRenderAttribution(pageInfo: BookPageInfo): boolean {
+    return !pageInfo.matterType;
+  }
+
   /**
    * Groups a sorted ConversionTask array into PageGroups for chapter-level multi-file rendering.
    *
@@ -1889,6 +1896,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         const headerHTML = shouldShowMarginContent ? generatePDFHeader(ImageConstants['default']) : '';
         const sectionNum = extractPageNumberPrefix(t.pageInfo.title).replace(/\.$/, '');
         const licenseLabel = t.pageInfo.license?.label ?? '';
+        const autoAttribution = this.getShouldRenderAttribution(t.pageInfo) ? renderAutoAttribution(t.pageInfo) : '';
         const footerHTML = shouldShowMarginContent
           ? generatePDFFooter({
               sectionNum,
@@ -1933,6 +1941,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
 ${headerHTML}
 ${footerHTML}
 ${renderedBody}
+${autoAttribution}
 ${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
 </body>
 </html>

@@ -34,6 +34,7 @@ export type BookPageInfo = {
 export type BookPrintInfo = {
   attributionPrefix: string;
   authorName: string;
+  authorURL: string;
   companyName: string;
   programName: string;
   programURL: string;

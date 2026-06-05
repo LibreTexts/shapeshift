@@ -275,3 +275,11 @@ figcaption {
   margin-top: 0.3em;
   break-inside: avoid-page;
 }
+
+/* AutoAttribution */
+.autoattribution-divider {
+  border: 0;
+  border-top: 1px solid #b4b4b4;
+  clear: both;
+  height: 0;
+}

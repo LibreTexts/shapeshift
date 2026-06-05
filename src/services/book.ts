@@ -655,6 +655,7 @@ export class BookService {
     const info: BookPrintInfo = {
       attributionPrefix: '',
       authorName: '',
+      authorURL: '',
       companyName: '',
       programName: '',
       programURL: '',
@@ -679,10 +680,11 @@ export class BookService {
       const author = await this.getAuthor(authorTag);
       if (author) {
         info.authorName = author.name ?? '';
-        info.companyName = author.companyname ?? '';
-        if (author.attributionprefix) info.attributionPrefix = author.attributionprefix;
-        if (author.programname) info.programName = author.programname;
-        if (author.programurl) info.programURL = author.programurl;
+        info.authorURL = author.nameURL ?? '';
+        info.companyName = author.companyName ?? '';
+        if (author.attributionPrefix) info.attributionPrefix = author.attributionPrefix;
+        if (author.programName) info.programName = author.programName;
+        if (author.programURL) info.programURL = author.programURL;
       }
     }
     return info;
