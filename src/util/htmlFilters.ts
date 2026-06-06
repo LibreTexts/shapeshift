@@ -33,6 +33,38 @@ export function stripBlocklistedScripts(html: string): string {
   return $.html();
 }
 
+/** Elements that make a paragraph "non-empty" even when it has no visible text. */
+const MEANINGFUL_CHILD_TAGS = new Set(['img', 'svg', 'math', 'mjx-container', 'input', 'select', 'textarea', 'video']);
+
+/**
+ * Removes empty paragraph elements that contain no meaningful content — only whitespace,
+ * nbsp, or line break tags. Paragraphs that contain images, math, or other meaningful
+ * child elements are preserved.
+ */
+export function removeEmptyParagraphs(html: string): string {
+  if (!html) return html;
+
+  const $ = cheerio.load(html, null, false);
+  $('p').each((_, el) => {
+    const $el = $(el);
+    const hasMeaningfulChild = $el
+      .find('*')
+      .toArray()
+      .some((child) => MEANINGFUL_CHILD_TAGS.has((child as any).tagName));
+    if (hasMeaningfulChild) return;
+
+    const text = $el
+      .text()
+      .replace(/\u00a0/g, '')
+      .trim();
+    if (text === '') {
+      $el.remove();
+    }
+  });
+
+  return $.html();
+}
+
 const DECORATIVE_HEADING_BOX_CLASSES = new Set([
   'box-definition',
   'box-emphasis',

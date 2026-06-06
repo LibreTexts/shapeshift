@@ -15,7 +15,7 @@ import { LogLayer } from 'loglayer';
 import { Environment } from '../lib/environment';
 import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
 import * as cheerio from 'cheerio';
-import { demoteDecorativeHeadings } from '../util/htmlFilters';
+import { demoteDecorativeHeadings, removeEmptyParagraphs } from '../util/htmlFilters';
 import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject, omit, USER_AGENT } from '../util/util';
 
 /**
@@ -728,7 +728,8 @@ export class BookService {
           const headingsFixed = this.autofixHeadingLevels(bodyRaw);
           const altTextFixed = this.autofixMissingAltText(headingsFixed);
           const cmsMarkupFixed = this.autofixCMSMarkup(altTextFixed);
-          const interactiveReplaced = this.replaceInteractiveElements(cmsMarkupFixed);
+          const emptyParagraphsRemoved = removeEmptyParagraphs(cmsMarkupFixed);
+          const interactiveReplaced = this.replaceInteractiveElements(emptyParagraphsRemoved);
           p.body = [interactiveReplaced];
         }),
       );
