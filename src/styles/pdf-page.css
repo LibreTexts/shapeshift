@@ -55,7 +55,7 @@
 }
 
 .pdf-footer-center {
-  font-size: 16px;
+  font-size: 12px;
   font-weight: 700;
   color: #333;
   text-align: center;
@@ -89,24 +89,15 @@ html, body {
   padding: 0;
   width: 100%;
   font-family: 'Atkinson Hyperlegible', sans-serif;
-  font-size: 8.25pt;
+  font-size: 9.25pt;
+}
+
+h1, h2, h3, h4, h5, h6 {
+  margin-bottom: 0.1em;
 }
 
 h1 {
   font-size: 20pt;
-  margin-bottom: 0.1em;
-}
-
-.read-online {
-  font-size: 9pt;
-  margin-bottom: 2.2em;
-}
-
-.read-online img {
-  height: 9pt;
-  margin-right: 2px;
-  width: auto;
-  vertical-align: -1.5pt;
 }
 
 h2 {
@@ -136,6 +127,19 @@ h6 {
    paged media layout when body height was fixed at exactly one page (height: 100%). */
 body {
   overflow: hidden;
+  text-align: justify;
+}
+
+.read-online {
+  font-size: 9pt;
+  margin-bottom: 1em;
+}
+
+.read-online img {
+  height: 9pt;
+  margin-right: 2px;
+  width: auto;
+  vertical-align: -1.5pt;
 }
 
 #elm-main-content {
