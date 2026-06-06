@@ -28,7 +28,7 @@ export async function runProcess() {
   logger.info('Shapeshift processor worker started.');
   const queueClient = new QueueClient();
   const jobModel = new JobService();
-  const memoryLogInterval = setInterval(() => logMemoryUsage('periodic'), 30_000);
+  const memoryLogInterval = setInterval(() => logMemoryUsage('periodic'), 60_000);
   while (isActiveWorker) {
     const jobs = await queueClient.lookForJobs();
     for (const job of jobs) {
