@@ -41,7 +41,7 @@ import { PassThrough } from 'node:stream';
 import Archiver from 'archiver';
 import { Upload } from '@aws-sdk/lib-storage';
 import { isCoverpage } from '../util/bookHelpers';
-import { sleep } from '../util/util';
+import { sleep, USER_AGENT } from '../util/util';
 import { renderAutoAttribution } from '../util/licensing';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -1442,6 +1442,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       const licensingReportRes = await axios.get(`https://api.libretexts.org/endpoint/licensereport/${pageInfo.url}`, {
         headers: {
           Origin: 'downloads.libretexts.org',
+          'User-Agent': USER_AGENT,
         },
       });
       if (licensingReportRes.status !== 200 || !licensingReportRes.data) {

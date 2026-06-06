@@ -1,6 +1,8 @@
 import { Request } from 'express';
 import { libraryNameKeysWDev } from '../librariesmap';
 
+export const USER_AGENT = 'Shapeshift/1.0 (https://libretexts.org; info@libretexts.org)';
+
 export async function runBatchedPromises<T>(
   promises: Promise<T>[],
   batchSize: number,

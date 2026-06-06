@@ -10,7 +10,7 @@ import { v4 as uuid } from 'uuid';
 import { XMLBuilder } from 'fast-xml-parser';
 import Archiver from 'archiver';
 import * as cheerio from 'cheerio';
-import { runBatchedPromises } from '../util/util';
+import { runBatchedPromises, USER_AGENT } from '../util/util';
 import axios, { AxiosError } from 'axios';
 import mime from 'mime';
 import beautify from 'js-beautify';
@@ -295,7 +295,7 @@ export class EPUBService {
           // <download image, store metadata, and replace URL>
           const imageResp = await axios.get(fqImageURL, {
             responseType: 'arraybuffer',
-            headers: { 'User-Agent': 'Shapeshift/1.0 (https://libretexts.org; info@libretexts.org)' },
+            headers: { 'User-Agent': USER_AGENT },
           });
           const imageData = Buffer.from(imageResp.data, 'binary');
           const mimeType = imageResp.headers['content-type'] as string | undefined;

@@ -16,7 +16,7 @@ import { Environment } from '../lib/environment';
 import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
 import * as cheerio from 'cheerio';
 import { demoteDecorativeHeadings } from '../util/htmlFilters';
-import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject, omit } from '../util/util';
+import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject, omit, USER_AGENT } from '../util/util';
 
 /**
  * Maximum number of concurrent page content fetches from the CXOne API.
@@ -144,6 +144,7 @@ export class BookService {
 
     // Set thumbnail
     const thumbnailRes = await axios.get(this.DEFAULT_THUMBNAILS.BACK_MATTER, {
+      headers: { 'User-Agent': USER_AGENT },
       responseType: 'arraybuffer',
     });
     const thumbnail = Buffer.from(thumbnailRes.data);
@@ -254,6 +255,7 @@ export class BookService {
 
     // Set thumbnail
     const thumbnailRes = await axios.get(this.DEFAULT_THUMBNAILS.FRONT_MATTER, {
+      headers: { 'User-Agent': USER_AGENT },
       responseType: 'arraybuffer',
     });
     const thumbnail = Buffer.from(thumbnailRes.data);

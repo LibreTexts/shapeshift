@@ -1,6 +1,7 @@
 import { SSMClient, GetParametersByPathCommand } from '@aws-sdk/client-ssm';
 import Expert from '@libretexts/cxone-expert-node';
 import { Environment } from '../lib/environment';
+import { USER_AGENT } from '../util/util';
 
 export type CXOneFetchPageParams = {
   subdomain: string;
@@ -62,6 +63,7 @@ export class LibraryService {
       },
       tld: `${this.lib}.libretexts.org`,
       debug: false, // this is very verbose, so only turn on when needed
+      headers: { 'User-Agent': USER_AGENT },
     });
   }
 
