@@ -235,7 +235,7 @@ export class EPUBService {
 
   private async processContentPages({ bookID, pages }: { bookID: PageID; pages: BookPageInfoForEPUB[] }) {
     if (!pages.length) return { images: [], pages: [] };
-    const imageURLToMeta = new Map<string, { data: Buffer; fileName: string; mimeType: string; uuid: string }>();
+    const imageURLToMeta = new Map<string, { fileName: string; mimeType: string; uuid: string }>();
     const pagesToWrite: { htmlContent: string; sectionId: string }[] = [];
     const calcPageIndexPrefix = (title: string) => {
       let prefix: string;
@@ -302,8 +302,12 @@ export class EPUBService {
           const extension = mimeType ? mime.getExtension(mimeType) : null;
           const imageUUID = `image-${uuid()}`;
           const fileName = `${imageUUID}${extension ? `.${extension}` : ''}`;
+          await this.writeTemporaryFile({
+            bookID,
+            content: imageData,
+            fileName: `OEBPS/images/${fileName}`,
+          });
           imageURLToMeta.set(fqImageURL, {
-            data: imageData,
             fileName,
             mimeType: mimeType || 'application/octet-stream',
             uuid: imageUUID,
@@ -374,16 +378,6 @@ export class EPUBService {
     }
 
     await runBatchedPromises(
-      Array.from(imageURLToMeta.entries()).map(async ([, meta]) => {
-        await this.writeTemporaryFile({
-          bookID,
-          content: meta.data,
-          fileName: `OEBPS/images/${meta.fileName}`,
-        });
-      }),
-      5,
-    );
-    await runBatchedPromises(
       pagesToWrite.map(async (meta) =>
         this.writeTemporaryFile({
           bookID,
@@ -411,7 +405,7 @@ export class EPUBService {
     output.on('close', () => {
       this.logger.withMetadata({ bookID }).info('EPUB output write stream closed.');
     });
-    const archive = Archiver('zip', { zlib: { level: 9 } });
+    const archive = Archiver('zip', { zlib: { level: 6 } });
     archive.on('error', (err) => {
       this.logger.withError(err).error('Encounted an error preparing final EPUB output.');
       output.destroy(err);

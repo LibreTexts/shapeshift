@@ -403,17 +403,20 @@ export class PDFService {
           }
         }
       }
+      const htmlFileLimit = pLimit(4);
       await Promise.all(
-        allHTMLPaths.map(async (htmlPath) => {
-          const content = await fs.readFile(htmlPath, 'utf-8');
-          const rewritten = content.replace(/href="#(page-[^"]+)"/g, (_match, anchor) => {
-            const targetFile = anchorToFile.get(anchor);
-            return targetFile ? `href="${targetFile}#${anchor}"` : `href="#${anchor}"`;
-          });
-          if (rewritten !== content) {
-            await fs.writeFile(htmlPath, rewritten);
-          }
-        }),
+        allHTMLPaths.map((htmlPath) =>
+          htmlFileLimit(async () => {
+            const content = await fs.readFile(htmlPath, 'utf-8');
+            const rewritten = content.replace(/href="#(page-[^"]+)"/g, (_match, anchor) => {
+              const targetFile = anchorToFile.get(anchor);
+              return targetFile ? `href="${targetFile}#${anchor}"` : `href="#${anchor}"`;
+            });
+            if (rewritten !== content) {
+              await fs.writeFile(htmlPath, rewritten);
+            }
+          }),
+        ),
       );
 
       // ── Phase 3: Generate Main cover HTML and prepend to the Prince input ──
@@ -457,36 +460,38 @@ export class PDFService {
       }
 
       await Promise.all(
-        fullDocHTMLPaths.map(async (htmlPath) => {
-          const html = await fs.readFile(htmlPath, 'utf-8');
-          const $ = cheerio.load(html, { xmlMode: false });
+        fullDocHTMLPaths.map((htmlPath) =>
+          htmlFileLimit(async () => {
+            const html = await fs.readFile(htmlPath, 'utf-8');
+            const $ = cheerio.load(html, { xmlMode: false });
 
-          // Inject print-edition CSS at the end of <head> so it overrides earlier inlined styles
-          $('head').append(`<style>${pdfPrintEditionCSS}</style>`);
+            // Inject print-edition CSS at the end of <head> so it overrides earlier inlined styles
+            $('head').append(`<style>${pdfPrintEditionCSS}</style>`);
 
-          // Append URL in square brackets after each link
-          $('a[href]').each((_, el) => {
-            const $el = $(el);
-            const href = $el.attr('href');
-            if (!href) return;
+            // Append URL in square brackets after each link
+            $('a[href]').each((_, el) => {
+              const $el = $(el);
+              const href = $el.attr('href');
+              if (!href) return;
 
-            let url: string | undefined;
-            if (href.startsWith('http')) {
-              url = href;
-            } else {
-              // Internal link — use short URL via go.libretexts.org
-              // href may be "#page-{id}" or "filename.html#page-{id}"
-              const fragment = href.includes('#') ? '#' + href.split('#')[1] : href;
-              url = anchorToShortUrl.get(fragment);
-            }
+              let url: string | undefined;
+              if (href.startsWith('http')) {
+                url = href;
+              } else {
+                // Internal link — use short URL via go.libretexts.org
+                // href may be "#page-{id}" or "filename.html#page-{id}"
+                const fragment = href.includes('#') ? '#' + href.split('#')[1] : href;
+                url = anchorToShortUrl.get(fragment);
+              }
 
-            if (url) {
-              $el.after(`<span class="print-url"> [${url}]</span>`);
-            }
-          });
+              if (url) {
+                $el.after(`<span class="print-url"> [${url}]</span>`);
+              }
+            });
 
-          await fs.writeFile(htmlPath, $.html());
-        }),
+            await fs.writeFile(htmlPath, $.html());
+          }),
+        ),
       );
       const printFullFilePath = join(getDirectoryPathFromFilePath(finalFilePath), 'Full_Print.pdf');
       await this.runPrinceConversion({
@@ -985,7 +990,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
     output.on('close', () => {
       this.logger.info('Publication.zip output write stream closed.');
     });
-    const archive = Archiver('zip', { zlib: { level: 9 } });
+    const archive = Archiver('zip', { zlib: { level: 6 } });
     archive.on('error', (err) => {
       this.logger.withError(err).error('Encountered an error preparing final Publication.zip.');
       output.destroy(err);

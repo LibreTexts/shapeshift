@@ -208,7 +208,7 @@ export class ThinCCService {
     output.on('close', () => {
       this.logger.withMetadata({ bookID }).info('ThinCC output write stream closed.');
     });
-    const archive = Archiver('zip', { zlib: { level: 9 } });
+    const archive = Archiver('zip', { zlib: { level: 6 } });
     archive.on('error', (err) => {
       this.logger.withError(err).error('Encounted an error preparing final ThinCC output.');
       output.destroy(err);
