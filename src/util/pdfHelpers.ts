@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PDFDocument } from 'pdf-lib';
 import { BookPageInfo } from '../types/book';
 import { PDFCoverOpts, PDFCoverType, PDFCoverDimensions } from '../types/pdf';
+import libraries from '../librariesmap';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export const PDF_COVER_TYPES = ['Amazon', 'CaseWrap', 'CoilBound', 'Main', 'PerfectBound'] as const;
@@ -219,11 +220,11 @@ export function getCoverDimensions(coverType: PDFCoverType, numPages: number | n
  * Must be placed in the <body> — Prince's `position: running(pageHeader)` (in pdf-page.css)
  * removes it from flow and places it in the @page @top margin box.
  */
-export function generatePDFHeader(headerImg: string) {
+export function generatePDFHeader(headerImg?: string) {
   return `
     <div id="libre-pdf-header">
       <div id="libreHeader">
-        <img alt="" src="data:image/png;base64,${headerImg}" />
+        ${headerImg ? `<img alt="" src="data:image/png;base64,${headerImg}" />` : ''}
       </div>
     </div>
   `;
@@ -364,6 +365,28 @@ function _generatePDFSpineContent({
  * Generates an HTML string containing the <head> styles and elements needed for the PDF cover,
  * including the background images for spine, front, and back based on the current page's subdomain and the provided options.
  */
+/**
+ * Maps a `BookPageInfo` into the values shape consumed by `fillCoverTemplate`
+ * (src/util/coverTemplateFiller.ts). Field names match the spec in
+ * docs/COVER_TEMPLATE_GUIDELINES.md. Missing/unknown values are emitted as
+ * empty strings so the filler skips them.
+ *
+ * COURSE and SUBJECT have no canonical source in book metadata today; callers
+ * that have them can merge in via the service's `extraValues` parameter.
+ */
+export function buildCoverValues(bookInfo: BookPageInfo): Record<string, string> {
+  const libraryName = libraries.find((l) => l.key === bookInfo.subdomain)?.name ?? bookInfo.subdomain ?? '';
+  return {
+    TITLE: bookInfo.printInfo?.title || bookInfo.title || '',
+    AUTHOR: bookInfo.printInfo?.authorName || '',
+    LIBRARY: libraryName,
+    BOOK_ID: bookInfo.pageID?.toString() ?? '',
+    LICENSE: bookInfo.license?.label ?? '',
+    SUBJECT: '',
+    COURSE: '',
+  };
+}
+
 export function _generatePDFCoverHeadStyles({
   currentPage,
   opt,

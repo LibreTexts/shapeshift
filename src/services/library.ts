@@ -128,17 +128,27 @@ export class LibraryService {
         throw new Error('Error retrieving library token pair.');
       }
 
-      const libKey = pairResponse.Parameters.find((p) => p.Name?.includes(`${lib}/key`));
-      const libSec = pairResponse.Parameters.find((p) => p.Name?.includes(`${lib}/secret`));
-      if (!libKey?.Value || !libSec?.Value) {
+      let key;
+      let secret;
+
+      const ssmKeyFound = pairResponse.Parameters.find((p) => p.Name?.includes(`${lib}/key`));
+      const ssmSecFound = pairResponse.Parameters.find((p) => p.Name?.includes(`${lib}/secret`));
+      if (!ssmKeyFound?.Value || !ssmSecFound?.Value) {
         console.error('Key param not found in token pair retrieval. Lib: ' + lib);
-        throw new Error('Error retrieving library token pair.');
+
+        console.log('Falling back to local environment variables with pattern LIBKEYS_PROD_{LIB}_KEY/SECRET');
+        key = process.env[`LIBKEYS_PROD_${lib.toUpperCase()}_KEY`];
+        secret = process.env[`LIBKEYS_PROD_${lib.toUpperCase()}_SECRET`];
+        if (!key || !secret) {
+          console.error('Key param not found in fallback local environment variables. Lib: ' + lib);
+          throw new Error('Error retrieving library token pair.');
+        }
+      } else {
+        key = ssmKeyFound.Value;
+        secret = ssmSecFound.Value;
       }
 
-      return {
-        key: libKey.Value,
-        secret: libSec.Value,
-      };
+      return { key, secret };
     } catch (err) {
       console.error('Error retrieving library token pair. Lib: ' + lib, err);
       return null;

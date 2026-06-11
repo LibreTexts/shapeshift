@@ -90,6 +90,13 @@ interface MathJaxGlobal {
   startup: MathJaxStartup;
   tex2chtmlPromise(math: string): Promise<unknown>;
   tex2svgPromise(math: string): Promise<unknown>;
+  /**
+   * Resets the shared TeX input jax's equation numbers and labels.
+   * MathJax creates the TeX input jax once at startup and reuses it for every
+   * getDocument() call, so its label map (allLabels) and equation counter
+   * accumulate across renders unless explicitly reset between pages.
+   */
+  texReset(start?: number[]): void;
   done(): void;
   // Internal API for customization (type-unsafe)
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -414,6 +421,15 @@ export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Prom
       console.error(`MathJax HTML parse failed for "${pageName}": ${msg}`);
       return html; // Graceful degradation — return original HTML with raw LaTeX
     }
+
+    // Reset the shared TeX input jax's equation numbers and labels before each
+    // page render. MathJax instantiates the TeX jax once at startup and reuses
+    // it for every getDocument() call, so without this its label map and
+    // equation counter accumulate across pages — causing both "Label '...'
+    // multiply defined" errors (rendered as black <merror> boxes) when a label
+    // string recurs, and equation numbers that drift instead of restarting at 1
+    // per page (e.g. "2.4.3" instead of "2.4.1").
+    mj.texReset();
 
     const doc = mj.startup.getDocument(parsedDoc);
 

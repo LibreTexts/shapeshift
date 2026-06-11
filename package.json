@@ -14,6 +14,8 @@
     "prepare": "husky",
     "prettier": "prettier --config .prettierrc 'src/**/*.ts' --write",
     "sync-db-schema": "tsx src/syncDBSchema.ts",
+    "fill-cover-template": "tsx src/fillCoverTemplate.ts",
+    "build-final-cover": "tsx src/buildFinalCover.ts",
     "migrate": "tsx",
     "build-backlog-per-instance": "rimraf ./bpi-dist && npx esbuild src/lambda/backlogPerInstance.ts --bundle --platform=node --target=node22 --format=cjs --outfile=bpi-dist/backlogPerInstance.js --minify --tree-shaking=true && cd bpi-dist && zip -9 -r ../backlogPerInstance.zip backlogPerInstance.js"
   },
@@ -58,6 +60,7 @@
     "@libretexts/cxone-expert-node": "^1.4.0",
     "@mathjax/mathjax-mhchem-font-extension": "^4.1.1",
     "@mathjax/src": "^4.1.1",
+    "@pdf-lib/fontkit": "^1.1.1",
     "@types/bcrypt": "^6.0.0",
     "archiver": "^7.0.1",
     "axios": "^1.16.1",
