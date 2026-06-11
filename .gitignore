@@ -4,6 +4,9 @@ build
 .idea/
 .dev-data/
 .tmp/
+.claude/
+.vscode/
+.DS_Store
 bpi-dist/
 backlogPerInstance.zip
 localstack-data/

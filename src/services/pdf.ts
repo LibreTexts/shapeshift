@@ -22,7 +22,7 @@ import {
 } from '../util/pdfHelpers';
 import { buildTagIndex, generateIndexHTML } from '../util/indexHelpers';
 import { parseGlossaryTable, buildGlossaryData, generateGlossaryHTML } from '../util/glossaryHelpers';
-import { ImageConstants } from '../util/imageConstants';
+//import { ImageConstants } from '../util/imageConstants';
 import { log as logService } from '../lib/log';
 import { LogLayer } from 'loglayer';
 import { Environment } from '../lib/environment';
@@ -930,7 +930,10 @@ export class PDFService {
       const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(pageHeadHTML));
 
       const showMarginContent = this.getShouldShowMarginContent(pageInfo);
-      const headerHTML = showMarginContent ? generatePDFHeader(ImageConstants['default']) : '';
+      const headerHTML = showMarginContent
+        ? generatePDFHeader()
+        : //ImageConstants['deanza']
+          '';
       const sectionNum = useRomanNumerals ? '' : extractPageNumberPrefix(pageInfo.title).replace(/\.$/, '');
       const licenseLabel = pageInfo.license?.label ?? '';
       const autoAttribution = this.getShouldRenderAttribution(pageInfo) ? renderAutoAttribution(pageInfo) : '';
@@ -2210,7 +2213,10 @@ ${stripBlocklistedScripts(pageTailHTML)}
         );
         const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(t.pageInfo.head));
         const shouldShowMarginContent = this.getShouldShowMarginContent(t.pageInfo);
-        const headerHTML = shouldShowMarginContent ? generatePDFHeader(ImageConstants['default']) : '';
+        const headerHTML = shouldShowMarginContent
+          ? generatePDFHeader()
+          : //ImageConstants['deanza']
+            '';
         const sectionNum = useRomanNumerals ? '' : extractPageNumberPrefix(t.pageInfo.title).replace(/\.$/, '');
         const licenseLabel = t.pageInfo.license?.label ?? '';
         const autoAttribution = this.getShouldRenderAttribution(t.pageInfo) ? renderAutoAttribution(t.pageInfo) : '';

@@ -5,6 +5,11 @@ A scalable, distributed system for extracting and transforming LibreTexts conten
 
 Shapeshift services are split into two containers, `shapeshift-api` and `shapeshift-processor`, which use MySQL for job data storage. 
 
+#### Running Prince
+The `shapeshift-processor` container relies on the Prince XML binary for PDF generation. To run Prince locally (recommended for best dev experience), you can [download it from the official website](https://www.princexml.com/download/) and ensure it's in your system's PATH. Alternatively, you can set the `PRINCE_BINARY_PATH` environment variable in your `.env` file to point to the Prince executable if it's not in your PATH.
+
+To install the Commercial license for Prince, copy the `license.dat` file to the same directory as the Prince's resources. For example, on Linux & Mac, this is typically `/usr/lib/prince/license`. See the [Prince documentation](https://www.princexml.com/doc/installing/#-on-other-systems) for more details. Note: as of May 2026, the Prince documentation for installing a license file states the license file should be placed in `/usr/local/lib/prince/license`, but in practice, it appears to be `/usr/lib/prince/license` on Linux.
+
 #### Ephermeral MySQL
 If you want to start an ephermeral MySQL container for development, you can do so with:
 ```shell
