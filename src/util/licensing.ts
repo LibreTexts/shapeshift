@@ -219,9 +219,11 @@ export function renderAutoAttribution(page: BookPageInfo): string {
     }
 
     return `
-      <hr class="autoattribution-divider" />
-      <div class="autoattribution">
-        <p>This page titled <a href="${url}" target="_blank">${title}</a> is shared under a <a rel="nofollow" href="${licenseURL}" target="_blank">${licenseName}</a> license and was authored, remixed, and/or curated by ${authorFragment}${programFragment}${sourceClause}</p>
+      <div class="autoattribution-wrapper">
+        <hr class="autoattribution-divider" />
+        <div class="autoattribution">
+          <p>This page titled <a href="${url}" target="_blank">${title}</a> is shared under a <a rel="nofollow" href="${licenseURL}" target="_blank">${licenseName}</a> license and was authored, remixed, and/or curated by ${authorFragment}${programFragment}${sourceClause}</p>
+        </div>
       </div>
     `;
   }
@@ -229,9 +231,11 @@ export function renderAutoAttribution(page: BookPageInfo): string {
   // Fallback: no authorTag
   const fallbackAuthor = sectionAuthorTitle || 'LibreTexts';
   return `
-    <hr class="autoattribution-divider" />
-    <div class="autoattribution">
-      <p><a href="${url}" target="_blank">${title}</a> is shared under a <a rel="nofollow" href="${licenseURL}" target="_blank">${licenseName}</a> license and was authored, remixed, and/or curated by ${fallbackAuthor}.</p>
+    <div class="autoattribution-wrapper">
+      <hr class="autoattribution-divider" />
+      <div class="autoattribution">
+        <p><a href="${url}" target="_blank">${title}</a> is shared under a <a rel="nofollow" href="${licenseURL}" target="_blank">${licenseName}</a> license and was authored, remixed, and/or curated by ${fallbackAuthor}.</p>
+      </div>
     </div>
   `;
 }

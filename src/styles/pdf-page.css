@@ -281,6 +281,10 @@ figcaption {
 }
 
 /* AutoAttribution */
+.autoattribution-wrapper {
+  -prince-float: bottom;
+}
+
 .autoattribution-divider {
   border: 0;
   border-top: 1px solid #b4b4b4;
