@@ -12,9 +12,11 @@ export class QueueClient {
   private static _instance: SQSClient;
 
   public static getQueueUrl() {
-    const isHighPriorityProcessor = Environment.getOptional('IS_HIGH_PRIORITY_PROCESSOR', 'false');
-    return isHighPriorityProcessor === 'true'
-      ? Environment.getRequired('SQS_HIGH_PRIORITY_QUEUE_URL')
+    const isHighPriorityProcessor = Environment.getOptional('IS_HIGH_PRIORITY_PROCESSOR', 'false') === 'true';
+    const highPriorityQueueUrl = Environment.getOptional('SQS_HIGH_PRIORITY_QUEUE_URL');
+    // The high-priority queue is optional. When it isn't configured, fall back to the standard queue.
+    return isHighPriorityProcessor && highPriorityQueueUrl
+      ? highPriorityQueueUrl
       : Environment.getRequired('SQS_QUEUE_URL');
   }
 
@@ -53,8 +55,7 @@ export class QueueClient {
     );
   }
 
-  public async getNumberOfQueuedJobs() {
-    const queueUrl = QueueClient.getQueueUrl();
+  public async getNumberOfQueuedJobs(queueUrl: string = QueueClient.getQueueUrl()) {
     const client = QueueClient.getClient();
     const queueAttr = await client.send(
       new GetQueueAttributesCommand({
@@ -96,13 +97,15 @@ export class QueueClient {
 
   public async sendJobMessage(msg: JobQueueMessageRawBody) {
     const client = QueueClient.getClient();
+    const highPriorityQueueUrl = Environment.getOptional('SQS_HIGH_PRIORITY_QUEUE_URL');
+    // The high-priority queue is optional. When it isn't configured, high-priority
+    // jobs are routed to the standard queue instead.
+    const useHighPriority = !!msg.isHighPriority && !!highPriorityQueueUrl;
     await client.send(
       new SendMessageCommand({
         MessageBody: JSON.stringify(msg),
-        ...(msg.isHighPriority && { MessageDeduplicationId: msg.jobId }),
-        QueueUrl: msg.isHighPriority
-          ? Environment.getRequired('SQS_HIGH_PRIORITY_QUEUE_URL')
-          : Environment.getRequired('SQS_QUEUE_URL'),
+        ...(useHighPriority && { MessageDeduplicationId: msg.jobId }),
+        QueueUrl: useHighPriority ? highPriorityQueueUrl : Environment.getRequired('SQS_QUEUE_URL'),
       }),
     );
   }
