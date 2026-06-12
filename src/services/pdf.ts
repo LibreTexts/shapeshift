@@ -596,8 +596,7 @@ export class PDFService {
       // Pre-render math. Manually prepend the page title since addPageTitle()
       // would suppress it (the page's ID matches _bookID in single-page mode).
       const rawBody = pageInfo.body.join('');
-      const anchor = `page-${pageInfo.pageID}`;
-      const bodyWithTitle = `<h1 id="${anchor}">${pageInfo.title}</h1>${rawBody}`;
+      const bodyWithTitle = this.addPageTitle(pageInfo, rawBody);
       const renderedBody = await prerenderMath(this.decodeHTML(bodyWithTitle), pageInfo);
 
       const sortKey = '0001';
@@ -756,8 +755,11 @@ export class PDFService {
     const shouldRenderTitle = !(isInExcludedList || isTableOfContents || hasChildren);
     const anchor = `page-${pageInfo.pageID}`;
     if (shouldRenderTitle) {
-      const readOnlineURL = `https://go.libretexts.org/${pageInfo.pageID}`;
-      return `<h1 id="${anchor}">${pageInfo.title}</h1><p class="read-online"><a href="${readOnlineURL}"><img alt="" src="data:image/svg+xml;base64,${ImageConstants.linkIcon}" />Read on the web</a></p>${raw}`;
+      return `
+        <h1 id="${anchor}">${pageInfo.title}</h1>
+        <hr class="pdf-title-divider" />
+        ${raw}
+      `;
     }
     return `<span id="${anchor}" class="pdf-anchor">&#8203;</span>${raw}`;
   }

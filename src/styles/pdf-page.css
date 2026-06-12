@@ -120,6 +120,15 @@ h6 {
   font-size: 9.29pt;
 }
 
+.pdf-title-divider {
+  border: 0;
+  border-top: 1px solid #b4b4b4;
+  clear: both;
+  height: 0;
+  width: 99%;
+  margin-top: 1em;
+}
+
 
 /* overflow: hidden prevents Prince from generating a blank trailing page for short pages.
    With height: auto (no fixed height), body grows to fit actual content, so overflow: hidden
@@ -128,18 +137,6 @@ h6 {
 body {
   overflow: hidden;
   text-align: justify;
-}
-
-.read-online {
-  font-size: 9pt;
-  margin-bottom: 1em;
-}
-
-.read-online img {
-  height: 9pt;
-  margin-right: 2px;
-  width: auto;
-  vertical-align: -1.5pt;
 }
 
 #elm-main-content {
