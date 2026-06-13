@@ -213,35 +213,314 @@ picture > img {
 }
 
 /* Content Elements */
-.box-objectives, .box-emphasis, .box-structure, .box-example, .box-exercise, .box-warning, .box-query, .box-note, .box-procedure, .box-definition, .box-theorem, .box-lemma, .box-notation, .box-proposition, .box-interactive {
-  display: block;
-  border-top: none;
-  border-bottom: none;
-  border-right: none;
-  padding: 0 10px 1px 8px;
-  margin-bottom: 0.8em !important;
-  margin-top: 2em !important;
-  orphans: 3;
-  border-radius: 4px 8px 8px 4px;
-  -moz-border-radius: 4px 8px 8px 4px;
-  -webkit-border-radius: 4px 8px 8px 4px;
+.definition,
+.example,
+.exercise,
+.note1,
+.query,
+.skills,
+.theorem {
+  display:block;
+  overflow:hidden;
+  border:solid 1px rgba(0,0,0,.5);
+  -moz-border-radius:5px;
+  -webkit-border-radius:5px;
+  border-radius:5px;
+  padding-left:7px;
+  padding-right:7px;
+  padding-bottom:0;
+  padding-top:0;
+  margin-bottom:7px;
+  margin-top:7px
 }
-
-.box-definition, .box-theorem, .box-lemma, .box-notation, .box-proposition {
-  background-color: hsl(124, 33%, 94%);
-  border-left: 4px solid hsl(132, 36%, 27%);
+.exercise {
+  background-color:snow
 }
-
+.note1 {
+  background-color:#fffefa
+}
+.definition {
+  background-color:#fafffb
+}
+.skills {
+  background-color:snow
+}
+.example {
+  background-color:#fafaff
+}
+.theorem {
+  background-color:#fffafe
+}
+.query {
+  background-color:#000
+}
+.box-adapt,
+.box-definition,
+.box-emphasis,
+.box-example,
+.box-exercise,
+.box-interactive,
+.box-lemma,
+.box-notation,
+.box-note,
+.box-objectives,
+.box-procedure,
+.box-proposition,
+.box-query,
+.box-structure,
+.box-theorem,
+.box-warning {
+  display:block;
+  border-radius:4px 8px 8px 4px;
+  -moz-border-radius:4px 8px 8px 4px;
+  -webkit-border-radius:4px 8px 8px 4px;
+  border-top:none;
+  border-bottom:none;
+  border-right:none;
+  padding:0 10px 1px 10px;
+  margin-bottom:.8em!important;
+  margin-top:.8em!important;
+  orphans:3
+}
+.box-emphasis {
+  padding:5px 10px 5px 10px
+}
+.box-adapt,
+.box-query {
+  padding:0!important;
+  border-radius:1px;
+  -moz-border-radius:1px;
+  -webkit-border-radius:1px
+}
+.box-definition p,
+.box-emphasis p,
+.box-example p,
+.box-exercise p,
+.box-interactive p,
+.box-lemma p,
+.box-notation p,
+.box-note p,
+.box-objectives p,
+.box-procedure p,
+.box-proposition p,
+.box-query p,
+.box-structure p,
+.box-theorem p,
+.box-warning p {
+  font-size:1.1rem
+}
+.box-objectives {
+  background-color:#f1f9fe;
+  border-left:4px solid #127abf
+}
 .box-example {
-  background-color: hsla(204, 83%, 97%, 1);
-  border-left: 4px solid hsla(204, 83%, 41%, 1);
+  background-color:#f1f9fe;
+  border-left:4px solid #127abf
 }
-
+.box-exercise {
+  background-color:#f1f9fe;
+  border-left:4px solid #127abf
+}
+.box-warning {
+  background-color:#ffebeb;
+  border-left:4px solid #9e0000
+}
+.box-structure {
+  background-color:#f2f2fc;
+  border-left:4px solid #5d5ddf
+}
+.box-emphasis {
+  background-color:#eef1f1;
+  border-left:4px solid #5e6e6e
+}
+.box-adapt,
+.box-query {
+  border:4px solid #127abf!important
+}
+.box-interactive {
+  border:4px solid #000
+}
+.box-definition,
+.box-lemma,
+.box-notation,
+.box-proposition,
+.box-theorem {
+  background-color:#ebf5eb;
+  border-left:5px solid #2c5e36
+}
 .box-note {
-  background-color: hsl(180, 8%, 94%);
-  border-left: 4px solid hsl(180, 8%, 40%);
+  background-color:#eef1f1;
+  border-left:4px solid #5e6e6e
 }
-
+.boxprocedure,
+.notation {
+  background-color:#ededed;
+  border-left:5px solid #a67c11
+}
+.box-legend {
+  display:block;
+  overflow:hidden;
+  margin:0 0 3px 0;
+  transform:translate(-11px,0);
+  break-inside:avoid-page!important;
+  page-break-inside:avoid!important;
+  text-align:left!important
+}
+.box-query .box-legend {
+  transform:translate(0,0)!important;
+  margin:0!important
+}
+.box-adapt .box-legend {
+  transform:translate(0,0)!important;
+  margin:0!important
+}
+.box-interactive .box-legend {
+  transform:translate(-11px,0)!important;
+  margin:0!important
+}
+.box-legend>span {
+  float:left;
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif !important;
+  font-size:1.2rem!important;
+  font-weight:400!important;
+  color:#fff;
+  padding:3px 5px 3px 5px!important;
+  margin:0 0 3px 0;
+  border-radius:0
+}
+.box-legend p {
+  float:left;
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif !important;
+  font-size:1.2rem!important;
+  font-weight:400!important;
+  color:#fff;
+  font-size:15px!important;
+  padding:3px 5px 3px 5px!important;
+  margin:0 0 3px 0;
+  border-radius:0
+}
+.box-objectives .box-legend>span {
+  background-color:#127abf
+}
+.box-example .box-legend>span {
+  background-color:#127abf
+}
+.box-exercise .box-legend>span {
+  background-color:#127abf
+}
+.box-query .box-legend>span {
+  background-color:#127abf
+}
+.box-adapt .box-legend>span {
+  background-color:#127abf
+}
+.box-note .box-legend>span {
+  background-color:#5e6e6e
+}
+.box-interactive .box-legend>span {
+  background-color:#000
+}
+.box-warning .box-legend>span {
+  background-color:#9e0000
+}
+.box-structure .box-legend>span {
+  background-color:#5d5ddf
+}
+.box-procedure .box-legend>span {
+  background-color:#2c5e36
+}
+.box-definition .box-legend>span {
+  background-color:#2c5e36
+}
+.box-theorem .box-legend>span {
+  background-color:#2c5e36
+}
+.box-lemma .box-legend>span {
+  background-color:#2c5e36
+}
+.box-notation .box-legend>span {
+  background-color:#2c5e36
+}
+.box-proposition .box-legend>span {
+  background-color:#2c5e36
+}
+.box-adapt>header,
+.box-definition>header,
+.box-example>header,
+.box-exercise>header,
+.box-note>header,
+.box-objectives>header,
+.box-query>header,
+.box-structure>header,
+.box-theorem>header,
+.box-warning>header {
+  display:inline-flex;
+  overflow:hidden;
+  break-inside:avoid-page;
+  page-break-inside:avoid;
+  text-align:left;
+  width:auto;
+  margin:0;
+  padding:7px 11px 7px 7px;
+  transform:translate(-11px,0)!important;
+  border-radius:0 5px 5px 0;
+  -moz-border-radius:0 5px 5px 0;
+  -webkit-border-radius:0px 5px 5px 0
+}
+.box-adapt>header *,
+.box-definition>header *,
+.box-example>header *,
+.box-exercise>header *,
+.box-note>header *,
+.box-objectives>header *,
+.box-query>header *,
+.box-structure>header *,
+.box-theorem>header *,
+.box-warning>header * {
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif !important;
+  font-size:1.2rem!important;
+  font-weight:400!important;
+  color:#fff!important;
+  width:auto!important;
+  float:left!important;
+  line-height:1!important;
+  margin-block-start:0!important;
+  margin-block-end:0!important
+}
+.box-definition>header,
+.box-theorem>header {
+  background-color:#2c5e36
+}
+.box-definition>header * {
+  background-color:#2c5e36
+}
+.box-adapt>header,
+.box-example>header,
+.box-exercise>header,
+.box-objectives>header,
+.box-query>header {
+  background-color:#127abf
+}
+.box-example>header *,
+.box-exercise>header *,
+.box-objectives>header * {
+  background-color:#127abf
+}
+.box-note>header {
+  background-color:#5e6e6e
+}
+.box-note>header * {
+  background-color:#5e6e6e
+}
+.box-structure>header {
+  background-color:#5d5ddf
+}
+.box-structure>header * {
+  background-color:#5d5ddf
+}
+.box-warning>header {
+  background-color:#9e0000
+}
 
 /* Zero-width anchor target for internal PDF links — ensures Prince registers
    a named destination without affecting visible layout */
@@ -261,6 +540,7 @@ figure {
   display: flex;
   align-items: center;
   flex-direction: column;
+  width: 100%;
   margin: 0;
   page-break-inside: avoid;
   margin-bottom: 0.3em !important;
