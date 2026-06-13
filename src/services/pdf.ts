@@ -310,24 +310,36 @@ export class PDFService {
         throw new Error(`Job failed in Pass 1: ${pass1FailureCount} group(s) failed to convert`);
       }
 
-      // Identify the first group with visible page numbering so we can insert a
-      // counter-reset in its HTML. Suppressed pages (TitlePage, InfoPage)
-      // still increment it in prince, so we reset to 0 at the first visible page so
-      // numbering starts at 1.
+      // Identify front-matter and content boundaries for page counter resets.
+      // Front matter pages use lowercase roman numerals (i, ii, iii…); content
+      // pages restart at arabic 1. Both boundaries need counter-reset: page 0.
       const sortedPass1 = [...pass1Counts].sort((a, b) =>
         a.group.sortKey.localeCompare(b.group.sortKey, undefined, {
           numeric: true,
         }),
       );
-      const firstVisibleSortKey = sortedPass1.find(
-        ({ group }) => !group.tasks.every((t) => !this.getShouldShowMarginContent(t.pageInfo)),
+      const hasVisibleMarginContent = (group: PageGroup) =>
+        !group.tasks.every((t) => !this.getShouldShowMarginContent(t.pageInfo));
+
+      // First front matter group — resets counter so roman numeral counting starts at i.
+      // Hidden pages (TitlePage, InfoPage) still increment the counter silently; the
+      // roman numeral only becomes visible once a page with margin content appears (e.g. TOC).
+      const firstFrontMatterSortKey = sortedPass1.find(({ group }) => group.sortKey.startsWith('0000:'))?.group.sortKey;
+
+      // First content group (not front/back matter) — resets counter for arabic numerals.
+      const firstContentSortKey = sortedPass1.find(
+        ({ group }) => !group.sortKey.startsWith('0000:') && !group.sortKey.startsWith('9999:'),
       )?.group.sortKey;
-      // Map each group to the pageOffset it needs: only the first visible group
-      // gets counter-reset: page 0 (so its first page displays "1"). All other
-      // groups omit counter-reset and let Prince auto-increment continuously.
-      const groupOffsets = new Map<string, number | undefined>();
+
+      // Map each group to its page config: counter-reset value and roman numeral flag.
+      const groupConfigs = new Map<string, { pageOffset?: number; useRomanNumerals: boolean }>();
       for (const { group } of sortedPass1) {
-        groupOffsets.set(group.sortKey, group.sortKey === firstVisibleSortKey ? 0 : undefined);
+        const isFrontMatter = group.sortKey.startsWith('0000:');
+        const needsReset = group.sortKey === firstFrontMatterSortKey || group.sortKey === firstContentSortKey;
+        groupConfigs.set(group.sortKey, {
+          pageOffset: needsReset ? 0 : undefined,
+          useRomanNumerals: isFrontMatter && hasVisibleMarginContent(group),
+        });
       }
 
       const totalPages = sortedPass1.reduce((sum, { pageCount }) => sum + pageCount, 0);
@@ -347,9 +359,11 @@ export class PDFService {
               throw new Error('Job exceeded maximum duration (4 hours)');
             }
             const prerendered = prerenderedMap.get(group.sortKey) ?? null;
-            const pageOffset = groupOffsets.get(group.sortKey);
+            const config = groupConfigs.get(group.sortKey);
+            const pageOffset = config?.pageOffset;
+            const useRomanNumerals = config?.useRomanNumerals ?? false;
             const result = await this.retryWithBackoff(
-              () => this.convertPageGroup(group, prerendered, pageOffset, true),
+              () => this.convertPageGroup(group, prerendered, pageOffset, true, useRomanNumerals),
               `Pass 2 HTML group: ${group.fileName} (${group.tasks.length} page(s))`,
             );
             if (!result.success || !result.result) {
@@ -786,6 +800,7 @@ export class PDFService {
     pageTailHTML = '',
     preRenderedBodyHTML,
     sortKey,
+    useRomanNumerals,
   }: {
     additionalCSS?: string;
     /** When true, writes the HTML to a persistent temp file and returns its path without invoking Prince. */
@@ -800,6 +815,8 @@ export class PDFService {
     /** If supplied, skips the prerenderMath call (math was pre-rendered in Phase 1). */
     preRenderedBodyHTML?: string;
     sortKey: string;
+    /** When true, displays the page counter as lowercase roman numerals (i, ii, iii…) in the footer. */
+    useRomanNumerals?: boolean;
   }) {
     try {
       // Use pre-rendered math if available (Phase 1 pre-render), otherwise render now.
@@ -828,15 +845,21 @@ export class PDFService {
           })
         : '';
 
+      const pageCounterStyle = useRomanNumerals ? 'page, lower-roman' : 'page';
       const sectionPageCSS =
         sectionNum && showMarginContent
           ? `<style>
             @page sp-${pageID} { counter-increment: spc-${pageID}; }
             body { page: sp-${pageID}; }
             .pdf-footer-center::after {
-              content: counter(page) " | ${sectionNum}." counter(spc-${pageID});
+              content: counter(${pageCounterStyle}) " | ${sectionNum}." counter(spc-${pageID});
             }
             </style>`
+          : '';
+      // For front matter pages without a section number, override the footer to use roman numerals.
+      const romanNumeralCSS =
+        useRomanNumerals && !sectionPageCSS
+          ? `<style>.pdf-footer-center::after { content: counter(page, lower-roman) string(sectionNum, first); }</style>`
           : '';
 
       // Wrap the page content in a complete HTML document with header/footer margin elements.
@@ -858,6 +881,7 @@ export class PDFService {
   <style>:root { --pdf-main-color: ${mainColor}; }</style>
   ${pageOffset !== undefined ? `<style>html { counter-reset: page ${pageOffset + 1}; }</style>` : ''}
   ${sectionPageCSS}
+  ${romanNumeralCSS}
   ${additionalCSS ? `<style>${additionalCSS}</style>` : ''}
   ${cleanedHeadHTML}
 </head>
@@ -1228,12 +1252,14 @@ ${stripBlocklistedScripts(pageTailHTML)}
     isMainTOC = false,
     sortKey,
     pageOffset,
+    useRomanNumerals,
   }: {
     htmlOnly?: boolean;
     pageInfo: BookPageInfo;
     isMainTOC?: boolean;
     sortKey: string;
     pageOffset?: number;
+    useRomanNumerals?: boolean;
   }) {
     try {
       this.logger.withMetadata({ url: pageInfo.url }).info('Starting Table of Contents');
@@ -1262,6 +1288,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           additionalCSS: pdfTOCStyles,
           sortKey,
           pageOffset,
+          useRomanNumerals,
         });
 
         this.logger.withMetadata({ url: pageInfo.url }).info('Finished Main Table of Contents.');
@@ -1290,6 +1317,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           additionalCSS: pdfTOCStyles,
           sortKey,
           pageOffset,
+          useRomanNumerals,
         });
 
         this.logger.withMetadata({ url: pageInfo.url }).info('Finished Table of Contents.');
@@ -1319,12 +1347,14 @@ ${stripBlocklistedScripts(pageTailHTML)}
     allPages,
     sortKey,
     pageOffset,
+    useRomanNumerals,
   }: {
     htmlOnly?: boolean;
     pageInfo: BookPageInfo;
     allPages: BookPageInfo[];
     sortKey: string;
     pageOffset?: number;
+    useRomanNumerals?: boolean;
   }) {
     try {
       this.logger.withMetadata({ url: pageInfo.url }).info('Starting Index generation');
@@ -1347,6 +1377,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         additionalCSS: pdfIndexStyles,
         sortKey,
         pageOffset,
+        useRomanNumerals,
       });
 
       this.logger.withMetadata({ url: pageInfo.url }).info('Finished Index generation.');
@@ -1373,11 +1404,13 @@ ${stripBlocklistedScripts(pageTailHTML)}
     pageInfo,
     sortKey,
     pageOffset,
+    useRomanNumerals,
   }: {
     htmlOnly?: boolean;
     pageInfo: BookPageInfo;
     sortKey: string;
     pageOffset?: number;
+    useRomanNumerals?: boolean;
   }) {
     try {
       this.logger.withMetadata({ url: pageInfo.url }).info('Starting Glossary generation');
@@ -1418,6 +1451,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         additionalCSS: pdfTOCStyles + '\n' + pdfGlossaryStyles,
         sortKey,
         pageOffset,
+        useRomanNumerals,
       });
 
       this.logger.withMetadata({ url: pageInfo.url }).info('Finished Glossary generation.');
@@ -1433,11 +1467,13 @@ ${stripBlocklistedScripts(pageTailHTML)}
     pageInfo,
     sortKey,
     pageOffset,
+    useRomanNumerals,
   }: {
     htmlOnly?: boolean;
     pageInfo: BookPageInfo;
     sortKey: string;
     pageOffset?: number;
+    useRomanNumerals?: boolean;
   }) {
     try {
       this.logger.withMetadata({ bookID: pageInfo.pageID.toString() }).info('Starting Detailed Licensing generation');
@@ -1475,6 +1511,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         additionalCSS: pdfTOCStyles + '\n' + pdfDetailedLicensingStyles,
         sortKey,
         pageOffset,
+        useRomanNumerals,
       });
 
       this.logger.withMetadata({ url: pageInfo.url }).info('Finished Detailed Licensing generation.');
@@ -1803,6 +1840,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
     prerendered: PrerenderedTask[] | null = null,
     pageOffset?: number,
     htmlOnly = false,
+    useRomanNumerals = false,
   ): Promise<string | string[] | null> {
     const task = group.tasks[0];
 
@@ -1817,6 +1855,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           isMainTOC: task.subtype === 'main-toc',
           sortKey: task.sortKey,
           pageOffset,
+          useRomanNumerals,
         });
       } else if (task.type === 'index') {
         result = await this.generateIndex({
@@ -1825,6 +1864,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           allPages: this._allPages,
           sortKey: task.sortKey,
           pageOffset,
+          useRomanNumerals,
         });
       } else if (task.type === 'glossary') {
         result = await this.generateGlossary({
@@ -1832,6 +1872,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           pageInfo: task.pageInfo,
           sortKey: task.sortKey,
           pageOffset,
+          useRomanNumerals,
         });
       } else if (task.type === 'detailed-licensing') {
         result = await this.generateDetailedLicensing({
@@ -1839,6 +1880,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           pageInfo: task.pageInfo,
           sortKey: task.sortKey,
           pageOffset,
+          useRomanNumerals,
         });
       } else {
         const rawBody = task.pageInfo.body.join('');
@@ -1861,6 +1903,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           additionalCSS: directoryHTML ? pdfTOCStyles : undefined,
           sortKey: task.sortKey,
           pageOffset,
+          useRomanNumerals,
         });
       }
 
@@ -1918,15 +1961,21 @@ ${stripBlocklistedScripts(pageTailHTML)}
           i === 0 && pageOffset !== undefined ? `<style>html { counter-reset: page ${pageOffset + 1}; }</style>` : '';
 
         // Per-section page numbering: each file gets a unique named page with its own counter.
+        const multiFileCounterStyle = useRomanNumerals ? 'page, lower-roman' : 'page';
         const sectionPageCSS =
           sectionNum && shouldShowMarginContent
             ? `<style>
               @page sp-${t.pageInfo.pageID} { counter-increment: spc-${t.pageInfo.pageID}; }
               body { page: sp-${t.pageInfo.pageID}; }
               .pdf-footer-center::after {
-                content: counter(page) " | ${sectionNum}." counter(spc-${t.pageInfo.pageID});
+                content: counter(${multiFileCounterStyle}) " | ${sectionNum}." counter(spc-${t.pageInfo.pageID});
               }
               </style>`
+            : '';
+        // For front matter pages without a section number, override the footer to use roman numerals.
+        const romanNumeralCSS =
+          useRomanNumerals && !sectionPageCSS
+            ? `<style>.pdf-footer-center::after { content: counter(page, lower-roman) string(sectionNum, first); }</style>`
             : '';
         // TODO: lang attr for non-English texts
         const wrappedHTML = `
@@ -1943,6 +1992,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
   ${directoryHTML ? `<style>${pdfTOCStyles}</style>` : ''}
   ${pageCounterCSS}
   ${sectionPageCSS}
+  ${romanNumeralCSS}
   ${cleanedHeadHTML}
 </head>
 <body${!shouldShowMarginContent ? ' class="no-margin-content"' : ''}>
