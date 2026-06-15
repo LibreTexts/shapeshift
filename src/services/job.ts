@@ -8,6 +8,7 @@ import { ThinCCService } from './thinCC';
 import { log } from '../lib/log';
 import { EPUBService } from './epub';
 import { isCoverpage } from '../util/bookHelpers';
+import { LegacyAPIService } from './legacy-api';
 
 export type JobOutputFormat = 'EPUB' | 'PDF' | 'ThinCC';
 
@@ -85,6 +86,8 @@ export class JobService {
           return;
         }
 
+        let PDFPageCount = 1; // This is a temporary workaround to pass `numPages` to the legacy `endpoint` API until we implement a more robust solution for retrieving book info in bulk
+
         await job.update({ bookID: bookID.toString() });
         const pages = await bookModel.discoverPages(bookID.lib, bookID.pageNum);
         log.debug(`Discovered ${pages.flat.length} pages for book ${bookID.toString()}`);
@@ -127,7 +130,9 @@ export class JobService {
         let pdfPath: string | null = null;
         if (enabledFormats.includes('PDF')) {
           try {
-            pdfPath = await pdfService.convertBook(pages);
+            const pdfResult = await pdfService.convertBook(pages);
+            pdfPath = pdfResult?.filePath || null;
+            PDFPageCount = pdfResult?.pageCount || 1;
             log.info(`PDF generated at path: ${pdfPath}`);
           } catch (pdfError) {
             const errorMsg = pdfError instanceof Error ? pdfError.message : String(pdfError);
@@ -153,6 +158,12 @@ export class JobService {
           if (thinCCPath) log.info(`ThinCC generated at path: ${thinCCPath}`);
         }
         // </generate thincc>
+
+        const legacyAPIService = new LegacyAPIService();
+        await legacyAPIService.updateBookInfo({ bookID, pageCount: PDFPageCount }).catch((legacyError) => {
+          const errorMsg = legacyError instanceof Error ? legacyError.message : String(legacyError);
+          log.error(`Failed to update legacy API: ${errorMsg}`);
+        }); // A legacy API update failure should not cause the whole job to fail, so we catch errors here and log them without re-throwing
 
         await this.finish(jobMsg);
       } catch (error) {

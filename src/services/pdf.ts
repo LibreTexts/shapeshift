@@ -190,7 +190,7 @@ export class PDFService {
    * @param pages
    * @returns
    */
-  public async convertBook(pagesInput: BookPages): Promise<string | null> {
+  public async convertBook(pagesInput: BookPages): Promise<{ filePath: string; pageCount: number } | null> {
     if (!pagesInput?.flat?.length) return null;
     const { flat: pages } = pagesInput;
     this._allPages = pages;
@@ -584,7 +584,7 @@ export class PDFService {
       });
       await this.cleanupWorkdir();
       if (!this._useLocalStorage) await this.cleanupLocalArtifacts({ finalFilePath });
-      return finalFilePath;
+      return { filePath: finalFilePath, pageCount: numPages };
     } catch (error) {
       this.logger.withMetadata({ error, duration: Date.now() - startTime }).error('Book conversion failed');
       throw error;
