@@ -53,6 +53,32 @@ curl --request POST \
   --data '{"url":"https://dev.libretexts.org/Sandboxes/eaturner_at_ucdavis.edu/Test_Book","highPriority":false}'
 ```
 
+### Data Bucket Structure
+Shapeshift uses an S3 bucket to store generated exports. The structure should be as follows:
+
+```
+{bucket-name}/
+├── pdf/
+│   └── {book-id}/
+│       ├── Preview.pdf
+│       └── Full.pdf
+├── epub/
+│   └── {book-id}/
+├── thincc/
+│   └── {book-id}/
+│       └── LibreText.imscc
+├── pages/
+│   └── {book-id}/
+│       └── Individual.zip
+└── publication/
+    └── {book-id}/
+        ├── Content.pdf
+        ├── Cover_Casewrap.pdf
+        ├── Cover_PerfectBound.pdf
+        ├── Cover_Amazon.pdf
+        ├── Cover_CoilBound.pdf
+        └── Publication.zip
+```
 
 ## License
 [MIT](https://github.com/LibreTexts/shapeshift/blob/main/LICENSE.md)
