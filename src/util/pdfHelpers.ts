@@ -98,6 +98,7 @@ export const pdfDetailedLicensingStyles = readFileSync(
   join(__dirname, '../styles/pdf-detailed-licensing.css'),
   'utf-8',
 );
+export const pdfTitlePageStyles = readFileSync(join(__dirname, '../styles/pdf-titlepage.css'), 'utf-8');
 
 // --- Page dimension constants (letter size) ---
 export const PDF_PAGE_WIDTH_IN = 8.5;

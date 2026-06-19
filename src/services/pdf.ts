@@ -14,6 +14,7 @@ import {
   pdfGlossaryStyles,
   pdfHeaderCSS,
   pdfDetailedLicensingStyles,
+  pdfTitlePageStyles,
   countPDFPages,
   extractPDFPages,
 } from '../util/pdfHelpers';
@@ -1933,7 +1934,11 @@ ${stripBlocklistedScripts(pageTailHTML)}
           preRenderedBodyHTML: prerendered?.[0]?.renderedBody,
           pageHeadHTML: task.pageInfo.head,
           pageTailHTML: task.pageInfo.tail,
-          additionalCSS: directoryHTML ? pdfTOCStyles : undefined,
+          additionalCSS: directoryHTML
+            ? pdfTOCStyles
+            : ['TitlePage', 'Title Page'].includes(task.pageInfo.title)
+              ? pdfTitlePageStyles
+              : undefined,
           sortKey: task.sortKey,
           pageOffset,
           useRomanNumerals,

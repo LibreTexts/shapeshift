@@ -176,10 +176,10 @@ export class BookService {
         `
         <div style="height:95vh; display:flex; flex-direction: column; position: relative; align-items: center">
         <div style=" display:flex; flex:1; flex-direction: column; justify-content: center">
-        <p class="mt-align-center"><span class="mt-font-size-36">${coverPageInfo.printInfo.companyName || ''}</span></p>
-        <p class="mt-align-center"><span class="mt-font-size-36">${coverPageInfo.printInfo.title || ''}</span></p></div>
+        <p class="pdf-title-text">${coverPageInfo.printInfo.companyName || ''}</p>
+        <p class="pdf-title-text">${coverPageInfo.printInfo.title || ''}</p></div>
         <p style="position: absolute; bottom: 0; right: 0"><canvas id="canvas"></canvas></p>
-        <p class="mt-align-center" style="max-width: 70%"><span class="mt-font-size-24">${coverPageInfo.printInfo.authorName || ''}</span></p>
+        <p class="pdf-title-author" style="max-width: 70%">${coverPageInfo.printInfo.authorName || ''}</p>
         <script>QRCode.toCanvas(document.getElementById('canvas'), '${coverPageInfo.url}', ${JSON.stringify(QRoptions)})</script>
         <p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic</a><a href="#">printoptions:no-header-title</a></p></div>
       `,

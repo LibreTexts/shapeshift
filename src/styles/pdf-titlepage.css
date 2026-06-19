@@ -1,0 +1,15 @@
+.pdf-title-text,
+.pdf-title-author {
+  font-size: 24pt;
+  text-align: center;
+}
+
+/* Backward compatibility: map CXOne platform classes for existing TitlePages */
+.mt-align-center {
+  text-align: center;
+}
+
+.mt-font-size-24,
+.mt-font-size-36 {
+  font-size: 24pt;
+}
