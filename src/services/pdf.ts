@@ -2139,18 +2139,23 @@ ${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
   }
 
   /**
-   * Removes the entire book temp directory (workdir, covers, and any other
-   * intermediate artifacts). Called after successful upload or on job failure
-   * to prevent temp files from accumulating on disk.
+   * Cleans up local files after processing completes.
+   * - S3 mode: removes the entire book directory (all outputs already uploaded).
+   * - Local storage mode: removes only intermediate directories (workdir, covers).
    */
   public async cleanupWorkdir(): Promise<void> {
     const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
-    const bookDir = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
+    const bookBase = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
     try {
-      await fs.rm(bookDir, { recursive: true, force: true });
-      this.logger.withMetadata({ bookDir }).info('Cleaned up book temp directory');
+      if (this._useLocalStorage) {
+        const dirs = [join(bookBase, 'workdir'), join(bookBase, 'covers')];
+        await Promise.all(dirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
+      } else {
+        await fs.rm(bookBase, { recursive: true, force: true });
+      }
+      this.logger.withMetadata({ bookBase }).info('Cleaned up temp files');
     } catch (error) {
-      this.logger.withMetadata({ bookDir, error }).warn('Failed to clean up book temp directory');
+      this.logger.withMetadata({ bookBase, error }).warn('Failed to clean up temp files');
     }
   }
 
