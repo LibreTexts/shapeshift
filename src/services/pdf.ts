@@ -521,7 +521,6 @@ export class PDFService {
         outputPath: contentFilePath,
         pageStart: 2,
       });
-      if (!this._useLocalStorage) await this.streamFileToS3(contentFilePath);
       await fs.unlink(printFullFilePath).catch(() => {});
       this.logger.info('Print edition content PDF generated successfully');
 
@@ -583,7 +582,6 @@ export class PDFService {
         contentFilePath,
       });
       await this.cleanupWorkdir();
-      if (!this._useLocalStorage) await this.cleanupLocalArtifacts({ finalFilePath });
       return { filePath: finalFilePath, pageCount: numPages };
     } catch (error) {
       this.logger.withMetadata({ error, duration: Date.now() - startTime }).error('Book conversion failed');
@@ -640,7 +638,6 @@ export class PDFService {
         .info('Single-page PDF conversion completed successfully');
 
       await this.cleanupWorkdir();
-      if (!this._useLocalStorage) await this.cleanupLocalArtifacts({ finalFilePath: finalPath });
       return finalPath;
     } catch (error) {
       this.logger.withMetadata({ error, duration: Date.now() - startTime }).error('Single-page PDF conversion failed');
@@ -1053,6 +1050,34 @@ ${stripBlocklistedScripts(pageTailHTML)}
     }
 
     this.logger.info('Finished writing Publication.zip output.');
+
+    // <upload individual Publication files for direct access by printing services>
+    const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+    const pubDirPath = resolve(`${baseDir}/pdf/${this._bookID.toString()}/Publication`);
+    await fs.mkdir(pubDirPath, { recursive: true });
+    const filesToPublish = [
+      { src: contentFilePath, name: 'Content.pdf' },
+      ...PDF_COVER_TYPES.filter((t) => t !== 'Main').map((coverType) => ({
+        src: `${coversDirPath}/${coverType}.pdf`,
+        name: `Cover_${coverType}.pdf`,
+      })),
+    ];
+    await Promise.all(
+      filesToPublish.map(async ({ src, name }) => {
+        const destPath = join(pubDirPath, name);
+        await fs.copyFile(src, destPath);
+        if (!this._useLocalStorage) {
+          await this.streamFileToS3(destPath);
+          await fs.unlink(destPath).catch(() => {});
+        }
+      }),
+    );
+    if (!this._useLocalStorage) {
+      await fs.rmdir(pubDirPath).catch(() => {});
+    }
+    // </upload individual Publication files for direct access by printing services>
+
+    this.logger.info('Finished uploading individual Publication files.');
     return outPath;
   }
 
@@ -2113,36 +2138,23 @@ ${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
     await uploader?.done();
   }
 
-  private async cleanupLocalArtifacts({ finalFilePath }: { finalFilePath: string }) {
-    const logData = { bookID: this._bookID.toString(), finalFilePath };
-    try {
-      await fs.unlink(finalFilePath);
-      this.logger.withMetadata(logData).info('Cleaned up local artifacts');
-    } catch (error) {
-      this.logger.withMetadata(logData).withError(error).warn('Failed to clean up local artifacts');
-    }
-  }
-
   /**
-   * Removes the workdir for this book, deleting all intermediate group PDFs and the
-   * merged content PDF.  Called on job failure to prevent orphaned temp files from
-   * accumulating on disk across retries.
+   * Removes the entire book temp directory (workdir, covers, and any other
+   * intermediate artifacts). Called after successful upload or on job failure
+   * to prevent temp files from accumulating on disk.
    */
   public async cleanupWorkdir(): Promise<void> {
     const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
-    const workdir = resolve(`${baseDir}/pdf/${this._bookID.toString()}/workdir`);
+    const bookDir = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
     try {
-      await fs.rm(workdir, { recursive: true, force: true });
-      this.logger.withMetadata({ workdir }).info('Cleaned up workdir');
+      await fs.rm(bookDir, { recursive: true, force: true });
+      this.logger.withMetadata({ bookDir }).info('Cleaned up book temp directory');
     } catch (error) {
-      this.logger.withMetadata({ workdir, error }).warn('Failed to clean up workdir');
+      this.logger.withMetadata({ bookDir, error }).warn('Failed to clean up book temp directory');
     }
   }
 
   private async ensureCoversDirectory() {
-    // FIXME: are we storing cover in temp storage and handling final disposition in Job or
-    // should we upload directly to final storage here?
-    // If we upload here, we can stream the PDF generation directly to storage instead of writing to local disk first
     const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
     const dirPath = resolve(`${baseDir}/pdf/${this._bookID.toString()}/covers`);
     await fs.mkdir(dirPath, { recursive: true });
