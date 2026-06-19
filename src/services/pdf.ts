@@ -1228,6 +1228,14 @@ ${stripBlocklistedScripts(pageTailHTML)}
     pageTitle.before(typeContainer);
     pageTitle.remove();
 
+    const textElems = $('p, span').toArray();
+    for (const elem of textElems) {
+      const e = $(elem);
+      if (e.text()?.trim().toLowerCase().startsWith('thumbnail:')) {
+        e.remove();
+      }
+    }
+
     // return the updated HTML
     return $.html();
   }
