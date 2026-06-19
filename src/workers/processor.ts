@@ -30,7 +30,14 @@ export async function runProcess() {
   const jobModel = new JobService();
   const memoryLogInterval = setInterval(() => logMemoryUsage('periodic'), 60_000);
   while (isActiveWorker) {
-    const jobs = await queueClient.lookForJobs();
+    let jobs;
+    try {
+      jobs = await queueClient.lookForJobs();
+    } catch (err) {
+      logger.withMetadata({ error: String(err) }).error('Failed to poll SQS, retrying after delay...');
+      await new Promise((resolve) => setTimeout(resolve, 5_000));
+      continue;
+    }
     for (const job of jobs) {
       if (!isActiveWorker) break;
       // Delete the message immediately to prevent multiple workers from processing the same job
