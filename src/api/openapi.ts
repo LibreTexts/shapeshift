@@ -20,7 +20,8 @@ registry.register('ExportFormat', _exportFormatSchema);
 const JobSchema = registry.register(
   'Job',
   z.object({
-    id: z.string().openapi({ example: 'abc123xyz012' }),
+    bookID: z.string().nullable().openapi({ example: 'phys-123456' }),
+    id: z.string().uuid().openapi({ example: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' }),
     status: _jobStatusSchema,
     isHighPriority: z.boolean(),
     url: z.url().openapi({ example: EXAMPLE_BOOK_URL }),
@@ -88,7 +89,7 @@ function jsonResponse(description: string, schema: z.ZodType): ResponseConfig {
 const statusField = z.number().int().openapi({ example: 200 });
 
 // --- Paths -------------------------------------------------------------------------------------
-// TODO: add type checking to the endpoints to ensure theyactually return the matching response schemas
+// TODO: add type checking to the endpoints to ensure they actually return the matching response schemas
 registry.registerPath({
   method: 'post',
   path: '/job',
@@ -103,8 +104,8 @@ registry.registerPath({
       'Job created successfully.',
       z.object({
         data: z.object({
-          id: z.string().openapi({ example: 'abc123xyz012' }),
-          status: z.string().openapi({ example: 'created' }),
+          id: z.string().uuid().openapi({ example: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' }),
+          status: z.literal('created'),
         }),
         status: statusField,
       }),
