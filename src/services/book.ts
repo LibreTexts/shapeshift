@@ -15,6 +15,8 @@ import { LogLayer } from 'loglayer';
 import { Environment } from '../lib/environment';
 import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
 import * as cheerio from 'cheerio';
+import { Element } from 'domhandler';
+import QRCode from 'qrcode';
 import { demoteDecorativeHeadings, removeEmptyParagraphs } from '../util/htmlFilters';
 import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject, omit, USER_AGENT } from '../util/util';
 
@@ -25,6 +27,72 @@ import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject,
  * Tune via CONTENT_FETCH_CONCURRENCY env var for resource-constrained environments.
  */
 const DEFAULT_CONTENT_FETCH_CONCURRENCY = 10;
+
+const INTERACTIVE_SELECTOR = 'iframe, video, audio, canvas, embed, object, applet';
+
+const DOMAIN_LABELS: Record<string, string> = {
+  'youtube.com': 'YouTube Video',
+  'youtu.be': 'YouTube Video',
+  'vimeo.com': 'Vimeo Video',
+  'h5p.org': 'H5P Interactive Activity',
+  'h5p.libretexts.org': 'H5P Interactive Activity',
+  'phet.colorado.edu': 'PhET Simulation',
+  'geogebra.org': 'GeoGebra Interactive',
+  'desmos.com': 'Desmos Interactive',
+  'docs.google.com': 'Google Document',
+  'drive.google.com': 'Google Drive File',
+  'colab.research.google.com': 'Google Colab Notebook',
+};
+
+const TAG_LABELS: Record<string, string> = {
+  iframe: 'Interactive Content',
+  video: 'Video',
+  audio: 'Audio',
+  canvas: 'Interactive Graphic',
+  embed: 'Embedded Content',
+  object: 'Embedded Object',
+  applet: 'Interactive Applet',
+};
+
+function extractInteractiveUrl($: cheerio.CheerioAPI, el: Element, pageUrl: string): string {
+  const e = $(el);
+  const tag = el.tagName?.toLowerCase();
+  let src: string | undefined;
+
+  if (tag === 'object') {
+    src = e.attr('data');
+  } else if (tag === 'applet') {
+    src = e.attr('code') || e.attr('archive');
+  } else {
+    src = e.attr('src');
+  }
+
+  if (!src && (tag === 'video' || tag === 'audio')) {
+    src = e.find('source').first().attr('src');
+  }
+
+  if (src && !src.startsWith('http')) {
+    try {
+      src = new URL(src, pageUrl).href;
+    } catch {
+      src = undefined;
+    }
+  }
+
+  return src || pageUrl;
+}
+
+function getInteractiveLabel(tag: string, url: string): string {
+  try {
+    const hostname = new URL(url).hostname;
+    for (const [domain, label] of Object.entries(DOMAIN_LABELS)) {
+      if (hostname.includes(domain)) return label;
+    }
+  } catch {
+    /* ignore parse errors */
+  }
+  return TAG_LABELS[tag] || 'Interactive Content';
+}
 
 export class BookService {
   private readonly logger: LogLayer;
@@ -729,7 +797,7 @@ export class BookService {
           const altTextFixed = this.autofixMissingAltText(headingsFixed);
           const cmsMarkupFixed = this.autofixCMSMarkup(altTextFixed);
           const emptyParagraphsRemoved = removeEmptyParagraphs(cmsMarkupFixed);
-          const interactiveReplaced = this.replaceInteractiveElements(emptyParagraphsRemoved);
+          const interactiveReplaced = await this.replaceInteractiveElements(emptyParagraphsRemoved, p.url);
           p.body = [interactiveReplaced];
         }),
       );
@@ -815,17 +883,48 @@ export class BookService {
     return $.html();
   }
 
-  private replaceInteractiveElements(content: string): string {
+  private async replaceInteractiveElements(content: string, pageUrl: string): Promise<string> {
     if (!content) return content;
     const $ = cheerio.load(content, null, false);
-    const iframes = $('iframe').toArray();
-    for (const frame of iframes) {
-      const e = $(frame);
-      const sub = $('<p><i>This interactive element is only available in the web version of this textbook.</i></p>');
-      e.replaceWith(sub);
+    const elements = $(INTERACTIVE_SELECTOR).toArray();
+    if (!elements.length) return content;
+
+    // Filter out nested elements (e.g. <embed> inside <object>) to avoid double-replacement
+    const topLevel = elements.filter((el) => !$(el).parents(INTERACTIVE_SELECTOR).length);
+
+    for (const el of topLevel) {
+      const e = $(el);
+      const tag = el.tagName?.toLowerCase() ?? 'unknown';
+      const url = extractInteractiveUrl($, el, pageUrl);
+      const label = getInteractiveLabel(tag, url);
+
+      let qrHtml = '';
+      try {
+        const qrDataUri = await QRCode.toDataURL(url, { width: 100, margin: 1, errorCorrectionLevel: 'M' });
+        qrHtml = `<div class="interactive-placeholder-qr"><img src="${qrDataUri}" alt="" width="100" height="100" /></div>`;
+      } catch {
+        /* QR generation failed — still show link */
+      }
+
+      const innerHtml = `
+        <div class="box-legend"><span>${label}</span></div>
+        <div class="interactive-placeholder-body">
+          <div class="interactive-placeholder-info">
+            <p class="interactive-placeholder-text">This interactive element is not available in this format. Visit the link or scan the QR code to access it online.</p>
+            <p class="interactive-placeholder-link"><a href="${url}">View this ${label} online</a></p>
+            <p class="interactive-placeholder-url">${url}</p>
+          </div>
+          ${qrHtml}
+        </div>`;
+
+      const isInsideBox = e.parents('.box-interactive').length > 0;
+      const placeholder = isInsideBox
+        ? $(`<div class="interactive-placeholder">${innerHtml}</div>`)
+        : $(`<div class="box-interactive interactive-placeholder">${innerHtml}</div>`);
+
+      e.replaceWith(placeholder);
     }
-    const canvi = $('canvas');
-    canvi.remove();
+
     return $.html();
   }
 }

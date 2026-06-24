@@ -231,7 +231,8 @@ picture > img {
   padding-bottom:0;
   padding-top:0;
   margin-bottom:7px;
-  margin-top:7px
+  margin-top:7px;
+  page-break-inside: avoid;
 }
 .exercise {
   background-color:snow
@@ -280,7 +281,8 @@ picture > img {
   padding:0 10px 1px 10px;
   margin-bottom:.8em!important;
   margin-top:.8em!important;
-  orphans:3
+  orphans:3;
+  page-break-inside: avoid;
 }
 .box-emphasis {
   padding:5px 10px 5px 10px
@@ -338,7 +340,7 @@ picture > img {
   border:4px solid #127abf!important
 }
 .box-interactive {
-  border:4px solid #000
+  border: 4px solid #000;
 }
 .box-definition,
 .box-lemma,
@@ -418,7 +420,43 @@ picture > img {
   background-color:#5e6e6e
 }
 .box-interactive .box-legend>span {
-  background-color:#000
+  background-color: #000;
+}
+.interactive-placeholder-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  padding: 8px 0;
+}
+.interactive-placeholder-info {
+  flex: 1;
+  min-width: 0;
+}
+.interactive-placeholder-text {
+  font-style: italic;
+  margin: 0 0 6px 0 !important;
+  font-size: 0.95rem !important;
+}
+.interactive-placeholder-link {
+  margin: 0 !important;
+  word-break: break-all;
+}
+.interactive-placeholder-link a {
+  color: #127abf !important;
+  font-size: 0.85rem !important;
+}
+.interactive-placeholder-url {
+  margin: 2px 0 0 0 !important;
+  font-size: 0.8rem !important;
+  color: #555 !important;
+  word-break: break-all;
+}
+.interactive-placeholder-qr {
+  flex-shrink: 0;
+  -prince-pdf-tag-type: Artifact;
+}
+.interactive-placeholder-qr img {
+  display: block;
 }
 .box-warning .box-legend>span {
   background-color:#9e0000
