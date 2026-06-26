@@ -71,6 +71,10 @@ interface DOMAdaptor {
 interface MathDocument {
   renderPromise(): Promise<void>;
   clear(): void;
+  /**
+   * Disposes the document and terminates the SRE speech worker thread.
+   */
+  done(): Promise<void>;
   document: unknown;
 }
 
@@ -363,6 +367,31 @@ export function extractPageNumberPrefix(title: string): string {
  * @param pageInfo - Optional page metadata containing title for equation numbering
  * @returns Promise resolving to HTML with rendered math, or original HTML on error (graceful degradation)
  */
+/** Max wait for a document's fire-and-forget speech-worker Start() to settle before teardown. */
+const WORKER_START_WAIT_MS = 500;
+
+/**
+ * Terminates the SRE speech worker thread a MathDocument spawned, awaiting its in-flight start.
+ *
+ * MathJax's getWebworker() constructs the WorkerHandler and calls its async Start() WITHOUT
+ * awaiting it. We briefly wait for handler.worker to appear so done() → Stop() can actually
+ * terminate it. No-op when no worker handler was ever created (e.g. speech disabled).
+ *
+ * On math-bearing pages handler.worker is already set by teardown time so no latency is added.
+ */
+async function terminateDocumentWorker(doc: MathDocument): Promise<void> {
+  // webworker is internal MathJax state not exposed on the typed interface.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const handler = (doc as any).webworker;
+  if (handler && !handler.worker) {
+    const deadline = Date.now() + WORKER_START_WAIT_MS;
+    while (!handler.worker && Date.now() < deadline) {
+      await new Promise((resolve) => setImmediate(resolve));
+    }
+  }
+  await doc.done();
+}
+
 export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Promise<string> {
   try {
     const mj = await getOrInitMathJax();
@@ -430,7 +459,19 @@ export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Prom
       // Get the fully rendered HTML document
       result = adaptor.outerHTML(adaptor.root(doc.document));
     } finally {
+      // clear() drops this document's math items and unregisters it.
+      // done() additionally terminates the SRE speech worker thread
+      // this document spawned to avoid Worker thread memory leaks.
       doc.clear();
+      try {
+        await terminateDocumentWorker(doc);
+      } catch (teardownErr) {
+        const msg = teardownErr instanceof Error ? teardownErr.message : String(teardownErr);
+        // "Worker has not been started" is harmless
+        if (!/not been started|not started/i.test(msg)) {
+          console.error('MathJax document teardown failed:', msg);
+        }
+      }
     }
 
     // MathJax wraps the input in a full HTML document. Extract just the body content
