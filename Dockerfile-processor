@@ -42,9 +42,12 @@ COPY --from=build /usr/src/shapeshift/build ./build
 # Bundled code resolves styles via __dirname/../styles (relative to build/)
 RUN ln -s build/styles styles
 
+COPY docker-processor-entrypoint.sh ./docker-processor-entrypoint.sh
+RUN chmod +x ./docker-processor-entrypoint.sh
+
 # Run as non-root
 RUN groupadd --system shapeshift && useradd --system --gid shapeshift shapeshift \
     && chown -R shapeshift:shapeshift /usr/src/shapeshift
 USER shapeshift
 
-ENTRYPOINT ["node", "build/workers/processor.mjs"]
+ENTRYPOINT ["./docker-processor-entrypoint.sh"]

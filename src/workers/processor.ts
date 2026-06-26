@@ -1,4 +1,5 @@
 import 'dotenv/config';
+import { getHeapStatistics } from 'node:v8';
 import { JobService } from '../services/job';
 import { QueueClient } from '../lib/queueClient';
 import { connectDatabase } from '../model';
@@ -13,19 +14,32 @@ let isActiveWorker = true;
 function logMemoryUsage(phase: string, jobId?: string) {
   const usage = process.memoryUsage();
   const metadata = {
-    phase,
     ...(jobId && { jobId }),
-    rssMB: Math.round(usage.rss / 1024 / 1024),
-    heapUsedMB: Math.round(usage.heapUsed / 1024 / 1024),
+    arrayBuffersMB: Math.round(usage.arrayBuffers / 1024 / 1024),
+    externalMB: Math.round(usage.external / 1024 / 1024),
     heapTotalMB: Math.round(usage.heapTotal / 1024 / 1024),
+    heapUsedMB: Math.round(usage.heapUsed / 1024 / 1024),
+    phase,
+    rssMB: Math.round(usage.rss / 1024 / 1024),
   };
   logger.withMetadata(metadata).info('Memory usage report');
+}
+
+function logHeapLimit() {
+  const heapSizeLimit = getHeapStatistics().heap_size_limit;
+  logger
+    .withMetadata({
+      heapSizeLimitMB: Math.round(heapSizeLimit / 1024 / 1024),
+      nodeOptions: process.env.NODE_OPTIONS ?? null,
+    })
+    .info('V8 heap size limit at startup');
 }
 
 export async function runProcess() {
   Environment.load();
   await connectDatabase();
   logger.info('Shapeshift processor worker started.');
+  logHeapLimit();
   const queueClient = new QueueClient();
   const jobModel = new JobService();
   const memoryLogInterval = setInterval(() => logMemoryUsage('periodic'), 60_000);
