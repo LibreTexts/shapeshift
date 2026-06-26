@@ -949,7 +949,10 @@ ${stripBlocklistedScripts(pageTailHTML)}
       if (this._useEnvironmentPrinceLicense) prince.license('./prince_license.dat');
 
       const title = pageInfo.printInfo?.title || pageInfo.title || 'Unknown';
-      const princeChain = prince.option('verbose', true).option('javascript', true);
+      // TODO: evaluate if JS can be turned off
+      const princeChain = prince
+        .option('verbose', Environment.getSystemEnvironment() === 'DEVELOPMENT')
+        .option('javascript', true);
       if (taggedPdf !== false) princeChain.option('tagged-pdf', true);
       const result = await princeChain
         .option('pdf-title', title)
