@@ -83,6 +83,13 @@ type ConversionTask = {
 };
 
 /**
+ * Represents the pre-rendered math output for a single ConversionTask.
+ * The rendered body is stored in a temp file (renderedBodyPath) rather than kept in
+ * memory.
+ */
+type PrerenderedTask = { task: ConversionTask; renderedBodyPath: string };
+
+/**
  * A group of ConversionTasks to be rendered in a single Prince invocation.
  * Content pages that share a chapter ancestor are grouped together so that a single
  * Prince invocation renders them all (multi-file input), reducing subprocess overhead.
@@ -123,9 +130,6 @@ const MAX_PAGES_PER_GROUP = 6;
  * resource pressure. Tune via PRINCE_CONCURRENCY env var.
  */
 const DEFAULT_PRINCE_CONCURRENCY = 4;
-
-/** Represents the pre-rendered math output for a single ConversionTask. */
-type PrerenderedTask = { task: ConversionTask; renderedBody: string };
 
 export class PDFService {
   private _bookID!: PageID;
@@ -225,19 +229,21 @@ export class PDFService {
       for (const group of pageGroups) {
         const pageTasks = group.tasks.filter((t) => t.type === 'page');
         if (pageTasks.length === 0) continue; // TOC / Index — no math needed
+        const rendered: PrerenderedTask[] = [];
         try {
-          const rendered: PrerenderedTask[] = [];
           for (const t of pageTasks) {
             // Decode HTML entities before MathJax so liteDOM never stores them as verbatim
             // strings (which get double-encoded to &amp;ldquo; in outerHTML output).
             const rawHTML = this.decodeHTML(this.addPageTitle(t.pageInfo, t.pageInfo.body.join('')));
-            rendered.push({
-              task: t,
-              renderedBody: await prerenderMath(rawHTML, t.pageInfo),
-            });
+            const renderedBody = await prerenderMath(rawHTML, t.pageInfo);
+            const renderedBodyPath = await this._createTempFile(renderedBody);
+            rendered.push({ task: t, renderedBodyPath });
           }
           prerenderedMap.set(group.sortKey, rendered);
         } catch (mathError) {
+          // Discard any temp files already written for this partially-rendered group so they
+          // don't leak; the group falls back to inline rendering during conversion below.
+          await Promise.all(rendered.map((p) => this._deleteTempFile(p.renderedBodyPath).catch(() => {})));
           // Math pre-rendering failed for this group (e.g. stack overflow on a deeply
           // nested expression). Leave the group out of the map so Phase 2 falls back to
           // inline rendering inside convertPageGroup, where retryWithBackoff handles it.
@@ -396,6 +402,12 @@ export class PDFService {
       if (failureCount >= CIRCUIT_BREAKER_CONFIG.maxConsecutiveFailures) {
         throw new Error(`Job failed: ${failureCount} group(s) failed to convert`);
       }
+
+      // Cleanup pre-rendered math temp files.
+      await Promise.all(
+        [...prerenderedMap.values()].flat().map((p) => this._deleteTempFile(p.renderedBodyPath).catch(() => {})),
+      );
+      prerenderedMap.clear();
 
       // Sort groups by sortKey, then flatten to a single ordered list of HTML paths.
       pass2Groups.sort((a, b) =>
@@ -1855,6 +1867,11 @@ ${stripBlocklistedScripts(pageTailHTML)}
     );
   }
 
+  private async readPrerenderedBody(entry?: PrerenderedTask): Promise<string | undefined> {
+    if (!entry) return undefined;
+    return fs.readFile(entry.renderedBodyPath, 'utf-8');
+  }
+
   /**
    * Converts a PageGroup to a PDF file on disk, or (when `htmlOnly` is true) generates
    * HTML temp files and returns their paths without invoking Prince.
@@ -1934,7 +1951,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           pageID: task.pageID,
           pageInfo: task.pageInfo,
           pageBodyHTML: directoryHTML ?? rawBody,
-          preRenderedBodyHTML: prerendered?.[0]?.renderedBody,
+          preRenderedBodyHTML: await this.readPrerenderedBody(prerendered?.[0]),
           pageHeadHTML: task.pageInfo.head,
           pageTailHTML: task.pageInfo.tail,
           additionalCSS: directoryHTML
@@ -1974,7 +1991,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           title: t.pageInfo.title,
         });
 
-        const preRendered = prerendered?.find((p) => p.task._id === t._id)?.renderedBody;
+        const preRendered = await this.readPrerenderedBody(prerendered?.find((p) => p.task._id === t._id));
         const anchor = `<span id="page-${t.pageID}" class="pdf-anchor">&#8203;</span>`;
         const renderedBody = this.rewriteInternalLinks(
           this.sanitizeImagesForPDF(
