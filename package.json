@@ -7,7 +7,7 @@
   "scripts": {
     "dev:api": "tsx watch --clear-screen=false src/workers/api.ts",
     "dev:processor": "tsx watch --clear-screen=false src/workers/processor.ts",
-    "build": "rimraf ./build && tsdown src/workers/api.ts src/workers/processor.ts --format esm --dts -d ./build --root src && tsc-alias && cp -r src/styles build/styles",
+    "build": "rimraf ./build && tsdown src/workers/api.ts src/workers/processor.ts --format esm --dts -d ./build --root src && tsc-alias && cp -r src/styles build/styles && cp -r src/public build/public",
     "lint": "eslint . --ext .ts",
     "lint-and-fix": "eslint . --ext .ts --fix",
     "test": "echo \"Error: no test specified\" && exit 1",
@@ -28,7 +28,6 @@
     "@types/express": "^5.0.3",
     "@types/js-beautify": "^1.14.3",
     "@types/node": "^20.19.8",
-    "@types/swagger-ui-express": "^4.1.8",
     "@types/validator": "^13.15.2",
     "@types/yargs": "^17.0.33",
     "@typescript-eslint/eslint-plugin": "^7.0.1",
@@ -48,6 +47,7 @@
     "typescript": "^5.3.3"
   },
   "dependencies": {
+    "@asteasolutions/zod-to-openapi": "^8.5.0",
     "@aws-sdk/client-cloudwatch": "^3.995.0",
     "@aws-sdk/client-ecs": "^3.995.0",
     "@aws-sdk/client-s3": "^3.995.0",
@@ -58,6 +58,7 @@
     "@libretexts/cxone-expert-node": "1.5.0",
     "@mathjax/mathjax-mhchem-font-extension": "^4.1.1",
     "@mathjax/src": "^4.1.1",
+    "@scalar/express-api-reference": "^0.10.5",
     "@types/bcrypt": "^6.0.0",
     "@types/qrcode": "^1.5.6",
     "archiver": "^7.0.1",
@@ -85,7 +86,6 @@
     "reflect-metadata": "^0.2.2",
     "sequelize": "^6.37.8",
     "sequelize-typescript": "^2.1.6",
-    "swagger-ui-express": "^5.0.1",
     "uuid": "^14.0.0",
     "xml-formatter": "^3.6.6",
     "yargs": "^17.7.2",

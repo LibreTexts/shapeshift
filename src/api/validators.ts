@@ -1,8 +1,11 @@
+import './zodOpenapi'; // Extends Zod with `.openapi()` before any schema below is constructed.
 import zod, { ZodObject, ZodError } from 'zod';
 import { Request, Response, NextFunction } from 'express';
 
-const bookIDSchema = zod.stringFormat('BookID', /[a-z1-2]{3,9}[-][0-9]{2,10}/i);
-const jobIDSchema = zod.uuidv4();
+export const _bookIDSchema = zod.stringFormat('BookID', /[a-z1-2]{3,9}[-][0-9]{2,10}/i);
+export const _jobIDSchema = zod.uuidv4();
+export const _jobStatusSchema = zod.enum(['created', 'inprogress', 'finished', 'failed']);
+export const _exportFormatSchema = zod.enum(['pdf', 'epub', 'thincc', 'pages', 'publication']);
 
 export const validators = {
   jobs: {
@@ -23,8 +26,8 @@ export const validators = {
   download: {
     get: zod.object({
       params: zod.object({
-        bookID: bookIDSchema,
-        format: zod.enum(['pdf', 'epub', 'thincc', 'pages', 'publication']),
+        bookID: _bookIDSchema,
+        format: _exportFormatSchema,
       }),
     }),
   },
@@ -37,7 +40,7 @@ export const validators = {
     }),
     get: zod.object({
       params: zod.object({
-        jobID: jobIDSchema,
+        jobID: _jobIDSchema,
       }),
     }),
   },
