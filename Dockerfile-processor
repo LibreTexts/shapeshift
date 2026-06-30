@@ -45,9 +45,17 @@ RUN ln -s build/styles styles
 COPY docker-processor-entrypoint.sh ./docker-processor-entrypoint.sh
 RUN chmod +x ./docker-processor-entrypoint.sh
 
-# Run as non-root
-RUN groupadd --system shapeshift && useradd --system --gid shapeshift shapeshift \
+# Run as non-root. Create a real home dir for Prince caches
+RUN groupadd --system shapeshift \
+    && useradd --system --gid shapeshift --create-home --home-dir /home/shapeshift shapeshift \
     && chown -R shapeshift:shapeshift /usr/src/shapeshift
+
+ENV HOME=/home/shapeshift \
+    XDG_CACHE_HOME=/home/shapeshift/.cache
+
+# Pre-create the Prince fontconfig cache dir
+RUN install -d -o shapeshift -g shapeshift /home/shapeshift/.cache/fontconfig
+
 USER shapeshift
 
 ENTRYPOINT ["./docker-processor-entrypoint.sh"]
