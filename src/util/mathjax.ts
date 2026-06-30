@@ -297,19 +297,14 @@ function sanitizeMathJaxNumericEntities(html: string): string {
 // ============================================================================
 
 /**
- * Extracts the page number prefix from a page title for equation numbering.
- * Replicates the browser-side logic that computes the "front" value from window.PageName.
- *
- * Browser-side logic:
- * 1. If PageName contains ":", take the part before the first ":"
- * 2. If that part contains ".", split by ".", parse each numeric part to remove leading zeros, rejoin
- * 3. Append "." to the end
- * 4. Otherwise, return empty string
- *
+ * Extracts the page number prefix from a page title for equation numbering and the
+ * PDF footer section number.
  * Examples:
+ * - "Section 3.4: Capacity" → "3.4." (label word stripped)
+ * - "Chapter 4: Finance" → "4."
  * - "4.2.1: Some Section" → "4.2.1."
- * - "3: Introduction" → "3."
  * - "01.02: Chapter" → "1.2." (leading zeros removed)
+ * - "Appendix A.1: Tables" → "A.1." (non-numeric token preserved)
  * - "No Colon Here" → ""
  *
  * @param title - The page title to extract numbering from
@@ -324,17 +319,12 @@ export function extractPageNumberPrefix(title: string): string {
   if (trimmed.includes(':')) {
     let front = trimmed.split(':')[0].trim();
 
-    // If the prefix contains dots, normalize by removing leading zeros from numeric parts
-    // This matches browser-side logic: int.includes("0")?parseInt(int,10):int
-    if (front.includes('.')) {
-      front = front
-        .split('.')
-        .map((part) => {
-          // If the part contains '0', parse as integer to remove leading zeros
-          return part.includes('0') ? String(parseInt(part, 10)) : part;
-        })
-        .join('.');
-    }
+    // Drop leading label word like "Section"/"Chapter"/"Unit" so only the numbering remains
+    front = front.replace(/^[A-Za-z]+\s+/, '');
+
+    // Normalize leading zeros on each numeric run only (e.g. "03" -> "3"), leaving any
+    // non-numeric token (e.g. the "A" in an appendix like "A.1") and separators intact.
+    front = front.replace(/\d+/g, (n) => String(parseInt(n, 10)));
 
     // Append period to the end
     return front + '.';
