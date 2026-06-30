@@ -232,9 +232,21 @@ picture > img {
   padding-bottom:0;
   padding-top:0;
   margin-bottom:7px;
-  margin-top:7px;
-  page-break-inside: avoid;
 }
+
+/* Keep the first content block glued to the box title so the title is never
+   stranded at the bottom of a page away from the start of its content. */
+.definition > *:nth-child(2),
+.example > *:nth-child(2),
+.exercise > *:nth-child(2),
+.note1 > *:nth-child(2),
+.query > *:nth-child(2),
+.skills > *:nth-child(2),
+.theorem > *:nth-child(2) {
+  break-before: avoid-page;
+  page-break-before: avoid;
+}
+
 .exercise {
   background-color:snow
 }
@@ -283,7 +295,29 @@ picture > img {
   margin-bottom:.8em!important;
   margin-top:.8em!important;
   orphans:3;
-  page-break-inside: avoid;
+  widows:3;
+}
+
+/* Keep the first content block glued to the box title so the title is never
+   stranded at the bottom of a page away from the start of its content. */
+.box-adapt > *:nth-child(2),
+.box-definition > *:nth-child(2),
+.box-emphasis > *:nth-child(2),
+.box-example > *:nth-child(2),
+.box-exercise > *:nth-child(2),
+.box-interactive > *:nth-child(2),
+.box-lemma > *:nth-child(2),
+.box-notation > *:nth-child(2),
+.box-note > *:nth-child(2),
+.box-objectives > *:nth-child(2),
+.box-procedure > *:nth-child(2),
+.box-proposition > *:nth-child(2),
+.box-query > *:nth-child(2),
+.box-structure > *:nth-child(2),
+.box-theorem > *:nth-child(2),
+.box-warning > *:nth-child(2) {
+  break-before: avoid-page;
+  page-break-before: avoid;
 }
 .box-emphasis {
   padding:5px 10px 5px 10px
@@ -367,6 +401,8 @@ picture > img {
   transform:translate(-11px,0);
   break-inside:avoid-page!important;
   page-break-inside:avoid!important;
+  break-after:avoid-page!important;
+  page-break-after:avoid!important;
   text-align:left!important
 }
 .box-query .box-legend {
@@ -497,6 +533,8 @@ picture > img {
   overflow:hidden;
   break-inside:avoid-page;
   page-break-inside:avoid;
+  break-after:avoid-page;
+  page-break-after:avoid;
   text-align:left;
   width:auto;
   margin:0;
