@@ -21,14 +21,16 @@ function getMongoClient(uri: string): MongoClient {
 interface FormatConfig {
   fileName: string;
   contentType: string;
+  // S3 key prefix (directory) the artifact lives under. Defaults to the format name.
+  dir?: string;
 }
 
 const FORMAT_CONFIG: Record<string, FormatConfig> = {
   pdf: { fileName: 'Full.pdf', contentType: 'application/pdf' },
   epub: { fileName: 'Publication.epub', contentType: 'application/epub+zip' },
   thincc: { fileName: 'LibreText.imscc', contentType: 'application/zip' },
-  pages: { fileName: 'Individual.zip', contentType: 'application/zip' },
-  publication: { fileName: 'Publication.zip', contentType: 'application/zip' },
+  pages: { fileName: 'Individual.zip', contentType: 'application/zip', dir: 'pdf' },
+  publication: { fileName: 'Publication.zip', contentType: 'application/zip', dir: 'pdf' },
 };
 
 export class DownloadController {
@@ -55,7 +57,7 @@ export class DownloadController {
       return res.status(404).send({ status: 404, msg: `No default file configured for format "${format}".` });
     }
 
-    const s3Key = `${format}/${bookID}/${formatConfig.fileName}`;
+    const s3Key = `${formatConfig.dir ?? format}/${bookID}/${formatConfig.fileName}`;
     const exists = await this.storageService.ensureFileExists(s3Key);
     if (!exists) {
       return res.status(404).send({

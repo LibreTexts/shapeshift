@@ -471,6 +471,32 @@ export class PDFService {
       });
       if (!this._useLocalStorage) await this.streamFileToS3(finalFilePath);
 
+      // ── Phase 4b: Generate per-section Individual.zip ──
+      try {
+        const totalSections = 1 + pass2Groups.reduce((sum, g) => sum + g.htmlPaths.length, 0);
+        const pad = Math.max(3, String(totalSections).length);
+        const pagesSections: { htmlPath: string; name: string; pageInfo: BookPageInfo }[] = [
+          { htmlPath: mainCoverTempPath, name: `${'0'.padStart(pad, '0')}_Cover.pdf`, pageInfo: coverPageInfo },
+        ];
+        let ordinal = 1;
+        for (const { group, htmlPaths } of pass2Groups) {
+          for (let i = 0; i < group.tasks.length; i++) {
+            const htmlPath = htmlPaths[i];
+            if (!htmlPath) continue;
+            const task = group.tasks[i];
+            const label = this.sanitizeFileLabel(task.pageInfo?.title || task.type);
+            const name = `${String(ordinal).padStart(pad, '0')}_${label}.pdf`;
+            pagesSections.push({ htmlPath, name, pageInfo: task.pageInfo });
+            ordinal++;
+          }
+        }
+        await this.generateIndividualPagesZipAndWrite(pagesSections);
+      } catch (pagesError) {
+        this.logger
+          .withError(pagesError instanceof Error ? pagesError : new Error(String(pagesError)))
+          .error('Failed to generate Individual.zip (pages) — continuing with remaining outputs');
+      }
+
       // ── Phase 5: Generate print content PDF and covers for Publication.zip ──
       // Re-use the same HTML files from Pass 2 with print-edition styling.
       // Print edition: full URLs shown in square brackets after every link, links non-clickable, black text.
@@ -748,6 +774,28 @@ export class PDFService {
     // Ensure the dir exists before returning the file path
     await fs.mkdir(basePath, { recursive: true });
     return filePath;
+  }
+
+  private async generateIndividualPagesZipOutputFilePath() {
+    const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+    const basePath = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
+    const filePath = join(basePath, '/Individual.zip');
+
+    // Ensure the dir exists before returning the file path
+    await fs.mkdir(basePath, { recursive: true });
+    return filePath;
+  }
+
+  /**
+   * Turns a page/section title into a filesystem-safe label.
+   */
+  private sanitizeFileLabel(label: string): string {
+    const cleaned = (label || '')
+      .normalize('NFKD')
+      .replace(/[^a-zA-Z0-9]+/g, '-')
+      .replace(/^-+|-+$/g, '')
+      .slice(0, 100);
+    return cleaned || 'Untitled';
   }
 
   private async generatePageOutputFilePath(pageID: PageID, sortKey: string) {
@@ -1097,6 +1145,104 @@ ${stripBlocklistedScripts(pageTailHTML)}
     return outPath;
   }
 
+  /**
+   * Produces a ZIP of PDF files for each section (Main cover, Front Matter pages,
+   * every content page, and the synthesized TOC/Index/Glossary/Detailed-Licensing sections).
+   * Reuses the screen-edition HTML files already produced during PDF conversion.
+   */
+  private async generateIndividualPagesZipAndWrite(
+    sections: { htmlPath: string; name: string; pageInfo: BookPageInfo }[],
+  ) {
+    const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+    const workdir = resolve(`${baseDir}/pdf/${this._bookID.toString()}/workdir/pages`);
+    await fs.mkdir(workdir, { recursive: true });
+
+    // Standalone section PDFs can't resolve full-document cross-file references (targetfile.html#page-{id}), so
+    // we must rewrite internal book links to real URLs.
+    const anchorToFullUrl = new Map<string, string>();
+    for (const page of this._allPages) {
+      if (!page.url) continue;
+      anchorToFullUrl.set(`page-${page.pageID}`, page.url);
+    }
+
+    // Render each section to its own PDF, reusing the already-generated screen-edition HTML.
+    // The HTML is rewritten to a derived input file (shared file is not mutated).
+    const princeConcurrency =
+      parseInt(Environment.getOptional('PRINCE_CONCURRENCY', String(DEFAULT_PRINCE_CONCURRENCY)), 10) ||
+      DEFAULT_PRINCE_CONCURRENCY;
+    const limit = pLimit(princeConcurrency);
+    const renderResults = await Promise.allSettled(
+      sections.map((section) =>
+        limit(async () => {
+          const html = await fs.readFile(section.htmlPath, 'utf-8');
+          const rewritten = this.rewriteInternalLinksToFullUrls(html, anchorToFullUrl);
+          const htmlInputPath = join(workdir, `${section.name}.html`);
+          await fs.writeFile(htmlInputPath, rewritten);
+          const pdfPath = join(workdir, section.name);
+          await this.runPrinceConversion({
+            inputPath: htmlInputPath,
+            outputPath: pdfPath,
+            pageInfo: section.pageInfo,
+          });
+          await fs.unlink(htmlInputPath).catch(() => {});
+          return { name: section.name, pdfPath };
+        }),
+      ),
+    );
+
+    const pdfs: { name: string; pdfPath: string }[] = [];
+    for (const r of renderResults) {
+      if (r.status === 'fulfilled') {
+        pdfs.push(r.value);
+      } else {
+        this.logger.withMetadata({ error: r.reason }).warn('Failed to render an individual section PDF; skipping');
+      }
+    }
+    if (pdfs.length === 0) throw new Error('No individual section PDFs were rendered for Individual.zip');
+
+    // Stream ZIP of all section PDFs to storage
+    const outPath = await this.generateIndividualPagesZipOutputFilePath();
+    const output = !this._useLocalStorage ? new PassThrough() : createWriteStream(outPath);
+    output.on('close', () => {
+      this.logger.info('Individual.zip output write stream closed.');
+    });
+    const archive = Archiver('zip', { zlib: { level: 6 } });
+    archive.on('error', (err) => {
+      this.logger.withError(err).error('Encountered an error preparing Individual.zip.');
+      output.destroy(err);
+    });
+    archive.pipe(output);
+
+    let uploader: Upload | undefined;
+    if (!this._useLocalStorage) {
+      uploader = this.storageService.createStreamUploader({
+        contentType: 'application/zip',
+        key: fsPathToS3Key(outPath),
+        stream: output as PassThrough,
+      });
+    }
+
+    for (const { name, pdfPath } of pdfs) {
+      archive.file(pdfPath, { name });
+    }
+
+    if (!this._useLocalStorage) {
+      // WARN: don't actually await here: can cause deadlock with storage service streaming upload
+      archive.finalize();
+      this.logger.info('Uploading Individual.zip to storage service...');
+      await uploader?.done();
+      this.logger.info('Finished upload Individual.zip to storage service.');
+    } else {
+      await archive.finalize();
+    }
+
+    // Remove the per-section scratch PDFs
+    await fs.rm(workdir, { recursive: true, force: true }).catch(() => {});
+
+    this.logger.withMetadata({ sectionCount: pdfs.length }).info('Finished writing Individual.zip output.');
+    return outPath;
+  }
+
   private async getLevel(pageInfo: BookPageInfo, level = 2, isSubTOC?: boolean): Promise<string> {
     if (!pageInfo.subpages?.length) return '';
     let resolvedIsSubTOC = isSubTOC;
@@ -1197,6 +1343,27 @@ ${stripBlocklistedScripts(pageTailHTML)}
       }
     });
     return $('body').html() ?? html;
+  }
+
+  /**
+   * Rewrites internal book links back to the target page's full canonical URL. External
+   * and unmapped links are left unchanged.
+   */
+  private rewriteInternalLinksToFullUrls(html: string, anchorToFullUrl: Map<string, string>): string {
+    if (!anchorToFullUrl.size) return html;
+    const $ = cheerio.load(html, { xmlMode: false });
+    $('a[href]').each((_, el) => {
+      const $el = $(el);
+      const href = $el.attr('href');
+      if (!href) return;
+      const hashIdx = href.indexOf('#');
+      if (hashIdx < 0) return;
+      const fragment = href.slice(hashIdx + 1); // e.g. "page-chem-12345"
+      if (!fragment.startsWith('page-')) return;
+      const fullUrl = anchorToFullUrl.get(fragment);
+      if (fullUrl) $el.attr('href', fullUrl);
+    });
+    return $.html();
   }
 
   private processDirectoryPage({
