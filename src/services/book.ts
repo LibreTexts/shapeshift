@@ -16,7 +16,7 @@ import { Environment } from '../lib/environment';
 import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
 import * as cheerio from 'cheerio';
 import { Element } from 'domhandler';
-import QRCode from 'qrcode';
+import { generateQRCode } from '../util/qrCode';
 import { demoteDecorativeHeadings, removeEmptyParagraphs } from '../util/htmlFilters';
 import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject, omit, USER_AGENT } from '../util/util';
 
@@ -900,8 +900,8 @@ export class BookService {
 
       let qrHtml = '';
       try {
-        const qrDataUri = await QRCode.toDataURL(url, { width: 100, margin: 1, errorCorrectionLevel: 'M' });
-        qrHtml = `<div class="interactive-placeholder-qr"><img src="${qrDataUri}" alt="" width="100" height="100" /></div>`;
+        const qrSrc = await generateQRCode(url);
+        qrHtml = `<div class="interactive-placeholder-qr"><img src="${qrSrc}" alt="" width="100" height="100" /></div>`;
       } catch {
         /* QR generation failed — still show link */
       }

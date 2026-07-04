@@ -494,6 +494,8 @@ picture > img {
 }
 .interactive-placeholder-qr img {
   display: block;
+  width: 100px;
+  height: 100px;
 }
 .box-warning .box-legend>span {
   background-color:#9e0000
