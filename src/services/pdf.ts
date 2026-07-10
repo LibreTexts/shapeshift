@@ -41,7 +41,7 @@ import axios from 'axios';
 import { PassThrough } from 'node:stream';
 import Archiver from 'archiver';
 import { Upload } from '@aws-sdk/lib-storage';
-import { isCoverpage } from '../util/bookHelpers';
+import { generateSubpageListing, injectDirectoryListing, isCoverpage } from '../util/bookHelpers';
 import { sleep, USER_AGENT } from '../util/util';
 import { renderAutoAttribution } from '../util/licensing';
 
@@ -1241,48 +1241,6 @@ ${stripBlocklistedScripts(pageTailHTML)}
     return outPath;
   }
 
-  private async getLevel(pageInfo: BookPageInfo, level = 2, isSubTOC?: boolean): Promise<string> {
-    if (!pageInfo.subpages?.length) return '';
-    let resolvedIsSubTOC = isSubTOC;
-    const pages: BookPageInfo[] = [];
-    for (const child of pageInfo.subpages) {
-      if ((child.title === 'Front Matter' || child.title === 'Back Matter') && !child.subpages?.length) {
-        // skip since empty
-        continue;
-      }
-      if (child.title === 'Front Matter') {
-        const tempChildren = child.subpages?.filter(
-          (subpage) => !['TitlePage', 'InfoPage', 'Table of Contents'].includes(subpage.title),
-        );
-        pages.push(...(tempChildren ?? []));
-      } else if (child.title === 'Back Matter') {
-        pages.push(...(child.subpages ?? []));
-      } else {
-        pages.push(child);
-      }
-    }
-
-    if (level === 2 && pageInfo.tags.includes('article:topic-guide')) {
-      resolvedIsSubTOC = true;
-      level = 3;
-    }
-    const twoColumn = pageInfo.tags?.includes('columns:two') && isCoverpage(pageInfo) && level === 2;
-    const prefix = level === 2 ? 'h2' : 'span';
-    // Get subtitles
-    const innerRaw = await Promise.all(
-      pages.map(async (elem) => {
-        // if (elem.modified === 'restricted') return ''; // private page - FIXME
-        const isSubtopic = level > 2 ? `indent${level - 2}` : null;
-        const subPageDir = await this.getLevel(elem, level + 1, resolvedIsSubTOC);
-        const subListSpacing = subPageDir?.length > 0 ? `libre-print-sublisting${level - 2}` : '';
-        if (!elem.url || !elem.title) return '';
-        return `<li><div class="nobreak ${isSubtopic} ${subListSpacing}"><${prefix}><a href="#page-${elem.pageID}" title="${elem.title}">${elem.title}</a></${prefix}></div>${subPageDir}</li>`;
-      }),
-    );
-    const inner = innerRaw.join('');
-    return `<ul class='libre-print-list' ${twoColumn ? 'style="column-count: 2;"' : ''}>${inner}</ul>`;
-  }
-
   /**
    * Strips HTML width/height attributes and inline width/height style declarations from <img>
    * elements so that the CSS max-width rule in pdf-page.css can take effect. CMS content often
@@ -1364,63 +1322,6 @@ ${stripBlocklistedScripts(pageTailHTML)}
     return $.html();
   }
 
-  private processDirectoryPage({
-    html,
-    listing,
-    tags,
-    title,
-  }: {
-    html: string;
-    listing: string;
-    tags: string[];
-    title: string;
-  }): string | null {
-    const $ = cheerio.load(html);
-
-    const directory = $('.mt-guide-content, .mt-category-container');
-    if (!directory.length) return null;
-
-    // Create a new directory element with the listing HTML and replace the existing directory content
-    const newDirectory = $('<div></div>');
-    newDirectory.html(listing);
-    newDirectory.addClass('libre-print-directory');
-    directory.replaceWith(newDirectory);
-
-    if (!tags?.length) return null;
-    const pageType =
-      isCoverpage(tags) || title?.includes('Table of Contents')
-        ? 'Table of Contents' // server-side TOC generation (deprecated)
-        : tags.includes('article:topic-guide')
-          ? 'Chapter Overview'
-          : 'Section Overview';
-
-    const pageTitle = $('#title');
-
-    const pageTitleParent = pageTitle?.parent();
-    if (!pageTitle || !pageTitleParent) return null;
-    pageTitle.attr('style', 'border-bottom: none !important');
-
-    const newTitle = $('<h1></h1>')
-      .text(pageType === 'Table of Contents' ? pageType : title)
-      .attr('id', 'libre-print-directory-header');
-
-    const typeContainer = $('<div></div>').attr('id', 'libre-print-directory-header-container');
-    typeContainer.append(newTitle);
-    pageTitle.before(typeContainer);
-    pageTitle.remove();
-
-    const textElems = $('p, span').toArray();
-    for (const elem of textElems) {
-      const e = $(elem);
-      if (e.text()?.trim().toLowerCase().startsWith('thumbnail:')) {
-        e.remove();
-      }
-    }
-
-    // return the updated HTML
-    return $.html();
-  }
-
   private async generateCover({
     bookInfo,
     coverType,
@@ -1479,7 +1380,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       this.logger.withMetadata({ url: pageInfo.url }).info('Starting Table of Contents');
 
       if (isMainTOC) {
-        const listing = await this.getLevel(pageInfo);
+        const listing = await generateSubpageListing(pageInfo);
         if (!listing) {
           this.logger.withMetadata({ url: pageInfo.url }).warn('Main TOC listing is empty, skipping conversion');
           return null;
@@ -1508,8 +1409,8 @@ ${stripBlocklistedScripts(pageTailHTML)}
         this.logger.withMetadata({ url: pageInfo.url }).info('Finished Main Table of Contents.');
         return outputPath;
       } else {
-        const listing = await this.getLevel(pageInfo);
-        const updatedHTML = this.processDirectoryPage({
+        const listing = await generateSubpageListing(pageInfo);
+        const updatedHTML = injectDirectoryListing({
           html: `<h1 id="title">${pageInfo.title}</h1>${pageInfo.body.join('')}`,
           listing,
           tags: pageInfo.tags,
@@ -2103,9 +2004,10 @@ ${stripBlocklistedScripts(pageTailHTML)}
         });
       } else {
         const rawBody = task.pageInfo.body.join('');
-        const listing = await this.getLevel(task.pageInfo);
-        const directoryHTML = this.processDirectoryPage({
-          html: rawBody,
+        const treeNode = this._treeMap.get(task.pageID.toString()) ?? task.pageInfo;
+        const listing = await generateSubpageListing(treeNode);
+        const directoryHTML = injectDirectoryListing({
+          html: `<h1 id="title">${task.pageInfo.title}</h1>${rawBody}`,
           listing,
           tags: task.pageInfo.tags,
           title: task.pageInfo.title,
@@ -2114,7 +2016,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         result = await this.convertPage({
           htmlOnly,
           pageID: task.pageID,
-          pageInfo: task.pageInfo,
+          pageInfo: directoryHTML ? treeNode : task.pageInfo,
           pageBodyHTML: directoryHTML ?? rawBody,
           preRenderedBodyHTML: await this.readPrerenderedBody(prerendered?.[0]),
           pageHeadHTML: task.pageInfo.head,
@@ -2148,9 +2050,10 @@ ${stripBlocklistedScripts(pageTailHTML)}
         const t = group.tasks[i];
 
         const rawBody = t.pageInfo.body.join('');
-        const listing = await this.getLevel(t.pageInfo);
-        const directoryHTML = this.processDirectoryPage({
-          html: rawBody,
+        const treeNode = this._treeMap.get(t.pageID.toString()) ?? t.pageInfo;
+        const listing = await generateSubpageListing(treeNode);
+        const directoryHTML = injectDirectoryListing({
+          html: `<h1 id="title">${t.pageInfo.title}</h1>${rawBody}`,
           listing,
           tags: t.pageInfo.tags,
           title: t.pageInfo.title,
