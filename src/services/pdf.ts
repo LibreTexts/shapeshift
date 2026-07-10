@@ -910,7 +910,7 @@ export class PDFService {
             @page sp-${pageID} { counter-increment: spc-${pageID}; }
             body { page: sp-${pageID}; }
             .pdf-footer-center::after {
-              content: counter(${pageCounterStyle}) " | ${sectionNum}." counter(spc-${pageID});
+              content: counter(${pageCounterStyle}) " (${sectionNum}." counter(spc-${pageID}) ")";
             }
             </style>`
           : '';
@@ -2191,7 +2191,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
               @page sp-${t.pageInfo.pageID} { counter-increment: spc-${t.pageInfo.pageID}; }
               body { page: sp-${t.pageInfo.pageID}; }
               .pdf-footer-center::after {
-                content: counter(${multiFileCounterStyle}) " | ${sectionNum}." counter(spc-${t.pageInfo.pageID});
+                content: counter(${multiFileCounterStyle}) " (${sectionNum}." counter(spc-${t.pageInfo.pageID}) ")";
               }
               </style>`
             : '';

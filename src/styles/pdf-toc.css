@@ -29,6 +29,12 @@
   font-size: 10.44pt;
 }
 
+/* Bump Chapter Overview listing entries to the Main TOC chapter-heading size. */
+.libre-print-directory > ul.libre-print-list > li > div > span,
+.libre-print-directory > ul.libre-print-list > li > div > span > a {
+  font-size: 10.44pt !important;
+}
+
 .libre-print-list ul {
   margin: 0;
   padding: 0;

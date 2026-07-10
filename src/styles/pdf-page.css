@@ -615,6 +615,7 @@ p.box-heading {
   margin: 0.5em 0 0.25em;
 }
 
+/* Figures */
 figure {
   display: flex;
   align-items: center;
@@ -622,6 +623,7 @@ figure {
   width: 100%;
   margin: 0;
   page-break-inside: avoid;
+  margin-top: 0.3em !important;
   margin-bottom: 0.3em !important;
   max-width: 100%;
 }
@@ -636,9 +638,31 @@ figcaption {
   break-inside: avoid-page;
 }
 
+.pdf-title-divider + figure {
+  margin-top: 1em !important;
+}
+
+figure[role="group"] > .row {
+  display: flex;
+}
+
+/* Prevent Prince from collapsing the flex-item that holds a figure's
+   image when that image is inline inside a wrapper. */
+figure img {
+  display: block;
+}
+
+figcaption img {
+  display: inline;
+}
+
 /* AutoAttribution */
 .autoattribution-wrapper {
   -prince-float: bottom;
+}
+
+.autoattribution-wrapper p {
+  font-size: 8.325pt !important
 }
 
 .autoattribution-divider {
@@ -646,4 +670,31 @@ figcaption {
   border-top: 1px solid #b4b4b4;
   clear: both;
   height: 0;
+}
+
+/* List Styles */
+dd, dd, ol, ul {
+  padding-left: 2em;
+}
+
+/* Center-Justified Text */
+.mt-align-center {
+  text-align: center;
+}
+
+/* Indents */
+.mt-indent-1 {
+  margin-left: 2.5em;
+}
+.mt-indent-2 {
+  margin-left: 5em;
+}
+.mt-indent-3 {
+  margin-left: 7.5em;
+}
+.mt-indent-4 {
+  margin-left: 10em;
+}
+.mt-indent-5 {
+  margin-left: 12.5em;
 }
