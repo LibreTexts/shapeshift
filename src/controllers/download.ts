@@ -23,14 +23,36 @@ interface FormatConfig {
   contentType: string;
   // S3 key prefix (directory) the artifact lives under. Defaults to the format name.
   dir?: string;
+  // S3 subdirectory under `{dir}/{bookID}/` the artifact lives in, e.g. "Publication".
+  subDir?: string;
 }
 
 const FORMAT_CONFIG: Record<string, FormatConfig> = {
-  pdf: { fileName: 'Full.pdf', contentType: 'application/pdf' },
+  content: { fileName: 'Content.pdf', contentType: 'application/pdf', dir: 'pdf', subDir: 'Publication' },
+  'cover-amazon': { fileName: 'Cover_Amazon.pdf', contentType: 'application/pdf', dir: 'pdf', subDir: 'Publication' },
+  'cover-casewrap': {
+    fileName: 'Cover_CaseWrap.pdf',
+    contentType: 'application/pdf',
+    dir: 'pdf',
+    subDir: 'Publication',
+  },
+  'cover-coilbound': {
+    fileName: 'Cover_CoilBound.pdf',
+    contentType: 'application/pdf',
+    dir: 'pdf',
+    subDir: 'Publication',
+  },
+  'cover-perfectbound': {
+    fileName: 'Cover_PerfectBound.pdf',
+    contentType: 'application/pdf',
+    dir: 'pdf',
+    subDir: 'Publication',
+  },
   epub: { fileName: 'Publication.epub', contentType: 'application/epub+zip' },
-  thincc: { fileName: 'LibreText.imscc', contentType: 'application/zip' },
   pages: { fileName: 'Individual.zip', contentType: 'application/zip', dir: 'pdf' },
+  pdf: { fileName: 'Full.pdf', contentType: 'application/pdf' },
   publication: { fileName: 'Publication.zip', contentType: 'application/zip', dir: 'pdf' },
+  thincc: { fileName: 'LibreText.imscc', contentType: 'application/zip' },
 };
 
 export class DownloadController {
@@ -57,7 +79,7 @@ export class DownloadController {
       return res.status(404).send({ status: 404, msg: `No default file configured for format "${format}".` });
     }
 
-    const s3Key = `${formatConfig.dir ?? format}/${bookID}/${formatConfig.fileName}`;
+    const s3Key = `${formatConfig.dir ?? format}/${bookID}/${formatConfig.subDir ? `${formatConfig.subDir}/` : ''}${formatConfig.fileName}`;
     const exists = await this.storageService.ensureFileExists(s3Key);
     if (!exists) {
       return res.status(404).send({

@@ -68,7 +68,11 @@ const downloadParams = validators.download.get.shape.params.extend({
     example: 'phys-123456',
   }),
   format: validators.download.get.shape.params.shape.format.openapi({
-    description: 'Export format.',
+    description:
+      'Export format, or an individual print-ready file. Bundled artifacts: `pdf`, `epub`, `thincc`, ' +
+      '`pages`, `publication`. Individual files under `Publication/` (for printing services): `content`, ' +
+      '`cover-amazon`, `cover-casewrap`, `cover-coilbound`, `cover-perfectbound`.',
+    example: 'content',
   }),
 });
 

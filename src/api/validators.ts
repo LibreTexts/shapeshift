@@ -5,7 +5,18 @@ import { Request, Response, NextFunction } from 'express';
 export const _bookIDSchema = zod.stringFormat('BookID', /[a-z1-2]{3,9}[-][0-9]{2,10}/i);
 export const _jobIDSchema = zod.uuidv4();
 export const _jobStatusSchema = zod.enum(['created', 'inprogress', 'finished', 'failed']);
-export const _exportFormatSchema = zod.enum(['pdf', 'epub', 'thincc', 'pages', 'publication']);
+export const _exportFormatSchema = zod.enum([
+  'content',
+  'cover-amazon',
+  'cover-casewrap',
+  'cover-coilbound',
+  'cover-perfectbound',
+  'epub',
+  'pages',
+  'pdf',
+  'publication',
+  'thincc',
+]);
 
 export const validators = {
   jobs: {
