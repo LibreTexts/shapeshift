@@ -71,6 +71,8 @@ interface DOMAdaptor {
 interface MathDocument {
   renderPromise(): Promise<void>;
   clear(): void;
+  /** Resets document state; `{ inputJax: [0] }` clears the TeX tag/label registry. */
+  reset(options?: { inputJax?: number[] }): void;
   /**
    * Disposes the document and terminates the SRE speech worker thread.
    */
@@ -435,6 +437,7 @@ export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Prom
     }
 
     const doc = mj.startup.getDocument(parsedDoc);
+    doc.reset({ inputJax: [0] });
 
     // Inner try/finally ensures doc.clear() always runs — even if renderPromise() or
     // outerHTML() throws. Without this guarantee, a thrown error leaves the document
