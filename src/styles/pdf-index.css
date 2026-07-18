@@ -13,7 +13,7 @@
 
 /* Letter-jump navigation bar */
 #libre-index-nav {
-  font-family: 'Atkinson Hyperlegible', Arial, sans-serif;
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif, 'Noto Color Emoji';
   font-size: 12px;
   margin-bottom: 1em;
   padding-bottom: 0.4em;

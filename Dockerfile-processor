@@ -26,7 +26,7 @@ WORKDIR /usr/src/shapeshift
 
 # Install Node only (no build tools needed at runtime)
 RUN apt-get update -y \
-    && apt-get install -y --no-install-recommends curl ca-certificates \
+    && apt-get install -y --no-install-recommends curl ca-certificates fonts-noto-color-emoji \
     && curl -fsSL https://deb.nodesource.com/setup_24.x | bash - \
     && apt-get install -y --no-install-recommends nodejs \
     && rm -rf /var/lib/apt/lists/* \

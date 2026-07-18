@@ -88,7 +88,7 @@ html, body {
   margin: 0;
   padding: 0;
   width: 100%;
-  font-family: 'Atkinson Hyperlegible', sans-serif;
+  font-family: 'Atkinson Hyperlegible', sans-serif, 'Noto Color Emoji';
   font-size: 9.25pt;
 }
 
@@ -191,7 +191,7 @@ picture > img {
 #libre-print-directory-header {
   color: white !important;
   font-size: 1.6em !important;
-  font-family: 'Atkinson Hyperlegible', Arial, sans-serif !important;
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif, 'Noto Color Emoji' !important;
   text-transform: uppercase;
   font-weight: bold;
   margin: 0 0 0 1% !important;
@@ -419,7 +419,7 @@ picture > img {
 }
 .box-legend>span {
   float:left;
-  font-family: 'Atkinson Hyperlegible', Arial, sans-serif !important;
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif, 'Noto Color Emoji' !important;
   font-size:1.2rem!important;
   font-weight:400!important;
   color:#fff;
@@ -429,7 +429,7 @@ picture > img {
 }
 .box-legend p {
   float:left;
-  font-family: 'Atkinson Hyperlegible', Arial, sans-serif !important;
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif, 'Noto Color Emoji' !important;
   font-size:1.2rem!important;
   font-weight:400!important;
   color:#fff;
@@ -556,7 +556,7 @@ picture > img {
 .box-structure>header *,
 .box-theorem>header *,
 .box-warning>header * {
-  font-family: 'Atkinson Hyperlegible', Arial, sans-serif !important;
+  font-family: 'Atkinson Hyperlegible', Arial, sans-serif, 'Noto Color Emoji' !important;
   font-size:1.2rem!important;
   font-weight:400!important;
   color:#fff!important;
