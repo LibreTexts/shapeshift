@@ -70,10 +70,9 @@ export class JobService {
         log.debug(`USE_LOCAL_STORAGE is set to ${useLocalStorage}`);
       }
 
-      const enabledFormats =
-        Environment.getSystemEnvironment() === 'PRODUCTION'
-          ? this.allFormats
-          : (Environment.getOptional('ENABLED_FORMATS', this.allFormats.join(',')).split(',') as JobOutputFormat[]);
+      const enabledFormats = Environment.getOptional('ENABLED_FORMATS', this.allFormats.join(',')).split(
+        ',',
+      ) as JobOutputFormat[];
       log.debug(`ENABLED_FORMATS is set to ${enabledFormats.join(', ')}`);
 
       try {
