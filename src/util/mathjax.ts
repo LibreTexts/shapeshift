@@ -479,6 +479,13 @@ export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Prom
         $(this).find('svg').first().attr('aria-label', speech);
       }
     });
+
+    // Repaint compile errors to readable light background + red text
+    $('g[data-mjx-error]').each(function () {
+      const $err = $(this);
+      $err.find('rect[data-background]').attr('fill', '#FFF3F3').attr('stroke', 'none');
+      $err.find('g, text').attr('fill', 'red').attr('stroke', 'red');
+    });
     return $.html();
   } catch (err) {
     // Graceful degradation: return original HTML with raw LaTeX.
