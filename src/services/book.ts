@@ -894,6 +894,9 @@ export class BookService {
 
     for (const el of topLevel) {
       const e = $(el);
+      // If embed lives inside a <figure>, replace entire figure.
+      const figure = e.closest('figure');
+      const target = figure.length ? figure : e;
       const tag = el.tagName?.toLowerCase() ?? 'unknown';
       const url = extractInteractiveUrl($, el, pageUrl);
       const label = getInteractiveLabel(tag, url);
@@ -917,12 +920,12 @@ export class BookService {
           ${qrHtml}
         </div>`;
 
-      const isInsideBox = e.parents('.box-interactive').length > 0;
+      const isInsideBox = target.parents('.box-interactive').length > 0;
       const placeholder = isInsideBox
         ? $(`<div class="interactive-placeholder">${innerHtml}</div>`)
         : $(`<div class="box-interactive interactive-placeholder">${innerHtml}</div>`);
 
-      e.replaceWith(placeholder);
+      target.replaceWith(placeholder);
     }
 
     return $.html();
