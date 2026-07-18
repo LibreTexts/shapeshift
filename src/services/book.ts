@@ -894,9 +894,9 @@ export class BookService {
 
     for (const el of topLevel) {
       const e = $(el);
-      // If embed lives inside a <figure>, replace entire figure.
-      const figure = e.closest('figure');
-      const target = figure.length ? figure : e;
+      // If embed lives inside a <figure> or CXone video widget, replace the whole wrapper.
+      const wrapper = e.closest('figure, .mt-video-widget');
+      const target = wrapper.length ? wrapper : e;
       const tag = el.tagName?.toLowerCase() ?? 'unknown';
       const url = extractInteractiveUrl($, el, pageUrl);
       const label = getInteractiveLabel(tag, url);
