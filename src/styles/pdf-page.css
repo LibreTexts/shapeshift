@@ -1,3 +1,7 @@
+:root {
+  --body-font-size: 9.25pt;
+}
+
 @page {
   size: 8.5in 11in;
   margin: 0.75in 0.625in 0.9in; /* top, horizontal, bottom */
@@ -89,7 +93,7 @@ html, body {
   padding: 0;
   width: 100%;
   font-family: 'Atkinson Hyperlegible', sans-serif, 'Noto Color Emoji';
-  font-size: 9.25pt;
+  font-size: var(--body-font-size);
 }
 
 h1, h2, h3, h4, h5, h6 {
@@ -113,12 +117,8 @@ h4 {
   font-size: 11.75pt;
 }
 
-h5 {
-  font-size: 10.44pt;
-}
-
-h6 {
-  font-size: 9.29pt;
+h5, h6 {
+  font-size: var(--body-font-size);
 }
 
 .pdf-title-divider {
@@ -344,7 +344,7 @@ picture > img {
 .box-structure p,
 .box-theorem p,
 .box-warning p {
-  font-size:1.1rem
+  font-size: var(--body-font-size);
 }
 .box-objectives {
   background-color:#f1f9fe;
@@ -420,7 +420,7 @@ picture > img {
 .box-legend>span {
   float:left;
   font-family: 'Atkinson Hyperlegible', Arial, sans-serif, 'Noto Color Emoji' !important;
-  font-size:1.2rem!important;
+  font-size: var(--body-font-size);
   font-weight:400!important;
   color:#fff;
   padding:3px 5px 3px 5px!important;
@@ -430,10 +430,9 @@ picture > img {
 .box-legend p {
   float:left;
   font-family: 'Atkinson Hyperlegible', Arial, sans-serif, 'Noto Color Emoji' !important;
-  font-size:1.2rem!important;
+  font-size: var(--body-font-size);
   font-weight:400!important;
   color:#fff;
-  font-size:15px!important;
   padding:3px 5px 3px 5px!important;
   margin:0 0 3px 0;
   border-radius:0
@@ -557,7 +556,7 @@ picture > img {
 .box-theorem>header *,
 .box-warning>header * {
   font-family: 'Atkinson Hyperlegible', Arial, sans-serif, 'Noto Color Emoji' !important;
-  font-size:1.2rem!important;
+  font-size: var(--body-font-size);
   font-weight:400!important;
   color:#fff!important;
   width:auto!important;
@@ -636,6 +635,14 @@ figcaption {
   margin-right: 5%;
   margin-top: 0.3em;
   break-inside: avoid-page;
+}
+
+figcaption p {
+  font-size: inherit;
+}
+
+figcaption span {
+  font-size: inherit;
 }
 
 .pdf-title-divider + figure {
