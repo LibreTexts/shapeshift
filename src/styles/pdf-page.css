@@ -496,6 +496,20 @@ picture > img {
   width: 100px;
   height: 100px;
 }
+.interactive-placeholder-caption {
+  margin-top: 8px;
+  padding-top: 8px;
+  border-top: 1px solid #ddd;
+  font-size: 0.8rem !important;
+  color: #555 !important;
+}
+.interactive-placeholder-caption p {
+  margin: 0 0 4px 0 !important;
+  font-size: 0.8rem !important;
+}
+.interactive-placeholder-caption a {
+  color: #127abf !important;
+}
 .box-warning .box-legend>span {
   background-color:#9e0000
 }

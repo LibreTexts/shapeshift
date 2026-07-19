@@ -895,8 +895,9 @@ export class BookService {
     for (const el of topLevel) {
       const e = $(el);
       // If embed lives inside a <figure> or CXone video widget, replace the whole wrapper.
-      const wrapper = e.closest('figure, .mt-video-widget');
-      const target = wrapper.length ? wrapper : e;
+      const figure = e.closest('figure');
+      const widget = e.closest('.mt-video-widget');
+      const target = figure.length ? figure : widget.length ? widget : e;
       const tag = el.tagName?.toLowerCase() ?? 'unknown';
       const url = extractInteractiveUrl($, el, pageUrl);
       const label = getInteractiveLabel(tag, url);
@@ -909,6 +910,12 @@ export class BookService {
         /* QR generation failed — still show link */
       }
 
+      // Preserve authors' figcaption (citation, attribution, permissions/licensing, etc.)
+      const captionEl = figure.length ? figure.find('figcaption') : $();
+      const captionHtml = captionEl.length
+        ? `<div class="interactive-placeholder-caption">${captionEl.html()}</div>`
+        : '';
+
       const innerHtml = `
         <div class="box-legend"><span>${label}</span></div>
         <div class="interactive-placeholder-body">
@@ -918,7 +925,8 @@ export class BookService {
             <p class="interactive-placeholder-url">${url}</p>
           </div>
           ${qrHtml}
-        </div>`;
+        </div>
+        ${captionHtml}`;
 
       const isInsideBox = target.parents('.box-interactive').length > 0;
       const placeholder = isInsideBox
