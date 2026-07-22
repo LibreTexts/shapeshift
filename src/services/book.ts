@@ -32,6 +32,7 @@ const INTERACTIVE_SELECTOR = 'iframe, video, audio, canvas, embed, object, apple
 
 const DOMAIN_LABELS: Record<string, string> = {
   'youtube.com': 'YouTube Video',
+  'youtube-nocookie.com': 'YouTube Video',
   'youtu.be': 'YouTube Video',
   'vimeo.com': 'Vimeo Video',
   'h5p.org': 'H5P Interactive Activity',
@@ -79,7 +80,41 @@ function extractInteractiveUrl($: cheerio.CheerioAPI, el: Element, pageUrl: stri
     }
   }
 
-  return src || pageUrl;
+  return normalizeVideoUrl(src || pageUrl);
+}
+
+/**
+ * Rewrite YouTube and Vimeo embeds to their desktop watch page.
+ */
+function normalizeVideoUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    const start = u.searchParams.get('start') || u.searchParams.get('t'); // seconds
+
+    // YouTube: /embed/<id>  and  /embed/videoseries?list=<id> (playlist)
+    if (/(^|\.)(youtube\.com|youtube-nocookie\.com)$/.test(u.hostname)) {
+      const m = u.pathname.match(/^\/embed\/([^/?#]+)/);
+      if (!m) return url; // already /watch, /playlist, etc.
+      if (m[1] === 'videoseries') {
+        const list = u.searchParams.get('list');
+        return list ? `https://www.youtube.com/playlist?list=${list}` : url;
+      }
+      const t = start ? `&t=${start.replace(/s$/, '')}s` : '';
+      return `https://www.youtube.com/watch?v=${m[1]}${t}`;
+    }
+
+    // Vimeo: player.vimeo.com/video/<id>
+    if (u.hostname === 'player.vimeo.com') {
+      const m = u.pathname.match(/^\/video\/([^/?#]+)/);
+      if (!m) return url;
+      const t = start ? `#t=${start.replace(/s$/, '')}s` : '';
+      return `https://vimeo.com/${m[1]}${t}`;
+    }
+
+    return url;
+  } catch {
+    return url;
+  }
 }
 
 function getInteractiveLabel(tag: string, url: string): string {
