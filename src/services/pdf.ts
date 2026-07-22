@@ -644,8 +644,6 @@ export class PDFService {
         throw new Error('Preflight checks failed: Prince binary is not properly configured');
       }
 
-      // Pre-render math. Manually prepend the page title since addPageTitle()
-      // would suppress it (the page's ID matches _bookID in single-page mode).
       const rawBody = pageInfo.body.join('');
       const bodyWithTitle = this.addPageTitle(pageInfo, rawBody);
       const renderedBody = await prerenderMath(this.decodeHTML(bodyWithTitle), pageInfo);
@@ -822,7 +820,8 @@ export class PDFService {
       'TitlePage',
     ];
     const isInExcludedList = titleExclusions.some((e) => pageInfo.title.includes(e));
-    const isTableOfContents = pageInfo.pageID.pageNum === this._bookID.pageNum;
+    // Suppress redundant title on full book's root/cover/TOC page.
+    const isTableOfContents = pageInfo.pageID.pageNum === this._bookID.pageNum && this._allPages.length > 1;
     const hasChildren = !!pageInfo.subpages?.length;
     const shouldRenderTitle = !(isInExcludedList || isTableOfContents || hasChildren);
     const anchor = `page-${pageInfo.pageID}`;
