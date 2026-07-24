@@ -482,6 +482,7 @@ picture > img {
   font-size: 0.85rem !important;
 }
 .interactive-placeholder-url {
+  display: none; /* hidden for digital, shown for print */
   margin: 2px 0 0 0 !important;
   font-size: 0.8rem !important;
   color: #555 !important;
@@ -498,6 +499,7 @@ picture > img {
 }
 .interactive-placeholder-caption {
   margin-top: 8px;
+  margin-bottom: 8px;
   padding-top: 8px;
   border-top: 1px solid #ddd;
   font-size: 0.8rem !important;

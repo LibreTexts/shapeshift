@@ -17,3 +17,7 @@ a, a:visited {
 .print-url {
   font-size: 0.9em;
 }
+
+/* Interactive placeholder: show raw URL, hide (non-clickable) link line */
+.interactive-placeholder-link { display: none !important; }
+.interactive-placeholder-url  { display: block !important; }
