@@ -951,8 +951,14 @@ export class BookService {
         ? `<div class="interactive-placeholder-caption">${captionEl.html()}</div>`
         : '';
 
+      const box = target.closest('.box-interactive');
+      const isInsideBox = box.length > 0;
+      // Prefer the enclosing box's authored title over derived, if exists
+      const boxLabel = box.find('.box-legend').first().text().trim();
+      const legendHtml = isInsideBox && boxLabel ? '' : `<div class="box-legend"><span>${label}</span></div>`;
+
       const innerHtml = `
-        <div class="box-legend"><span>${label}</span></div>
+        ${legendHtml}
         <div class="interactive-placeholder-body">
           <div class="interactive-placeholder-info">
             <p class="interactive-placeholder-text">This interactive element is not available in this format. Visit the link or scan the QR code to access it online.</p>
@@ -963,7 +969,6 @@ export class BookService {
         </div>
         ${captionHtml}`;
 
-      const isInsideBox = target.parents('.box-interactive').length > 0;
       const placeholder = isInsideBox
         ? $(`<div class="interactive-placeholder">${innerHtml}</div>`)
         : $(`<div class="box-interactive interactive-placeholder">${innerHtml}</div>`);
