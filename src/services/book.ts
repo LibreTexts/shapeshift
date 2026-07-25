@@ -567,9 +567,11 @@ export class BookService {
 
     const authorTag = parsedTags.find((t) => t.startsWith('authorname:'))?.replace('authorname:', '');
 
+    const title = pageDetails.title?.trim() || '';
     const printInfo = await this.resolvePrintInfo({
       authorTag,
       tags: parsedTags,
+      title,
     });
 
     return {
@@ -595,7 +597,7 @@ export class BookService {
       // @ts-expect-error needs fix upstream in cxone sdk
       tail: pageDetails.content?.tail ?? '',
       tags: parsedTags,
-      title: pageDetails.title?.trim() || '',
+      title,
       url,
     };
   }
@@ -756,7 +758,15 @@ export class BookService {
     return data.author;
   }
 
-  public async resolvePrintInfo({ authorTag, tags }: { authorTag?: string; tags: string[] }): Promise<BookPrintInfo> {
+  public async resolvePrintInfo({
+    authorTag,
+    tags,
+    title,
+  }: {
+    authorTag?: string;
+    tags: string[];
+    title: string;
+  }): Promise<BookPrintInfo> {
     const info: BookPrintInfo = {
       attributionPrefix: '',
       authorName: '',
@@ -765,7 +775,7 @@ export class BookService {
       programName: '',
       programURL: '',
       spineTitle: '',
-      title: 'null',
+      title,
     };
     for (const tagRaw of tags) {
       const tag = tagRaw.replace(/\\\\/g, '\n');
@@ -776,6 +786,7 @@ export class BookService {
           : tag.startsWith('lulu,')
             ? tag.split(',')
             : [];
+      if (!items.length) continue;
       info.title = items[1] ?? '';
       info.authorName = items[2] ?? '';
       info.companyName = items[3] ?? '';
