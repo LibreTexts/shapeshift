@@ -803,6 +803,8 @@ export class BookService {
         if (author.programURL) info.programURL = author.programURL;
       }
     }
+    // Non-breaking hyphens so hyphenated names don't wrap mid-name on covers/spine (PDF + EPUB).
+    info.authorName = info.authorName.replace(/-/g, '‑');
     return info;
   }
 
