@@ -616,6 +616,21 @@ picture > img {
   background-color:#9e0000
 }
 
+/* Code blocks */
+pre {
+  color: green;
+}
+
+code {
+  color: green;
+}
+
+/* Binder cells */
+.thebelab-widget {
+  color: green;
+  margin-left: 2.5em;
+}
+
 /* Zero-width anchor target for internal PDF links — ensures Prince registers
    a named destination without affecting visible layout */
 .pdf-anchor {
