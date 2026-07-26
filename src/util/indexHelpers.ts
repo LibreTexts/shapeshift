@@ -20,6 +20,7 @@ const INDEX_TAG_EXCLUSIONS = [
   'program',
   'showtoc',
   'source',
+  'transcluded',
   '@',
   '-',
 ] as const;
