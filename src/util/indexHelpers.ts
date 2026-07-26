@@ -190,7 +190,6 @@ export function generateIndexHTML(data: IndexData): string {
           <li class="index-entry">
             <div class="index-entry-line">
               <span class="index-entry-term">${escapeHTML(term.name)}</span>
-              <span class="index-entry-leader" aria-hidden="true"></span>
               <span class="index-entry-pages">${pageLinks}</span>
             </div>
           </li>

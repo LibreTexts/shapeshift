@@ -39,7 +39,7 @@
 }
 
 .index-letter-group:first-child .index-letter-heading {
-  margin-top: 0
+  margin-top: 0;
 }
 
 .index-letter-heading {
@@ -52,6 +52,7 @@
 }
 
 h2.index-letter-label {
+  margin: 0;
   line-height: 1;
   flex-shrink: 0;
   min-width: 1rem;
@@ -80,30 +81,19 @@ li.index-entry {
 }
 
 .index-entry-line {
-  display: flex;
-  justify-content: space-between;
-  align-items: baseline;
-  gap: 0.25rem;
+  display: block;
 }
 
 .index-entry-term {
-  flex: 1 1 auto;
   hyphens: auto;
   -webkit-hyphens: auto;
 }
 
-.index-entry-leader {
-  flex: 1 1 auto;
-  border-bottom: 1px dotted #bbb;
-  margin: 0 0.2rem 3px;
-  min-width: 0.5rem;
-}
-
 .index-entry-pages {
+  display: block;
   font-size: 9px;
-  flex-shrink: 0;
-  text-align: right;
-  max-width: 48%;
+  text-align: left;
+  padding-left: 2.5em;
 }
 
 .index-entry-pages a {
