@@ -710,6 +710,16 @@ figcaption img {
   height: 0;
 }
 
+.content-attributions,
+.content-attributions p,
+.content-attributions li {
+  font-size: 8.325pt !important;
+}
+
+.content-attributions ul {
+  margin-top: 0;
+}
+
 /* List Styles */
 dd, dd, ol, ul {
   padding-left: 2em;

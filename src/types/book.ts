@@ -16,6 +16,7 @@ export type BookPageProperty = {
 export type BookPageInfo = {
   authorTag?: string;
   body: string[];
+  contentAttributions?: ContentAttribution[];
   head: string;
   license: LicenseInfo | null;
   matterType?: BookMatterType;
@@ -29,6 +30,14 @@ export type BookPageInfo = {
   tags: string[];
   title: string;
   url: string;
+};
+
+export type ContentAttribution = {
+  title: string;
+  url: string;
+  author?: { name: string; url?: string };
+  license: LicenseInfo | null;
+  source?: string;
 };
 
 export type BookPrintInfo = {

@@ -7,7 +7,7 @@ import { getLicense } from '../util/licensing';
 import { LibraryService } from './library';
 import { GetPagesResponse, PageExtended, Tags } from '@libretexts/cxone-expert-node';
 import { dynamicDetailedLicensingLayout, dynamicLicensingLayout, dynamicTOCLayout } from '../util/pageConstants';
-import { BookPageInfoWithContent, BookPageProperty, BookPages } from '../types/book';
+import { BookPageInfoWithContent, BookPageProperty, BookPages, ContentAttribution } from '../types/book';
 import { BookMatterType, BookPageInfo, BookPrintInfo } from '../types/book';
 import PageID from '../util/pageID';
 import { log as logService } from '../lib/log';
@@ -133,6 +133,7 @@ export class BookService {
   private readonly logger: LogLayer;
   private readonly logName: 'BookService';
   private authorsCache = new Map<string, Record<string, any>>();
+  private attributionCache = new Map<string, ContentAttribution | null>();
   private readonly DEFAULT_THUMBNAILS = {
     BACK_MATTER: 'https://cdn.libretexts.net/DefaultImages/Back%20matter.jpg',
     DEFAULT: 'https://cdn.libretexts.net/DefaultImages/default.png',
@@ -568,6 +569,12 @@ export class BookService {
     const authorTag = parsedTags.find((t) => t.startsWith('authorname:'))?.replace('authorname:', '');
 
     const title = pageDetails.title?.trim() || '';
+    const body = Array.isArray((pageDetails as any).content?.body)
+      ? ((pageDetails as any).content.body as any[]).filter((item): item is string => typeof item === 'string')
+      : (pageDetails as any).content?.body
+        ? [(pageDetails as any).content.body as string]
+        : [];
+    const contentAttributions = await this.getContentAttributions(body.join(''), Number(p['@id']), libService);
     const printInfo = await this.resolvePrintInfo({
       authorTag,
       tags: parsedTags,
@@ -576,11 +583,8 @@ export class BookService {
 
     return {
       ...(authorTag && { authorTag }),
-      body: Array.isArray((pageDetails as any).content?.body)
-        ? ((pageDetails as any).content.body as any[]).filter((item): item is string => typeof item === 'string')
-        : (pageDetails as any).content?.body
-          ? [(pageDetails as any).content.body as string]
-          : [],
+      body,
+      ...(contentAttributions.length && { contentAttributions }),
       // @ts-expect-error needs fix upstream in cxone sdk
       head: pageDetails.content?.head ?? '',
       license: getLicense(parsedTags),
@@ -756,6 +760,75 @@ export class BookService {
 
     this.authorsCache.set(authorTag, data.author);
     return data.author;
+  }
+
+  /** LibreLens port **/
+  private async getContentAttributions(
+    body: string,
+    currentPageNum: number,
+    libService: LibraryService,
+  ): Promise<ContentAttribution[]> {
+    if (!body) return [];
+    const $ = cheerio.load(body, null, false);
+
+    // Collect unique lt-<subdomain>-<pageID> tokens, excluding the current page itself.
+    const sources = new Map<string, { lib: string; pageNum: number }>();
+    $('[class]').each((_i, el) => {
+      for (const cls of ($(el).attr('class') || '').split(/\s+/)) {
+        const m = cls.match(/^lt-(\w+)-(\d+)$/);
+        if (!m) continue;
+        const pageNum = Number(m[2]);
+        if (pageNum === currentPageNum) continue;
+        sources.set(cls, { lib: m[1], pageNum });
+      }
+    });
+    if (!sources.size) return [];
+
+    const attributions: ContentAttribution[] = [];
+    for (const [key, { lib, pageNum }] of sources) {
+      let entry = this.attributionCache.get(key);
+      if (entry === undefined) {
+        entry = await this.fetchAttribution(lib, pageNum, libService);
+        this.attributionCache.set(key, entry);
+      }
+      if (entry) attributions.push(entry);
+    }
+    return attributions;
+  }
+
+  private async fetchAttribution(
+    lib: string,
+    pageNum: number,
+    libService: LibraryService,
+  ): Promise<ContentAttribution | null> {
+    try {
+      await CXOneRateLimiter.waitUntilAPIAvailable(2);
+      const page = await libService.api.pages.getPage(pageNum);
+      const tags = isNonNullCXOneObject(page.tags) ? this.parseTags(page.tags) : [];
+
+      // Author: authorname: tag → commons lookup; author@ tags override the display name (joined).
+      let author: ContentAttribution['author'];
+      const authorTag = tags.find((t) => t.startsWith('authorname:'))?.replace('authorname:', '');
+      if (authorTag) {
+        const resolved = await this.getAuthor(authorTag);
+        if (resolved?.name) author = { name: resolved.name, ...(resolved.nameURL && { url: resolved.nameURL }) };
+      }
+      const authorOverrides = tags.filter((t) => t.startsWith('author@')).map((t) => t.replace('author@', ''));
+      if (authorOverrides.length) author = { name: authorOverrides.join(', ') };
+
+      const source = tags.find((t) => t.startsWith('source@'))?.replace('source@', '');
+
+      return {
+        title: page.title?.trim() || '',
+        url: page['uri.ui'] || '',
+        ...(author && { author }),
+        license: getLicense(tags),
+        ...(source && source !== 'native' && { source }),
+      };
+    } catch (error) {
+      this.logger.withMetadata({ lib, pageNum }).warn('Could not fetch transcluded source for attribution');
+      return null;
+    }
   }
 
   public async resolvePrintInfo({

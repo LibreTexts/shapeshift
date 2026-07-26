@@ -1,4 +1,4 @@
-import { BookPageInfo } from '../types/book';
+import { BookPageInfo, ContentAttribution } from '../types/book';
 import { ImageConstants } from './imageConstants';
 import { LicenseInfo } from '../types/licensing';
 
@@ -149,8 +149,39 @@ export function getLicense(pageTags: string[]): LicenseInfo | null {
 }
 
 // TODO: non-English support
+export function renderContentAttributions(attributions?: ContentAttribution[]): string {
+  if (!attributions?.length) return '';
+
+  const items = attributions
+    .map((a) => {
+      const titleLink = `<a href="${a.url}" target="_blank">${a.title || a.url}</a>`;
+      let line = titleLink;
+      if (a.author) {
+        line += a.author.url
+          ? ` by <a rel="nofollow" href="${a.author.url}" target="_blank">${a.author.name}</a>`
+          : ` by ${a.author.name}`;
+      }
+      const licenseName = getLicenseDisplayTitle(a.license);
+      line += a.license
+        ? ` is licensed <a rel="nofollow" href="${a.license.link}" target="_blank">${licenseName}</a>.`
+        : ' has no license indicated.';
+      if (a.source) {
+        line += ` Original source: <a rel="nofollow" href="${a.source}" target="_blank">${a.source}</a>.`;
+      }
+      return `<li>${line}</li>`;
+    })
+    .join('');
+
+  return `
+    <section class="content-attributions" aria-label="Attributions for content from other sources">
+      <ul>${items}</ul>
+    </section>`;
+}
+
+// TODO: non-English support
 export function renderAutoAttribution(page: BookPageInfo): string {
-  const { tags, printInfo, license, title, url, authorTag } = page;
+  const { tags, printInfo, license, title, url, authorTag, contentAttributions } = page;
+  const attributionsHTML = renderContentAttributions(contentAttributions);
 
   // Parse tag-based overrides
   const authorNames: string[] = [];
@@ -222,7 +253,7 @@ export function renderAutoAttribution(page: BookPageInfo): string {
       <div class="autoattribution-wrapper">
         <hr class="autoattribution-divider" />
         <div class="autoattribution">
-          <p>This page titled <a href="${url}" target="_blank">${title}</a> is shared under a <a rel="nofollow" href="${licenseURL}" target="_blank">${licenseName}</a> license and was authored, remixed, and/or curated by ${authorFragment}${programFragment}${sourceClause}</p>
+          <p>This page titled <a href="${url}" target="_blank">${title}</a> is shared under a <a rel="nofollow" href="${licenseURL}" target="_blank">${licenseName}</a> license and was authored, remixed, and/or curated by ${authorFragment}${programFragment}${sourceClause}</p>${attributionsHTML}
         </div>
       </div>
     `;
@@ -234,7 +265,7 @@ export function renderAutoAttribution(page: BookPageInfo): string {
     <div class="autoattribution-wrapper">
       <hr class="autoattribution-divider" />
       <div class="autoattribution">
-        <p><a href="${url}" target="_blank">${title}</a> is shared under a <a rel="nofollow" href="${licenseURL}" target="_blank">${licenseName}</a> license and was authored, remixed, and/or curated by ${fallbackAuthor}.</p>
+        <p><a href="${url}" target="_blank">${title}</a> is shared under a <a rel="nofollow" href="${licenseURL}" target="_blank">${licenseName}</a> license and was authored, remixed, and/or curated by ${fallbackAuthor}.</p>${attributionsHTML}
       </div>
     </div>
   `;
