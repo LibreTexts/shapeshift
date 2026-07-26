@@ -28,10 +28,7 @@ thead th {
   color: #ffffff;
   font-weight: bold;
   border-color: var(--pdf-main-color, #127bc4);
-}
-
-thead tr {
-  border-bottom: 2pt solid var(--pdf-main-color, #127bc4);
+  border-bottom: none;
 }
 
 /* Alternating row fill — light neutral tint for visual rhythm without color-only reliance */
