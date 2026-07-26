@@ -420,7 +420,7 @@ picture > img {
 .box-legend>span {
   float:left;
   font-family: 'Atkinson Hyperlegible', Arial, sans-serif, 'Noto Color Emoji' !important;
-  font-size: var(--body-font-size);
+  font-size: 1.2rem !important;
   font-weight:400!important;
   color:#fff;
   padding:3px 5px 3px 5px!important;
@@ -430,7 +430,7 @@ picture > img {
 .box-legend p {
   float:left;
   font-family: 'Atkinson Hyperlegible', Arial, sans-serif, 'Noto Color Emoji' !important;
-  font-size: var(--body-font-size);
+  font-size: 1.2rem !important;
   font-weight:400!important;
   color:#fff;
   padding:3px 5px 3px 5px!important;
