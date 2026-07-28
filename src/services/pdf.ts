@@ -1838,11 +1838,11 @@ ${stripBlocklistedScripts(pageTailHTML)}
   }
 
   public getShouldShowMarginContent(pageInfo: BookPageInfo): boolean {
-    return !['InfoPage', 'ProgramPage', 'Title Page', 'TitlePage'].includes(pageInfo.title);
+    return !['InfoPage', 'Title Page', 'TitlePage'].includes(pageInfo.title);
   }
 
   private getShouldRenderAttribution(pageInfo: BookPageInfo): boolean {
-    return !pageInfo.matterType;
+    return !['InfoPage', 'Title Page', 'TitlePage'].includes(pageInfo.title);
   }
 
   /**

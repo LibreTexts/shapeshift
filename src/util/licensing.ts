@@ -265,7 +265,7 @@ export function renderAutoAttribution(page: BookPageInfo): string {
     <div class="autoattribution-wrapper">
       <hr class="autoattribution-divider" />
       <div class="autoattribution">
-        <p><a href="${url}" target="_blank">${title}</a> is shared under a <a rel="nofollow" href="${licenseURL}" target="_blank">${licenseName}</a> license and was authored, remixed, and/or curated by ${fallbackAuthor}.</p>${attributionsHTML}
+        <p>This page titled <a href="${url}" target="_blank">${title}</a> is shared under a <a rel="nofollow" href="${licenseURL}" target="_blank">${licenseName}</a> license and was authored, remixed, and/or curated by ${fallbackAuthor}.</p>${attributionsHTML}
       </div>
     </div>
   `;
