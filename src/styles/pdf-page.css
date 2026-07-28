@@ -140,6 +140,10 @@ body {
   text-align: justify;
 }
 
+.mt-content-container .mt-topic-hierarchy-listings ol, p, ul {
+  font-size: var(--body-font-size) !important;
+}
+
 #elm-main-content {
   padding: 0 !important;
 }
