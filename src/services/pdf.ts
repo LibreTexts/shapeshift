@@ -1540,7 +1540,12 @@ ${stripBlocklistedScripts(pageTailHTML)}
           htmlOnly,
           pageID: pageInfo.pageID,
           pageInfo,
-          pageBodyHTML: rawBody,
+          pageBodyHTML: `
+            <div id="libre-print-directory-header-container">
+              <h1 id="libre-print-directory-header">Glossary</h1>
+            </div>
+            ${rawBody}
+          `,
           pageHeadHTML: pageInfo.head,
           pageTailHTML: pageInfo.tail,
           sortKey,
@@ -1707,7 +1712,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
 
       // The back matter "Glossary" page is replaced server-side by a generated alphabetical
       // definition list parsed from the CXOne table authored by instructors.
-      if (p.matterType === 'Back' && p.title === 'Glossary') {
+      if (p.matterType === 'Back' && (p.title === 'Glossary' || p.url.toLowerCase().includes('_glossary'))) {
         backMatterIdx += 1;
         const glossFileName = `9999:${backMatterIdx}`;
         conversionTasks.push({
