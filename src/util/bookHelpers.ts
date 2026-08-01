@@ -42,8 +42,10 @@ export async function generateSubpageListing(pageInfo: BookPageInfo, level = 2, 
       const isSubtopic = level > 2 ? `indent${level - 2}` : null;
       const subPageDir = await generateSubpageListing(elem, level + 1, resolvedIsSubTOC);
       const subListSpacing = subPageDir?.length > 0 ? `libre-print-sublisting${level - 2}` : '';
+      // "Chapter" tier: a nested entry whose children are all leaf pages.
+      const isChapter = level > 2 && subPageDir.length > 0 && !!elem.subpages?.every((sp) => !sp.subpages?.length);
       if (!elem.url || !elem.title) return '';
-      return `<li><div class="nobreak ${isSubtopic} ${subListSpacing}"><${prefix}><a href="#page-${elem.pageID}" title="${elem.title}">${elem.title}</a></${prefix}></div>${subPageDir}</li>`;
+      return `<li><div class="nobreak ${isSubtopic} ${subListSpacing} ${isChapter ? 'libre-print-chapter' : ''}"><${prefix}><a href="#page-${elem.pageID}" title="${elem.title}">${elem.title}</a></${prefix}></div>${subPageDir}</li>`;
     }),
   );
   const inner = innerRaw.join('');

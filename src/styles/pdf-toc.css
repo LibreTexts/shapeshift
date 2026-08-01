@@ -35,6 +35,12 @@
   font-size: 10.44pt !important;
 }
 
+/* Bold "Chapter" tier (entries directly above leaf pages) */
+.libre-print-chapter span,
+.libre-print-chapter span a {
+  font-weight: bold;
+}
+
 .libre-print-list ul {
   margin: 0;
   padding: 0;
