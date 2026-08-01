@@ -664,10 +664,11 @@ figure {
 
 figcaption {
   caption-side: bottom;
-  text-align: justify;
+  text-align: center;
   font-size: 90%;
   margin-left: 5%;
   margin-right: 5%;
+  width: 100%;
   margin-top: 0.3em;
   break-inside: avoid-page;
 }
