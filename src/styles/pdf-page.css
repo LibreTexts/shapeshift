@@ -324,14 +324,11 @@ picture > img {
   page-break-before: avoid;
 }
 .box-emphasis {
-  padding:5px 10px 5px 10px
+  padding: 5px 10px 5px 10px
 }
 .box-adapt,
 .box-query {
-  padding:0!important;
-  border-radius:1px;
-  -moz-border-radius:1px;
-  -webkit-border-radius:1px
+  padding: 0 !important;
 }
 .box-definition p,
 .box-emphasis p,
@@ -461,6 +458,12 @@ picture > img {
 }
 .box-interactive .box-legend>span {
   background-color: #000;
+}
+
+/* box-adapt/box-query force padding:0. Restore the box's usual side padding for the placeholder only */
+.box-adapt .interactive-placeholder,
+.box-query .interactive-placeholder {
+  padding: 0 10px;
 }
 .interactive-placeholder-body {
   display: flex;

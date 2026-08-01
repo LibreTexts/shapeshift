@@ -30,6 +30,27 @@ const DEFAULT_CONTENT_FETCH_CONCURRENCY = 10;
 
 const INTERACTIVE_SELECTOR = 'iframe, video, audio, canvas, embed, object, applet';
 
+// When interactive content is replaced inside one of these boxes, collapse the placeholder into the box rather
+// than spawning a nested box-interactive.
+const BOX_SELECTOR = [
+  '.box-adapt',
+  '.box-definition',
+  '.box-emphasis',
+  '.box-example',
+  '.box-exercise',
+  '.box-interactive',
+  '.box-lemma',
+  '.box-notation',
+  '.box-note',
+  '.box-objectives',
+  '.box-procedure',
+  '.box-proposition',
+  '.box-query',
+  '.box-structure',
+  '.box-theorem',
+  '.box-warning',
+];
+
 const DOMAIN_LABELS: Record<string, string> = {
   'youtube.com': 'YouTube Video',
   'youtube-nocookie.com': 'YouTube Video',
@@ -1037,7 +1058,7 @@ export class BookService {
         ? `<div class="interactive-placeholder-caption">${captionEl.html()}</div>`
         : '';
 
-      const box = target.closest('.box-interactive');
+      const box = target.closest(BOX_SELECTOR.join(', '));
       const isInsideBox = box.length > 0;
       // Prefer the enclosing box's authored title over derived, if exists
       const boxLabel = box.find('.box-legend').first().text().trim();
