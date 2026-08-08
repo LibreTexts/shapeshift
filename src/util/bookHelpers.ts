@@ -8,6 +8,16 @@ export function isCoverpage(input: BookPageInfo | string[]) {
   return tags?.includes('coverpage:yes') || tags?.includes('coverpage:nocommons');
 }
 
+/**
+ * Whether a requested root is a publication in its own right and gets a cover and print
+ * artifacts.
+ */
+export function isPublicationRoot(pageInfo: BookPageInfo) {
+  return (
+    isCoverpage(pageInfo) || pageInfo.tags?.some((t) => ['article:topic-guide', 'article:topic-category'].includes(t))
+  );
+}
+
 export async function generateSubpageListing(pageInfo: BookPageInfo, level = 2, isSubTOC?: boolean): Promise<string> {
   if (!pageInfo.subpages?.length) return '';
   let resolvedIsSubTOC = isSubTOC;

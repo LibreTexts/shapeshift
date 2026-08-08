@@ -41,7 +41,7 @@ import axios from 'axios';
 import { PassThrough } from 'node:stream';
 import Archiver from 'archiver';
 import { Upload } from '@aws-sdk/lib-storage';
-import { generateSubpageListing, injectDirectoryListing, isCoverpage } from '../util/bookHelpers';
+import { generateSubpageListing, injectDirectoryListing, isCoverpage, isPublicationRoot } from '../util/bookHelpers';
 import { sleep, USER_AGENT } from '../util/util';
 import { renderAutoAttribution } from '../util/licensing';
 
@@ -143,6 +143,10 @@ export class PDFService {
   private _parentMap: Map<string, string> = new Map();
   private _rootPageID: string = '';
   private _allPages: BookPageInfo[] = [];
+  /* True for a book or a chapter (anything that can stand as its own publication) */
+  private _hasCover = false;
+  /* True only for a tagged book, i.e. one whose root page is a cover/TOC */
+  private _isTaggedBook = false;
   private _urlToAnchor: Map<string, string> = new Map();
 
   constructor(bookID: PageID, jobID?: string, opts?: { useLocalStorage?: boolean }) {
@@ -199,6 +203,8 @@ export class PDFService {
     if (!pagesInput?.flat?.length) return null;
     const { flat: pages } = pagesInput;
     this._allPages = pages;
+    this._isTaggedBook = isCoverpage(pagesInput.tree);
+    this._hasCover = isPublicationRoot(pagesInput.tree);
     this.buildUrlToAnchorMap();
     const startTime = Date.now();
     const pagesMap = new Map(pages.map((c) => [c.pageID.toString(), c] as [string, BookPageInfo]));
@@ -449,18 +455,21 @@ export class PDFService {
       // ── Phase 3: Generate Main cover HTML and prepend to the Prince input ──
       // The Main cover doesn't need a page count and must suppress header/footer.
       const coverPageInfo = pagesMap.get(this._bookID.toString())!;
-      const mainCoverHTML = generatePDFCoverHTML({
-        bookInfo: coverPageInfo,
-        coverType: 'Main',
-        numPages: null,
-      });
-      const mainCoverTempPath = await this._createTempFile(mainCoverHTML);
+      const mainCoverTempPath = this._hasCover
+        ? await this._createTempFile(
+            generatePDFCoverHTML({
+              bookInfo: coverPageInfo,
+              coverType: 'Main',
+              numPages: null,
+            }),
+          )
+        : null;
 
       // ── Phase 4: Run Prince conversion ──
+      const fullDocHTMLPaths = mainCoverTempPath ? [mainCoverTempPath, ...allHTMLPaths] : allHTMLPaths;
       this.logger
-        .withMetadata({ totalHTMLFiles: allHTMLPaths.length + 1 })
+        .withMetadata({ totalHTMLFiles: fullDocHTMLPaths.length })
         .info('All HTML generated, running single Prince invocation for full document');
-      const fullDocHTMLPaths = [mainCoverTempPath, ...allHTMLPaths];
       const finalFilePath = await this.generateFullDocumentOutputFilePath();
       const finalDir = getDirectoryPathFromFilePath(finalFilePath);
       await fs.mkdir(finalDir, { recursive: true });
@@ -473,11 +482,11 @@ export class PDFService {
 
       // ── Phase 4b: Generate per-section Individual.zip ──
       try {
-        const totalSections = 1 + pass2Groups.reduce((sum, g) => sum + g.htmlPaths.length, 0);
+        const totalSections = fullDocHTMLPaths.length;
         const pad = Math.max(3, String(totalSections).length);
-        const pagesSections: { htmlPath: string; name: string; pageInfo: BookPageInfo }[] = [
-          { htmlPath: mainCoverTempPath, name: `${'0'.padStart(pad, '0')}_Cover.pdf`, pageInfo: coverPageInfo },
-        ];
+        const pagesSections: { htmlPath: string; name: string; pageInfo: BookPageInfo }[] = mainCoverTempPath
+          ? [{ htmlPath: mainCoverTempPath, name: `${'0'.padStart(pad, '0')}_Cover.pdf`, pageInfo: coverPageInfo }]
+          : [];
         let ordinal = 1;
         for (const { group, htmlPaths } of pass2Groups) {
           for (let i = 0; i < group.tasks.length; i++) {
@@ -490,7 +499,9 @@ export class PDFService {
             ordinal++;
           }
         }
-        await this.generateIndividualPagesZipAndWrite(pagesSections);
+        if (mainCoverTempPath) {
+          await this.generateIndividualPagesZipAndWrite(pagesSections);
+        }
       } catch (pagesError) {
         this.logger
           .withError(pagesError instanceof Error ? pagesError : new Error(String(pagesError)))
@@ -558,7 +569,7 @@ export class PDFService {
       await extractPDFPages({
         inputPath: printFullFilePath,
         outputPath: contentFilePath,
-        pageStart: 2,
+        pageStart: mainCoverTempPath ? 2 : 1, // page 1 is the Main cover, when there is one
       });
       await fs.unlink(printFullFilePath).catch(() => {});
       this.logger.info('Print edition content PDF generated successfully');
@@ -566,47 +577,53 @@ export class PDFService {
       // Clean up HTML temp files now that Prince has consumed them.
       await Promise.all(fullDocHTMLPaths.map((p) => this._deleteTempFile(p).catch(() => {})));
 
-      // Generate print covers (Amazon, CaseWrap, CoilBound, PerfectBound) with retry.
-      this.logger.info('Generating publication covers');
       const numPages = await countPDFPages(finalFilePath);
-      const contentPageCount = numPages - 1; // exclude Main cover
-      const coverConfigs = PDF_COVER_TYPES.filter((t) => t !== 'Main').map((coverType) => ({
-        coverType,
-        numPages: COVER_TYPE_CONFIG[coverType].usesPageCount ? contentPageCount : null,
-        opt: COVER_TYPE_CONFIG[coverType].opt,
-      }));
+      if (mainCoverTempPath) {
+        // Generate print covers (Amazon, CaseWrap, CoilBound, PerfectBound) with retry.
+        this.logger.info('Generating publication covers');
+        const contentPageCount = numPages - 1; // exclude Main cover
+        const coverConfigs = PDF_COVER_TYPES.filter((t) => t !== 'Main').map((coverType) => ({
+          coverType,
+          numPages: COVER_TYPE_CONFIG[coverType].usesPageCount ? contentPageCount : null,
+          opt: COVER_TYPE_CONFIG[coverType].opt,
+        }));
 
-      const coversPath = await this.ensureCoversDirectory();
-      const coverResults = await Promise.allSettled(
-        coverConfigs.map(async (config) => {
-          const result = await this.retryWithBackoff(
-            async () =>
-              await this.generateCover({
-                bookInfo: coverPageInfo,
-                coverType: config.coverType,
-                numPages: config.numPages,
-                opt: config.opt,
-              }),
-            `Generate cover: ${config.coverType}`,
-          );
-          if (!result.success) {
-            const errorMessage = result.error instanceof Error ? result.error.message : JSON.stringify(result.error);
-            this.logger
-              .withMetadata({
-                coverType: config.coverType,
-                error: result.error,
-                errorMessage,
-              })
-              .error('Cover generation failed after retries');
-          }
-          return result;
-        }),
-      );
+        const coversPath = await this.ensureCoversDirectory();
+        const coverResults = await Promise.allSettled(
+          coverConfigs.map(async (config) => {
+            const result = await this.retryWithBackoff(
+              async () =>
+                await this.generateCover({
+                  bookInfo: coverPageInfo,
+                  coverType: config.coverType,
+                  numPages: config.numPages,
+                  opt: config.opt,
+                }),
+              `Generate cover: ${config.coverType}`,
+            );
+            if (!result.success) {
+              const errorMessage = result.error instanceof Error ? result.error.message : JSON.stringify(result.error);
+              this.logger
+                .withMetadata({
+                  coverType: config.coverType,
+                  error: result.error,
+                  errorMessage,
+                })
+                .error('Cover generation failed after retries');
+            }
+            return result;
+          }),
+        );
 
-      const failedCovers = coverResults.filter((r) => r.status === 'rejected').length;
+        const failedCovers = coverResults.filter((r) => r.status === 'rejected').length;
+        if (failedCovers > 0) {
+          throw new Error('One or more covers failed to generate after all retries');
+        }
 
-      if (failedCovers > 0) {
-        throw new Error('One or more covers failed to generate after all retries');
+        await this.mergeToPublicationZipAndWrite({
+          coversDirPath: coversPath,
+          contentFilePath,
+        });
       }
 
       this.logger
@@ -616,10 +633,6 @@ export class PDFService {
         })
         .info('Book conversion completed successfully');
 
-      await this.mergeToPublicationZipAndWrite({
-        coversDirPath: coversPath,
-        contentFilePath,
-      });
       await this.cleanupWorkdir();
       return { filePath: finalFilePath, pageCount: numPages };
     } catch (error) {
@@ -820,8 +833,10 @@ export class PDFService {
       'TitlePage',
     ];
     const isInExcludedList = titleExclusions.some((e) => pageInfo.title.includes(e));
-    // Suppress redundant title on full book's root/cover/TOC page.
-    const isTableOfContents = pageInfo.pageID.pageNum === this._bookID.pageNum && this._allPages.length > 1;
+    // Suppress redundant title on tasks that carry the root node as their pageInfo — the
+    // main TOC, Index and Detailed Licensing all render their own heading. Only applies to a
+    // tagged book: in a subtree the root is an ordinary content page and must keep its title.
+    const isTableOfContents = this._isTaggedBook && pageInfo.pageID.pageNum === this._bookID.pageNum;
     const hasChildren = !!pageInfo.subpages?.length;
     const shouldRenderTitle = !(isInExcludedList || isTableOfContents || hasChildren);
     const anchor = `page-${pageInfo.pageID}`;
@@ -2024,7 +2039,8 @@ ${stripBlocklistedScripts(pageTailHTML)}
           pageID: task.pageID,
           pageInfo: directoryHTML ? treeNode : task.pageInfo,
           pageBodyHTML: directoryHTML ?? rawBody,
-          preRenderedBodyHTML: await this.readPrerenderedBody(prerendered?.[0]),
+          // When a listing was injected, the pre-rendered copy is stale
+          preRenderedBodyHTML: directoryHTML ? undefined : await this.readPrerenderedBody(prerendered?.[0]),
           pageHeadHTML: task.pageInfo.head,
           pageTailHTML: task.pageInfo.tail,
           additionalCSS: directoryHTML
