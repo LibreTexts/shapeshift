@@ -1,5 +1,6 @@
 :root {
   --body-font-size: 9.25pt;
+  --answers-font-size: calc(var(--body-font-size) - 2pt);
 }
 
 @page {
@@ -729,8 +730,52 @@ figcaption img {
 }
 
 /* List Styles */
-dd, dd, ol, ul {
+dl, dd, ol, ul {
   padding-left: 2em;
+}
+
+dt {
+  font-weight: bold;
+}
+
+/* Extracted exercise answers */
+.answers {
+  margin-top: 0.5em;
+  border-top: 1px dashed #ccc;
+  font-size: var(--answers-font-size) !important;
+}
+
+.answers dl, dd, ol, ul, p {
+  font-size: var(--answers-font-size) !important;
+}
+
+.answers p {
+  margin-top: 0.25em;
+  margin-bottom: 0.25em;
+}
+
+.answers-header {
+  font-size: 11.75pt;
+  margin-top: 1em;
+}
+
+.answers dl,
+.answers dd {
+  margin: 0.25em 0 0.25em 0.5em;
+  padding-left: 0;
+}
+
+.answer-entry {
+  margin-top: 0.5em;
+}
+
+.answer-box-title {
+  font-weight: bold;
+}
+
+.answer-moved {
+  font-style: italic;
+  color: #4A4A4A;
 }
 
 /* Center-Justified Text */

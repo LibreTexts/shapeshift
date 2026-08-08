@@ -940,7 +940,8 @@ export class BookService {
           const cmsMarkupFixed = this.autofixCMSMarkup(altTextFixed);
           const emptyParagraphsRemoved = removeEmptyParagraphs(cmsMarkupFixed);
           const interactiveReplaced = await this.replaceInteractiveElements(emptyParagraphsRemoved, p.url);
-          p.body = [interactiveReplaced];
+          const answersExtracted = this.extractBoxAnswers(interactiveReplaced);
+          p.body = [answersExtracted];
         }),
       );
       if (!p.subpages?.length) return;
@@ -1084,5 +1085,42 @@ export class BookService {
     }
 
     return $.html();
+  }
+
+  /**
+   * Extract every <dl> that lives inside a box into an "Answers" section at the end of the page,
+   * labeled with its box's title.
+   */
+  private extractBoxAnswers(content: string): string {
+    if (!content) return content;
+    const $ = cheerio.load(content, null, false);
+    const boxSel = BOX_SELECTOR.join(', ');
+
+    // Every <dl> whose nearest ancestor is a box. Iterating flat list (rather than per-box)
+    // avoids double-counting a <dl> in a nested box.
+    const dls = $('dl')
+      .toArray()
+      .filter((el) => $(el).closest(boxSel).length > 0);
+    if (!dls.length) return content;
+
+    const entries: string[] = [];
+    for (const dlEl of dls) {
+      const dl = $(dlEl);
+      const box = dl.closest(boxSel);
+      // Prefer authored legend HTML (keeps math); fall back to empty title.
+      const titleHtml = box.find('.box-legend').first().html()?.trim() ?? '';
+      const titleBlock = titleHtml ? `<p class="answer-box-title">${titleHtml}</p>` : '';
+      // Reuse the <dt> label ("Answer"/"Solution") for the in-place note
+      const label = dl.find('dt').first().text().trim() || 'Answer';
+      dl.find('dt').remove();
+      const dlHtml = $.html(dl); // <dl> now dd-only
+      entries.push(`<div class="answer-entry">${titleBlock}${dlHtml}</div>`);
+      dl.replaceWith(`<p class="answer-moved">${label} available at the end of this section.</p>`);
+    }
+
+    const answersSection = `<section class="answers" aria-label="Answers"><h2 class="answers-header">Answers</h2>${entries.join(
+      '',
+    )}</section>`;
+    return $.html() + answersSection;
   }
 }
