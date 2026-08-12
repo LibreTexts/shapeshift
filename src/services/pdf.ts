@@ -907,7 +907,7 @@ export class PDFService {
 
       const showMarginContent = this.getShouldShowMarginContent(pageInfo);
       const headerHTML = showMarginContent ? generatePDFHeader(ImageConstants['default']) : '';
-      const sectionNum = extractPageNumberPrefix(pageInfo.title).replace(/\.$/, '');
+      const sectionNum = useRomanNumerals ? '' : extractPageNumberPrefix(pageInfo.title).replace(/\.$/, '');
       const licenseLabel = pageInfo.license?.label ?? '';
       const autoAttribution = this.getShouldRenderAttribution(pageInfo) ? renderAutoAttribution(pageInfo) : '';
       const footerHTML = showMarginContent
@@ -929,10 +929,9 @@ export class PDFService {
             </style>`
           : '';
       // For front matter pages without a section number, override the footer to use roman numerals.
-      const romanNumeralCSS =
-        useRomanNumerals && !sectionPageCSS
-          ? `<style>.pdf-footer-center::after { content: counter(page, lower-roman) string(sectionNum, first); }</style>`
-          : '';
+      const romanNumeralCSS = useRomanNumerals
+        ? `<style>.pdf-footer-center::after { content: counter(page, lower-roman); }</style>`
+        : '';
 
       // Wrap the page content in a complete HTML document with header/footer margin elements.
       // Prince's running element CSS (in pdf-page.css) pulls #libre-pdf-header out of body
@@ -2093,7 +2092,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(t.pageInfo.head));
         const shouldShowMarginContent = this.getShouldShowMarginContent(t.pageInfo);
         const headerHTML = shouldShowMarginContent ? generatePDFHeader(ImageConstants['default']) : '';
-        const sectionNum = extractPageNumberPrefix(t.pageInfo.title).replace(/\.$/, '');
+        const sectionNum = useRomanNumerals ? '' : extractPageNumberPrefix(t.pageInfo.title).replace(/\.$/, '');
         const licenseLabel = t.pageInfo.license?.label ?? '';
         const autoAttribution = this.getShouldRenderAttribution(t.pageInfo) ? renderAutoAttribution(t.pageInfo) : '';
         const footerHTML = shouldShowMarginContent
@@ -2121,10 +2120,9 @@ ${stripBlocklistedScripts(pageTailHTML)}
               </style>`
             : '';
         // For front matter pages without a section number, override the footer to use roman numerals.
-        const romanNumeralCSS =
-          useRomanNumerals && !sectionPageCSS
-            ? `<style>.pdf-footer-center::after { content: counter(page, lower-roman) string(sectionNum, first); }</style>`
-            : '';
+        const romanNumeralCSS = useRomanNumerals
+          ? `<style>.pdf-footer-center::after { content: counter(page, lower-roman); }</style>`
+          : '';
         // TODO: lang attr for non-English texts
         const wrappedHTML = `
 <!DOCTYPE html>
