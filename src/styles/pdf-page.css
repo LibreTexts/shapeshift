@@ -745,7 +745,11 @@ dt {
   font-size: var(--answers-font-size) !important;
 }
 
-.answers dl, dd, ol, ul, p {
+.answers dl,
+.answers dd,
+.answers ol,
+.answers ul,
+.answers p {
   font-size: var(--answers-font-size) !important;
 }
 
