@@ -265,10 +265,9 @@ export class EPUBService {
         /QUOT_REPL/g,
         '&quot;',
       );
-      let pageIndexUsageCount = 1;
       const decodedContent = decodedContentRaw.replaceAll(
-        /\\\(\\PageIndex{\d+}\\\)/g,
-        () => `${pageIndexPrefix}${pageIndexUsageCount++}`,
+        /\\\(\\PageIndex\{([^}]+)\}\\\)/g,
+        (_match, index: string) => `${pageIndexPrefix}${index.trim()}`,
       );
       const $ = cheerio.load(decodedContent, { xml: true });
 

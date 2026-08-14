@@ -415,7 +415,7 @@ export async function prerenderMath(html: string, pageInfo?: BookPageInfo): Prom
         // Wrap dots in braces for proper TeX rendering: "4.2." → "{4}{.}{2}{.}"
         const prefixWithBraces = prefix.replace(/\./g, '{.}');
         // Use eatSpaces macro to handle spacing
-        return `{${prefixWithBraces}\\eatSpaces${content} \\endSpaces}`;
+        return `{${prefixWithBraces}\\eatSpaces{${content}} \\endSpaces}`;
       });
     }
 
