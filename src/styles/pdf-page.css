@@ -738,6 +738,28 @@ dt {
   font-weight: bold;
 }
 
+/* Center-Justified Text */
+.mt-align-center {
+  text-align: center;
+}
+
+/* Indents */
+.mt-indent-1 {
+  margin-left: 2.5em;
+}
+.mt-indent-2 {
+  margin-left: 5em;
+}
+.mt-indent-3 {
+  margin-left: 7.5em;
+}
+.mt-indent-4 {
+  margin-left: 10em;
+}
+.mt-indent-5 {
+  margin-left: 12.5em;
+}
+
 /* Extracted exercise answers */
 .answers {
   margin-top: 0.5em;
@@ -782,24 +804,7 @@ dt {
   color: #4A4A4A;
 }
 
-/* Center-Justified Text */
-.mt-align-center {
-  text-align: center;
-}
-
-/* Indents */
-.mt-indent-1 {
-  margin-left: 2.5em;
-}
-.mt-indent-2 {
-  margin-left: 5em;
-}
-.mt-indent-3 {
-  margin-left: 7.5em;
-}
-.mt-indent-4 {
-  margin-left: 10em;
-}
-.mt-indent-5 {
-  margin-left: 12.5em;
+/* Glossary v2 */
+.glossary-v2-term {
+  font-weight: bold;
 }

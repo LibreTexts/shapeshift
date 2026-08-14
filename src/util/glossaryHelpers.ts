@@ -229,7 +229,7 @@ function stripHTMLTags(html: string): string {
   return html.replace(/<[^>]+>/g, '');
 }
 
-function escapeHTML(str: string): string {
+export function escapeHTML(str: string): string {
   return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 

@@ -18,7 +18,18 @@ import * as cheerio from 'cheerio';
 import { Element } from 'domhandler';
 import { generateQRCode } from '../util/qrCode';
 import { demoteDecorativeHeadings, removeEmptyParagraphs } from '../util/htmlFilters';
-import { assembleUrl, getPathFromURL, getSubdomainFromURL, isNonNullCXOneObject, omit, USER_AGENT } from '../util/util';
+import {
+  assembleUrl,
+  getPathFromURL,
+  getSubdomainFromURL,
+  isNonNullCXOneObject,
+  omit,
+  ORIGIN_HEADER,
+  USER_AGENT,
+} from '../util/util';
+import { GlossaryEntry, GlossaryEntryForPage } from '../types/glossary';
+import { GlossaryService } from './glossary';
+import { escapeHTML } from '../util/glossaryHelpers';
 
 /**
  * Maximum number of concurrent page content fetches from the CXOne API.
@@ -155,6 +166,8 @@ export class BookService {
   private readonly logName: 'BookService';
   private authorsCache = new Map<string, Record<string, any>>();
   private attributionCache = new Map<string, ContentAttribution | null>();
+  private bookGlossaryCache = new Map<string, GlossaryEntry[]>();
+  private glossaryTermsByPageCache = new Map<string, GlossaryEntryForPage[]>();
   private readonly DEFAULT_THUMBNAILS = {
     BACK_MATTER: 'https://cdn.libretexts.net/DefaultImages/Back%20matter.jpg',
     DEFAULT: 'https://cdn.libretexts.net/DefaultImages/default.png',
@@ -532,6 +545,10 @@ export class BookService {
       const pagesRaw = pagesRespRaw.page;
 
       const pages = await this.getPageInfo(libName, pagesRaw, lib);
+      const glossaryService = new GlossaryService();
+      const glossaryData = await glossaryService.getGlossaryTermsForBook(bookID);
+      this.bookGlossaryCache.set(bookID.toString(), glossaryData.terms);
+      glossaryData.termsByPage.forEach((v, k) => this.glossaryTermsByPageCache.set(k, v));
       await this.preprocessHTML(pages);
       const result = {
         flat: this.flattenPagesObj(pages),
@@ -548,7 +565,7 @@ export class BookService {
       return result;
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      this.logger.withError(error).error(`Error discovering pages for ${libName}/${pageID}: ${errorMsg}`);
+      this.logger.withError(error).error(`Error discovering pages for ${libName}-${pageID}: ${errorMsg}`);
       throw error; // re-throw the error after logging it, so that the calling function can handle it appropriately (e.g. fail the job)
     }
   }
@@ -774,7 +791,10 @@ export class BookService {
     if (cached) return cached;
 
     const resp = await fetch(`https://commons.libretexts.org/api/v1/authors/key/${authorTag}`, {
-      headers: { origin: 'shapeshift.libretexts.org' },
+      headers: {
+        origin: ORIGIN_HEADER,
+        'User-Agent': USER_AGENT,
+      },
     });
     const data = await resp.json();
     if (data.err || !data.author) return null;
@@ -935,7 +955,9 @@ export class BookService {
         limit(async () => {
           const bodyRaw = p.body.join('');
           if (!bodyRaw) return;
-          const headingsFixed = this.autofixHeadingLevels(bodyRaw);
+          // run renderGlossaryV2Output before removeEmptyParagraphs: glossary mount point is an empty element
+          const glossaryV2Rendered = await this.renderGlossaryV2Output(p.pageID, bodyRaw);
+          const headingsFixed = this.autofixHeadingLevels(glossaryV2Rendered);
           const altTextFixed = this.autofixMissingAltText(headingsFixed);
           const cmsMarkupFixed = this.autofixCMSMarkup(altTextFixed);
           const emptyParagraphsRemoved = removeEmptyParagraphs(cmsMarkupFixed);
@@ -1122,5 +1144,28 @@ export class BookService {
       '',
     )}</section>`;
     return $.html() + answersSection;
+  }
+
+  private async renderGlossaryV2Output(pageID: PageID, content: string) {
+    if (!content) return content;
+    const $ = cheerio.load(content, null, false);
+    const outputElem = $('#glossary-output');
+    if (!outputElem.length) {
+      this.logger.withMetadata({ pageID: pageID.toString() }).debug('No glossary mount point on page.');
+      return content;
+    }
+
+    const termsForPage = [...(this.glossaryTermsByPageCache.get(pageID.toString()) ?? [])].sort((a, b) =>
+      a.term.localeCompare(b.term),
+    );
+    const renderedTerms = termsForPage.reduce((acc, t) => {
+      const term = `<p class="glossary-v2-element"><span class="glossary-v2-term">${escapeHTML(
+        t.term,
+      )}</span> | <span class="glossary-v2-definition">${escapeHTML(t.definition)}</span></p>`;
+      return `${acc}${term}`;
+    }, '');
+    const rendered = $(`<div id="glossary-v2-output">${renderedTerms}</div>`);
+    outputElem.replaceWith(rendered);
+    return $.html();
   }
 }
