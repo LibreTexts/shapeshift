@@ -173,14 +173,14 @@ registry.registerPath({
   method: 'get',
   path: '/download/{bookID}/{format}',
   summary: 'Download an exported file',
-  description: 'Redirects (302) to a short-lived signed CloudFront URL for the requested export file.',
+  description: 'Redirects (302) to a public CloudFront URL for the requested export file.',
   tags: ['Downloads'],
   request: { params: downloadParams },
   responses: {
     302: {
-      description: 'Redirect to signed CloudFront download URL.',
+      description: 'Redirect to CloudFront download URL.',
       headers: z.object({
-        Location: z.string().openapi({ description: 'Signed CloudFront URL (valid for 5 minutes).' }),
+        Location: z.string().openapi({ description: 'Public CloudFront URL.' }),
       }),
     },
     400: jsonResponse('Invalid path parameters.', ErrorResponse),

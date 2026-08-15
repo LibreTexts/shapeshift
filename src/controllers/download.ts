@@ -4,7 +4,6 @@ import { validators } from '../api/validators';
 import zod from 'zod';
 import { Response } from 'express';
 import { StorageService } from '../lib/storageService';
-import { getSignedUrl } from '@aws-sdk/cloudfront-signer';
 import { Environment } from '../lib/environment';
 import { MongoClient } from 'mongodb';
 import { extractIPFromHeaders, ZodRequest } from '../util/util';
@@ -57,16 +56,12 @@ const FORMAT_CONFIG: Record<string, FormatConfig> = {
 
 export class DownloadController {
   private readonly cloudFrontDistributionDomain: string;
-  private readonly cloudFrontKeyPairId: string;
-  private readonly cloudFrontPrivateKey: string;
   private readonly logger: LogLayer;
   private readonly logName = 'DownloadController';
   private readonly storageService: StorageService;
 
   constructor() {
     this.cloudFrontDistributionDomain = Environment.getRequired('CLOUDFRONT_DISTRIBUTION_DOMAIN');
-    this.cloudFrontKeyPairId = Environment.getRequired('CLOUDFRONT_KEY_PAIR_ID');
-    this.cloudFrontPrivateKey = Environment.getRequired('CLOUDFRONT_PRIVATE_KEY');
     this.logger = logService.child().withContext({ logSource: this.logName });
     this.storageService = new StorageService();
   }
@@ -123,23 +118,12 @@ export class DownloadController {
   }
 
   /**
-   * Returns a signed CloudFront URL for the given S3 key. The
+   * Returns a public CloudFront URL for the given S3 key. The
    * response-content-disposition param is included so browsers always prompt a
    * download with the correct filename regardless of S3 object metadata.
-   *
-   * TODO: skip signing for public books once book-level visibility is implemented.
    */
   private buildDownloadUrl(s3Key: string, fileName: string): string {
     const disposition = `attachment; filename="${fileName}"`;
-    const baseUrl = `https://${this.cloudFrontDistributionDomain}/${s3Key}?response-content-disposition=${encodeURIComponent(disposition)}`;
-
-    const inFiveMinutes = new Date();
-    inFiveMinutes.setMinutes(inFiveMinutes.getMinutes() + 5);
-    return getSignedUrl({
-      dateLessThan: inFiveMinutes.toISOString(),
-      keyPairId: this.cloudFrontKeyPairId,
-      privateKey: Buffer.from(this.cloudFrontPrivateKey, 'base64').toString('utf-8'),
-      url: baseUrl,
-    });
+    return `https://${this.cloudFrontDistributionDomain}/${s3Key}?response-content-disposition=${encodeURIComponent(disposition)}`;
   }
 }
