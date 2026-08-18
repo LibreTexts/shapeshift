@@ -16,8 +16,12 @@ import mime from 'mime';
 import beautify from 'js-beautify';
 import { decode } from 'html-entities';
 import PageID from '../util/pageID';
+import { optimizeImageBuffer } from '../util/imageOptimizer';
 import { PassThrough } from 'node:stream';
 import { Upload } from '@aws-sdk/lib-storage';
+
+const DEFAULT_EPUB_IMAGE_MAX_EDGE = 1600;
+const EPUB_IMAGE_JPEG_QUALITY = 80;
 
 type BookPageInfoForEPUB = BookPageInfo & {
   sectionId: string;
@@ -253,6 +257,11 @@ export class EPUBService {
       return prefix.trim();
     };
     const buildFQFilePath = (fileName: string) => `../images/${fileName}`;
+    // Screen-oriented ceiling: 1600px on the longest edge covers a high-DPI tablet at full
+    // width, well past what any e-reader renders.
+    const epubImageMaxEdge =
+      Number.parseInt(Environment.getOptional('EPUB_IMAGE_MAX_EDGE', String(DEFAULT_EPUB_IMAGE_MAX_EDGE)), 10) ||
+      DEFAULT_EPUB_IMAGE_MAX_EDGE;
 
     const pageLinksToSectionIds = pages.reduce((acc, p) => acc.set(p.url, p.sectionId), new Map<string, string>());
     for (const { pageID, ...page } of pages) {
@@ -283,7 +292,7 @@ export class EPUBService {
             : `https://${subdomain}.libretexts.org/${imageSrc.replace(/^\//, '')}`;
           const fqImageURLRaw = new URL(fqImageSrc);
           const searchParams = fqImageURLRaw.searchParams;
-          Object.keys(searchParams).forEach((key) => searchParams.delete(key));
+          [...searchParams.keys()].forEach((key) => searchParams.delete(key));
           const fqImageURL = fqImageURLRaw.toString();
           const existDownload = imageURLToMeta.get(fqImageURL);
           if (existDownload) {
@@ -296,9 +305,21 @@ export class EPUBService {
             responseType: 'arraybuffer',
             headers: { 'User-Agent': USER_AGENT },
           });
-          const imageData = Buffer.from(imageResp.data, 'binary');
-          const mimeType = imageResp.headers['content-type'] as string | undefined;
-          const extension = mimeType ? mime.getExtension(mimeType) : null;
+          const originalData = Buffer.from(imageResp.data, 'binary');
+          const responseMimeType = imageResp.headers['content-type'] as string | undefined;
+
+          // CMS images are routinely far larger than any reader displays them at; embedding
+          // them verbatim is what makes EPUBs (like PDFs) balloon. `null` means the image is
+          // better left alone (vector, animated, or already small enough).
+          const optimized = await optimizeImageBuffer(originalData, {
+            jpegQuality: EPUB_IMAGE_JPEG_QUALITY,
+            maxHeight: epubImageMaxEdge,
+            maxWidth: epubImageMaxEdge,
+          });
+
+          const imageData = optimized?.data ?? originalData;
+          const mimeType = optimized?.mimeType ?? responseMimeType;
+          const extension = optimized?.extension ?? (mimeType ? mime.getExtension(mimeType) : null);
           const imageUUID = `image-${uuid()}`;
           const fileName = `${imageUUID}${extension ? `.${extension}` : ''}`;
           await this.writeTemporaryFile({

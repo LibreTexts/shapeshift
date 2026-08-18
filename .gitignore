@@ -9,3 +9,8 @@ backlogPerInstance.zip
 localstack-data/
 tmp/
 prince_license.dat
+.codegraph/
+.claude/
+CLAUDE.md
+.mcp.json/
+.agents/
