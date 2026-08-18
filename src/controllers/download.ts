@@ -3,7 +3,7 @@ import { log as logService } from '../lib/log';
 import { validators } from '../api/validators';
 import zod from 'zod';
 import { Response } from 'express';
-import { StorageService } from '../lib/storageService';
+import { ObjectMetadata, StorageService } from '../lib/storageService';
 import { Environment } from '../lib/environment';
 import { MongoClient } from 'mongodb';
 import { extractIPFromHeaders, ZodRequest } from '../util/util';
@@ -54,6 +54,18 @@ const FORMAT_CONFIG: Record<string, FormatConfig> = {
   thincc: { fileName: 'LibreText.imscc', contentType: 'application/zip' },
 };
 
+/**
+ * Builds a short, URL-safe token identifying the current version of a stored object. Prefers the
+ * ETag (which changes whenever the object's contents change) and falls back to the last-modified
+ * timestamp. Returns null when neither is available, in which case the URL is left unversioned.
+ */
+function buildVersionToken(metadata: ObjectMetadata): string | null {
+  const etag = metadata.etag?.replace(/"/g, '').trim();
+  if (etag) return encodeURIComponent(etag);
+  if (metadata.lastModified) return metadata.lastModified.getTime().toString(36);
+  return null;
+}
+
 export class DownloadController {
   private readonly cloudFrontDistributionDomain: string;
   private readonly logger: LogLayer;
@@ -75,8 +87,8 @@ export class DownloadController {
     }
 
     const s3Key = `${formatConfig.dir ?? format}/${bookID}/${formatConfig.subDir ? `${formatConfig.subDir}/` : ''}${formatConfig.fileName}`;
-    const exists = await this.storageService.ensureFileExists(s3Key);
-    if (!exists) {
+    const metadata = await this.storageService.getFileMetadata(s3Key);
+    if (!metadata) {
       return res.status(404).send({
         msg: `File with path "${s3Key}" not found.`,
         status: 404,
@@ -85,7 +97,7 @@ export class DownloadController {
 
     const extension = formatConfig.fileName.split('.').pop() ?? format;
     await this.recordDownloadEvent(bookID, formatConfig.fileName, extension);
-    const downloadUrl = this.buildDownloadUrl(s3Key, formatConfig.fileName);
+    const downloadUrl = this.buildDownloadUrl(s3Key, formatConfig.fileName, buildVersionToken(metadata));
     this.logger
       .withMetadata({
         bookID,
@@ -94,6 +106,9 @@ export class DownloadController {
         requesterIp: extractIPFromHeaders(req),
       })
       .info('File downloaded');
+    // The redirect target is versioned per build, so the redirect itself must never be cached —
+    // a cached 302 would pin the client to a previous version token.
+    res.set('Cache-Control', 'no-store');
     return res.status(302).redirect(downloadUrl);
   }
 
@@ -121,9 +136,16 @@ export class DownloadController {
    * Returns a public CloudFront URL for the given S3 key. The
    * response-content-disposition param is included so browsers always prompt a
    * download with the correct filename regardless of S3 object metadata.
+   *
+   * Object keys are stable across recompiles, so a `v` param derived from the object's current
+   * identity is appended: when a book is rebuilt the URL changes, missing any browser or edge
+   * cache entry holding the previous build.
    */
-  private buildDownloadUrl(s3Key: string, fileName: string): string {
+  private buildDownloadUrl(s3Key: string, fileName: string, version: string | null): string {
+    // Built with encodeURIComponent rather than URLSearchParams: the latter encodes spaces as
+    // "+", which S3 does not decode back to a space in response-* overrides.
     const disposition = `attachment; filename="${fileName}"`;
-    return `https://${this.cloudFrontDistributionDomain}/${s3Key}?response-content-disposition=${encodeURIComponent(disposition)}`;
+    const versionParam = version ? `&v=${version}` : '';
+    return `https://${this.cloudFrontDistributionDomain}/${s3Key}?response-content-disposition=${encodeURIComponent(disposition)}${versionParam}`;
   }
 }
