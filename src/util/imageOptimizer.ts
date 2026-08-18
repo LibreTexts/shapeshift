@@ -8,7 +8,8 @@ import sharp from 'sharp';
  */
 export interface OptimizedImage {
   data: Buffer;
-  extension: string;
+  /** Constrained to the two encodings we emit, so it can be safely used in a file name. */
+  extension: 'jpg' | 'png';
   format: 'jpeg' | 'png';
   height: number;
   mimeType: string;
@@ -44,7 +45,7 @@ const MAX_LOSSLESS_OUTPUT_BYTES = 1024 * 1024;
  */
 const PASSTHROUGH_FORMATS = new Set(['svg']);
 
-function describe(format: 'jpeg' | 'png') {
+function describe(format: 'jpeg' | 'png'): { extension: 'jpg' | 'png'; mimeType: string } {
   return format === 'jpeg' ? { extension: 'jpg', mimeType: 'image/jpeg' } : { extension: 'png', mimeType: 'image/png' };
 }
 

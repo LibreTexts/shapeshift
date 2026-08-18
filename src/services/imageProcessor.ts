@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
-import { join } from 'node:path';
+import { isAbsolute, join, relative, resolve } from 'node:path';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { LogLayer } from 'loglayer';
@@ -25,6 +25,14 @@ const IMAGE_FETCH_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_WIDTH = 2175;
 const DEFAULT_MAX_HEIGHT = 900;
 const DEFAULT_JPEG_QUALITY = 80;
+
+/**
+ * The only shape a generated image file name may take: a SHA-1 hex digest plus one of the
+ * two extensions {@link optimizeImageBuffer} can emit. Everything written to (or read back
+ * from) the image directory is checked against this, so a hostile `src` in book content can
+ * never steer a filesystem operation at a path we didn't construct ourselves.
+ */
+const OPTIMIZED_FILE_NAME = /^[0-9a-f]{40}\.(?:jpg|png)$/;
 
 export interface ImageProcessingSummary {
   /** Total bytes of the source images that were replaced. */
@@ -80,7 +88,9 @@ export class ImageProcessor {
     maxWidth?: number;
     outputDir: string;
   }) {
-    this._outputDir = opts.outputDir;
+    // Resolved once, up front: every path this class touches is checked for containment
+    // within it, and that check is only meaningful against an absolute, normalized base.
+    this._outputDir = resolve(opts.outputDir);
     this._maxWidth =
       opts.maxWidth ?? Number.parseInt(Environment.getOptional('IMAGE_MAX_WIDTH', String(DEFAULT_MAX_WIDTH)), 10);
     this._maxHeight =
@@ -233,7 +243,7 @@ export class ImageProcessor {
       }
 
       const fileName = `${createHash('sha1').update(url).digest('hex')}.${optimized.extension}`;
-      const filePath = join(this._outputDir, fileName);
+      const filePath = this.resolveOutputPath(fileName);
       await fs.writeFile(filePath, optimized.data);
 
       this._summary.optimized++;
@@ -249,5 +259,26 @@ export class ImageProcessor {
         .warn('Failed to optimize image; falling back to the original source');
       return null;
     }
+  }
+
+  /**
+   * Maps a generated file name to its absolute path inside the image directory.
+   *
+   * The name is derived entirely from a SHA-1 digest and a fixed extension, so it cannot
+   * contain a traversal sequence — but the check is kept as a hard invariant rather than an
+   * assumption, because the path it produces is both written to here and later handed to
+   * Prince as an `<img src>` to read back. Anything that doesn't match the expected shape is
+   * a bug or an attack, and in either case must not reach the filesystem.
+   */
+  private resolveOutputPath(fileName: string): string {
+    if (!OPTIMIZED_FILE_NAME.test(fileName)) {
+      throw new Error(`Refusing to write image with unexpected file name: ${fileName}`);
+    }
+    const filePath = join(this._outputDir, fileName);
+    const rel = relative(this._outputDir, filePath);
+    if (!rel || rel.startsWith('..') || isAbsolute(rel)) {
+      throw new Error('Refusing to write image outside of the image output directory');
+    }
+    return filePath;
   }
 }
