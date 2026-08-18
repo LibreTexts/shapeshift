@@ -44,6 +44,7 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { generateSubpageListing, injectDirectoryListing, isCoverpage, isPublicationRoot } from '../util/bookHelpers';
 import { sleep, USER_AGENT } from '../util/util';
 import { renderAutoAttribution } from '../util/licensing';
+import { ImageProcessor } from './imageProcessor';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -214,6 +215,8 @@ export class PDFService {
       if (!preflightOk) {
         throw new Error('Preflight checks failed: Prince binary is not properly configured');
       }
+
+      await this.optimizeBookImages(pages);
 
       // Build conversion tasks with correct ordering and TOC placement, then group
       // content pages by chapter so each chapter is rendered in a single Prince invocation.
@@ -656,6 +659,8 @@ export class PDFService {
       if (!preflightOk) {
         throw new Error('Preflight checks failed: Prince binary is not properly configured');
       }
+
+      await this.optimizeBookImages([pageInfo]);
 
       const rawBody = pageInfo.body.join('');
       const bodyWithTitle = this.addPageTitle(pageInfo, rawBody);
@@ -1252,6 +1257,34 @@ ${stripBlocklistedScripts(pageTailHTML)}
 
     this.logger.withMetadata({ sectionCount: pdfs.length }).info('Finished writing Individual.zip output.');
     return outPath;
+  }
+
+  /**
+   * Downloads every image the book references, resamples it to the largest size the page
+   * can actually display, re-encodes it, and rewrites the page bodies to point at the
+   * local copies — before any HTML is generated, so all downstream outputs (both numbering
+   * passes, the print edition, and the individual-pages ZIP) share the same optimized files.
+   *
+   * Prince embeds raster images at their source resolution and never resamples, so without
+   * this a 4000x3000 photo shown in a 3in box is embedded at 4000x3000 (and re-encoded as
+   * FlateDecode unless it was already a JPEG). That is what pushed output PDFs to several
+   * times their necessary size and produced images our print service rejects.
+   *
+   * Best-effort: any failure leaves the original remote URLs in place, and Prince renders
+   * exactly as it did before.
+   */
+  private async optimizeBookImages(pages: BookPageInfo[]): Promise<void> {
+    try {
+      const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
+      const processor = new ImageProcessor({
+        bookID: this._bookID.toString(),
+        jobID: this._jobID,
+        outputDir: resolve(`${baseDir}/pdf/${this._bookID.toString()}/images`),
+      });
+      await processor.optimizePages(pages);
+    } catch (error) {
+      this.logger.withMetadata({ error }).warn('Image optimization pass failed; rendering with original images');
+    }
   }
 
   /**
@@ -2269,7 +2302,7 @@ ${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
     const bookBase = resolve(`${baseDir}/pdf/${this._bookID.toString()}`);
     try {
       if (this._useLocalStorage) {
-        const dirs = [join(bookBase, 'workdir'), join(bookBase, 'covers')];
+        const dirs = [join(bookBase, 'workdir'), join(bookBase, 'covers'), join(bookBase, 'images')];
         await Promise.all(dirs.map((dir) => fs.rm(dir, { recursive: true, force: true })));
       } else {
         await fs.rm(bookBase, { recursive: true, force: true });
