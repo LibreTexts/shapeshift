@@ -17,6 +17,8 @@ import {
   pdfTitlePageStyles,
   countPDFPages,
   extractPDFPages,
+  getCoverDimensions,
+  getPDFPageDimensionsIn,
 } from '../util/pdfHelpers';
 import { buildTagIndex, generateIndexHTML } from '../util/indexHelpers';
 import { parseGlossaryTable, buildGlossaryData, generateGlossaryHTML } from '../util/glossaryHelpers';
@@ -198,7 +200,10 @@ export class PDFService {
    * 3. If all pages are converted succesfully, create the covers
    * 4. Merge all converted pages and covers into a final PDF, which is then uploaded to storage or saved locally based on configuration.
    * @param pages
-   * @returns
+   * @returns The path to the digital Full.pdf and `pageCount`, the page count of the PRINT
+   * interior (Content.pdf). That count excludes the cover page and includes the extra pages
+   * introduced by the inline `[url]` annotations, so it reads slightly higher than the digital
+   * edition — it is the number print/ordering services need.
    */
   public async convertBook(pagesInput: BookPages): Promise<{ filePath: string; pageCount: number } | null> {
     if (!pagesInput?.flat?.length) return null;
@@ -581,13 +586,25 @@ export class PDFService {
       await Promise.all(fullDocHTMLPaths.map((p) => this._deleteTempFile(p).catch(() => {})));
 
       const numPages = await countPDFPages(finalFilePath);
+      // Covers must be sized from the PRINT interior (Content.pdf), not the digital Full.pdf.
+      // The print edition is a separate Prince run that appends the full URL after every link,
+      // so it reflows longer than the digital edition; sizing the spine off Full.pdf produces a
+      // cover the print service rejects for being too narrow. Content.pdf already excludes the
+      // Main cover page (extractPDFPages starts at page 2), so no -1 adjustment applies here.
+      const printContentPageCount = await countPDFPages(contentFilePath);
       if (mainCoverTempPath) {
         // Generate print covers (Amazon, CaseWrap, CoilBound, PerfectBound) with retry.
-        this.logger.info('Generating publication covers');
-        const contentPageCount = numPages - 1; // exclude Main cover
+        this.logger
+          .withMetadata({
+            digitalPageCount: numPages,
+            digitalContentPageCount: numPages - 1,
+            printContentPageCount,
+            delta: printContentPageCount - (numPages - 1),
+          })
+          .info('Generating publication covers');
         const coverConfigs = PDF_COVER_TYPES.filter((t) => t !== 'Main').map((coverType) => ({
           coverType,
-          numPages: COVER_TYPE_CONFIG[coverType].usesPageCount ? contentPageCount : null,
+          numPages: COVER_TYPE_CONFIG[coverType].usesPageCount ? printContentPageCount : null,
           opt: COVER_TYPE_CONFIG[coverType].opt,
         }));
 
@@ -623,6 +640,8 @@ export class PDFService {
           throw new Error('One or more covers failed to generate after all retries');
         }
 
+        await this.verifyCoverDimensions({ contentFilePath, coversDirPath: coversPath });
+
         await this.mergeToPublicationZipAndWrite({
           coversDirPath: coversPath,
           contentFilePath,
@@ -637,7 +656,7 @@ export class PDFService {
         .info('Book conversion completed successfully');
 
       await this.cleanupWorkdir();
-      return { filePath: finalFilePath, pageCount: numPages };
+      return { filePath: finalFilePath, pageCount: printContentPageCount };
     } catch (error) {
       this.logger.withMetadata({ error, duration: Date.now() - startTime }).error('Book conversion failed');
       throw error;
@@ -1389,6 +1408,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       });
 
       const outputPath = `${dirPath}/${coverType}.pdf`;
+      const expected = getCoverDimensions(coverType, numPages);
 
       await this.withTempFile(content, async (inputPath) => {
         this.logger.withMetadata({ coverType, url: bookInfo.url, inputPath, outputPath }).info('Generating cover...');
@@ -1399,11 +1419,77 @@ ${stripBlocklistedScripts(pageTailHTML)}
         });
       });
 
-      this.logger.withMetadata({ coverType, url: bookInfo.url, outputPath }).info('Generated cover.');
+      this.logger
+        .withMetadata({
+          coverType,
+          url: bookInfo.url,
+          outputPath,
+          numPages,
+          expectedWidthIn: expected.totalWidth,
+          expectedHeightIn: expected.height,
+          spineWidthIn: expected.spineWidth,
+        })
+        .info('Generated cover.');
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : JSON.stringify(error);
       this.logger.withMetadata({ coverType, url: bookInfo.url, error, errorMessage }).error('Cover generation failed');
       throw error;
+    }
+  }
+
+  /**
+   * Checks every generated cover against the interior that will actually ship beside it.
+   * The interior page count is re-read from `contentFilePath` rather than taken from a
+   * variable, so this catches the failure mode that caused print rejections in the first
+   * place: a cover sized from some other page count than the interior in the same zip.
+   *
+   * Diagnostic only — it logs and never throws. Covers are already written and uploaded by
+   * this point, and a bad measurement should not fail an otherwise complete job.
+   *
+   * Tolerance is 0.02in. Prince reproduces the CSS page size exactly, so any drift should be
+   * ~0; 0.02in leaves room for PDF unit rounding without approaching the roughly +/-0.0625in
+   * window print services allow.
+   */
+  private async verifyCoverDimensions({
+    contentFilePath,
+    coversDirPath,
+  }: {
+    contentFilePath: string;
+    coversDirPath: string;
+  }) {
+    const toleranceIn = 0.02;
+    try {
+      const interiorPageCount = await countPDFPages(contentFilePath);
+      for (const coverType of PDF_COVER_TYPES) {
+        if (coverType === 'Main') continue;
+        const outputPath = `${coversDirPath}/${coverType}.pdf`;
+        const expected = getCoverDimensions(
+          coverType,
+          COVER_TYPE_CONFIG[coverType].usesPageCount ? interiorPageCount : null,
+        );
+        const actual = await getPDFPageDimensionsIn(outputPath);
+        const widthDeltaIn = actual.width - expected.totalWidth;
+        const heightDeltaIn = actual.height - expected.height;
+        if (Math.abs(widthDeltaIn) > toleranceIn || Math.abs(heightDeltaIn) > toleranceIn) {
+          this.logger
+            .withMetadata({
+              coverType,
+              interiorPageCount,
+              outputPath,
+              expectedWidthIn: expected.totalWidth,
+              expectedHeightIn: expected.height,
+              actualWidthIn: actual.width,
+              actualHeightIn: actual.height,
+              widthDeltaIn,
+              heightDeltaIn,
+              toleranceIn,
+            })
+            .error('Cover dimensions do not match the interior it ships with — print service will reject it');
+        }
+      }
+    } catch (error) {
+      // Never let the check itself disrupt publication output.
+      this.logger.withMetadata({ error }).warn('Could not verify generated cover dimensions');
     }
   }
 
