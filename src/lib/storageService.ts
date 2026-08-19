@@ -5,6 +5,19 @@ import { LogLayer } from 'loglayer';
 import { Readable } from 'node:stream';
 import { Environment } from './environment';
 
+/**
+ * Applied to every uploaded artifact. Object keys are stable across recompiles, so a long
+ * browser `max-age` would pin clients to a previous build; the download API defeats that by
+ * appending a content-version query param to the URL it redirects to (see DownloadController).
+ * These values only bound staleness for clients that hit the storage URL directly.
+ */
+const ARTIFACT_CACHE_CONTROL = 'public, max-age=3600, s-maxage=60';
+
+export interface ObjectMetadata {
+  etag: string | null;
+  lastModified: Date | null;
+}
+
 export class StorageService {
   private readonly bucket: string;
   private readonly client: S3Client;
@@ -34,13 +47,16 @@ export class StorageService {
           Body: data,
           ContentType: contentType,
           Key: key,
-          CacheControl: 'public, max-age=15768000, s-maxage=20',
+          CacheControl: ARTIFACT_CACHE_CONTROL,
         },
       });
       await uploader.done();
     } catch (err) {
       const errString = (err as Error).message;
       this.logger.error(errString);
+      // Rethrow: a swallowed failure here leaves the previous artifact in place while the job is
+      // still marked finished, which is indistinguishable from a successful upload.
+      throw err;
     }
   }
 
@@ -55,7 +71,7 @@ export class StorageService {
           Body: stream,
           ContentType: contentType,
           Key: key,
-          CacheControl: 'public, max-age=15768000, s-maxage=20',
+          CacheControl: ARTIFACT_CACHE_CONTROL,
         },
       });
     } catch (err) {
@@ -85,7 +101,12 @@ export class StorageService {
     return null;
   }
 
-  public async ensureFileExists(key: string) {
+  /**
+   * Returns identity metadata for an object, or null if it doesn't exist (or couldn't be read).
+   * Callers use the null result as an existence check; the ETag/LastModified come back on the
+   * same HeadObject round trip and are used to version download URLs.
+   */
+  public async getFileMetadata(key: string): Promise<ObjectMetadata | null> {
     try {
       const r = await this.client.send(
         new HeadObjectCommand({
@@ -93,11 +114,12 @@ export class StorageService {
           Key: key,
         }),
       );
-      return !(r.$metadata.httpStatusCode !== 200);
+      if (r.$metadata.httpStatusCode !== 200) return null;
+      return { etag: r.ETag ?? null, lastModified: r.LastModified ?? null };
     } catch (err) {
       const errString = (err as Error).message;
       this.logger.error(errString);
     }
-    return false;
+    return null;
   }
 }
