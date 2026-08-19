@@ -15,6 +15,17 @@ export async function countPDFPages(filePath: string): Promise<number> {
   return doc.getPageCount();
 }
 
+/**
+ * Returns the first page's dimensions in inches. Used to verify that a generated cover
+ * matches the size it was supposed to be printed at.
+ */
+export async function getPDFPageDimensionsIn(filePath: string): Promise<{ width: number; height: number }> {
+  const bytes = await readFile(filePath);
+  const doc = await PDFDocument.load(bytes);
+  const { width, height } = doc.getPage(0).getSize(); // points
+  return { width: width / 72, height: height / 72 };
+}
+
 export async function extractPDFPages({
   inputPath,
   outputPath,
