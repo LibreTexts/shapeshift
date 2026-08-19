@@ -102,7 +102,7 @@ export class JobService {
           return;
         }
 
-        let PDFPageCount = 1; // This is a temporary workaround to pass `numPages` to the legacy `endpoint` API until we implement a more robust solution for retrieving book info in bulk
+        let PDFPrintContentPageCount = 1; // This is a temporary workaround to pass `numPages` to the legacy `endpoint` API until we implement a more robust solution for retrieving book info in bulk
 
         await job.update({ bookID: bookID.toString() });
         const pages = await bookModel.discoverPages(bookID.lib, bookID.pageNum);
@@ -124,7 +124,7 @@ export class JobService {
               throw pdfError;
             }
           }
-          await this.finish(jobMsg, bookID);
+          await this.finish(jobMsg, bookID, 1);
           return;
         }
 
@@ -148,7 +148,7 @@ export class JobService {
           try {
             const pdfResult = await pdfService.convertBook(pages);
             pdfPath = pdfResult?.filePath || null;
-            PDFPageCount = pdfResult?.pageCount || 1;
+            PDFPrintContentPageCount = pdfResult?.pageCount || 1;
             log.info(`PDF generated at path: ${pdfPath}`);
           } catch (pdfError) {
             const errorMsg = pdfError instanceof Error ? pdfError.message : String(pdfError);
@@ -176,12 +176,12 @@ export class JobService {
         // </generate thincc>
 
         const legacyAPIService = new LegacyAPIService();
-        await legacyAPIService.updateBookInfo({ bookID, pageCount: PDFPageCount }).catch((legacyError) => {
+        await legacyAPIService.updateBookInfo({ bookID, pageCount: PDFPrintContentPageCount }).catch((legacyError) => {
           const errorMsg = legacyError instanceof Error ? legacyError.message : String(legacyError);
           log.error(`Failed to update legacy API: ${errorMsg}`);
         }); // A legacy API update failure should not cause the whole job to fail, so we catch errors here and log them without re-throwing
 
-        await this.finish(jobMsg, bookID);
+        await this.finish(jobMsg, bookID, PDFPrintContentPageCount);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         log.error(`Job failed: ${errorMsg}`);
@@ -197,7 +197,7 @@ export class JobService {
     await Job.update({ status: newStatus }, { where: { id } });
   }
 
-  public async finish(job: JobQueueMessage, bookID?: PageID) {
+  public async finish(job: JobQueueMessage, bookID?: PageID, printContentPageCount?: number) {
     await this.setStatus(job.jobId, 'finished');
 
     if (Environment.getSystemEnvironment() === 'DEVELOPMENT') return;
@@ -207,7 +207,11 @@ export class JobService {
     // but never let a webhook failure affect job completion.
     if (this.conductorWebhookService && bookID) {
       try {
-        await this.conductorWebhookService.sendWebhook({ bookID, timestamp: Date.now() });
+        await this.conductorWebhookService.sendWebhook({
+          bookID,
+          contentPageCount: printContentPageCount,
+          timestamp: Date.now(),
+        });
       } catch (webhookError) {
         const errorMsg = webhookError instanceof Error ? webhookError.message : String(webhookError);
         log.error(`Failed to send conductor webhook: ${errorMsg}`);
