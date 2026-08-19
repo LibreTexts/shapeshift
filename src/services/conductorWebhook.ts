@@ -6,6 +6,11 @@ import { Environment } from '../lib/environment';
 
 type BookCompiledWebhookPayload = {
   bookID: PageID;
+  /**
+   * We let contentPageCount be undefined if it wasn't provided, so Conductor
+   * can decide if it wants to retain the last known value or use some other default.
+   */
+  contentPageCount?: number;
   timestamp: number; // Unix timestamp in milliseconds
 };
 
@@ -43,6 +48,7 @@ export class ConductorWebhookService {
           ...payload,
           bookID: payload.bookID.toString(),
           timestamp: payload.timestamp,
+          ...(payload.contentPageCount !== undefined ? { contentPageCount: payload.contentPageCount } : {}),
         },
         {
           headers: {
