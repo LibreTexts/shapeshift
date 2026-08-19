@@ -9,6 +9,8 @@ import { log } from '../lib/log';
 import { EPUBService } from './epub';
 import { isCoverpage } from '../util/bookHelpers';
 import { LegacyAPIService } from './legacy-api';
+import { ConductorWebhookService } from './conductorWebhook';
+import PageID from '../util/pageID';
 
 export type JobOutputFormat = 'EPUB' | 'PDF' | 'ThinCC';
 
@@ -28,10 +30,25 @@ export type JobStatus = 'created' | 'inprogress' | 'finished' | 'failed';
 export class JobService {
   private readonly allFormats: JobOutputFormat[];
   private readonly queueClient: QueueClient;
+  private readonly conductorWebhookService?: ConductorWebhookService;
 
   constructor() {
     this.allFormats = ['EPUB', 'PDF', 'ThinCC'];
     this.queueClient = new QueueClient();
+
+    /** Initialize the ConductorWebhookService only if the webhook URL is provided in the environment variables.
+     *  Syncing with Conductor is a nicety, not a requirement, so the error is just caught and logged
+     * if the webhook service cannot be initialized, and the service will continue to function without it.
+     */
+    if (Environment.getOptional('CONDUCTOR_WEBHOOK_URL')) {
+      try {
+        this.conductorWebhookService = new ConductorWebhookService();
+      } catch (error) {
+        const errorMsg = error instanceof Error ? error.message : String(error);
+        log.warn(`Conductor webhook notifications are disabled: ${errorMsg}`);
+        this.conductorWebhookService = undefined;
+      }
+    }
   }
 
   public async create(input: CreationAttributes<Job>) {
@@ -107,7 +124,7 @@ export class JobService {
               throw pdfError;
             }
           }
-          await this.finish(jobMsg);
+          await this.finish(jobMsg, bookID);
           return;
         }
 
@@ -164,7 +181,7 @@ export class JobService {
           log.error(`Failed to update legacy API: ${errorMsg}`);
         }); // A legacy API update failure should not cause the whole job to fail, so we catch errors here and log them without re-throwing
 
-        await this.finish(jobMsg);
+        await this.finish(jobMsg, bookID);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         log.error(`Job failed: ${errorMsg}`);
@@ -180,10 +197,21 @@ export class JobService {
     await Job.update({ status: newStatus }, { where: { id } });
   }
 
-  public async finish(job: JobQueueMessage) {
+  public async finish(job: JobQueueMessage, bookID?: PageID) {
     await this.setStatus(job.jobId, 'finished');
 
     if (Environment.getSystemEnvironment() === 'DEVELOPMENT') return;
     await this.queueClient.deleteJobMessage(job.receiptHandle);
+
+    // If the webhook service is configured and we have a valid bookID, notify Conductor,
+    // but never let a webhook failure affect job completion.
+    if (this.conductorWebhookService && bookID) {
+      try {
+        await this.conductorWebhookService.sendWebhook({ bookID, timestamp: Date.now() });
+      } catch (webhookError) {
+        const errorMsg = webhookError instanceof Error ? webhookError.message : String(webhookError);
+        log.error(`Failed to send conductor webhook: ${errorMsg}`);
+      }
+    }
   }
 }
