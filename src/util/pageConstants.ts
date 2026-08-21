@@ -21,6 +21,6 @@ export const dynamicDetailedLicensingLayout = `
   <p class="template:tag-insert">
     <em>Tags recommended by the template: </em>
     <a href="#">article:topic</a>
-    <a href="#>showtoc:no</a>
+    <a href="#">showtoc:no</a>
   </p>
 `;

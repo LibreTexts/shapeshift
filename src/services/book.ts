@@ -4,7 +4,6 @@ import { join, resolve } from 'node:path';
 import axios, { AxiosError } from 'axios';
 import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
 import { getLicense } from '../util/licensing';
-import { LibraryService } from './library';
 import { GetPagesResponse, PageExtended, Tags } from '@libretexts/cxone-expert-node';
 import { dynamicDetailedLicensingLayout, dynamicLicensingLayout, dynamicTOCLayout } from '../util/pageConstants';
 import { BookPageInfoWithContent, BookPageProperty, BookPages, ContentAttribution } from '../types/book';
@@ -30,6 +29,7 @@ import {
 import { GlossaryEntry, GlossaryEntryForPage } from '../types/glossary';
 import { GlossaryService } from './glossary';
 import { escapeHTML } from '../util/glossaryHelpers';
+import ExpertWithSSM from '../util/expertWithSSM';
 
 /**
  * Maximum number of concurrent page content fetches from the CXOne API.
@@ -205,15 +205,14 @@ export class BookService {
     coverPageInfo: BookPageInfo;
     overwriteExisting?: boolean;
   }) {
-    const lib = new LibraryService({ lib: coverPageInfo.pageID.lib });
-    await lib.init();
+    const lib = await ExpertWithSSM.getInstance().forLibrary(coverPageInfo.pageID.lib);
     await CXOneRateLimiter.waitUntilAPIAvailable(2);
 
     const basePath = this.getMatterRootPagePath(coverPageInfo.url, 'Back');
 
     // Index
     try {
-      await lib.api.pages.postPageContents(
+      await lib.pages.postPageContents(
         assembleUrl([basePath, '10%3A_Index']),
         `
         <p class="mt-script-comment">Dynamic Index</p><pre class="script">template('DynamicIndex');</pre>
@@ -233,16 +232,15 @@ export class BookService {
     }
 
     // Dynamic Glossary
-    const chemLib = new LibraryService({ lib: 'chem' });
-    await chemLib.init();
+    const chemLib = await ExpertWithSSM.getInstance().forLibrary('chem');
     const dynamicGlossary = (
-      await chemLib.api.pages.getPageContents(279134, {
+      await chemLib.pages.getPageContents(279134, {
         mode: 'edit',
       })
     ).body;
     if (dynamicGlossary) {
       try {
-        await lib.api.pages.postPageContents(
+        await lib.pages.postPageContents(
           assembleUrl([basePath, '20%3A_Glossary']),
           `
         ${dynamicGlossary}
@@ -264,7 +262,7 @@ export class BookService {
 
     // Detailed Licensing
     try {
-      await lib.api.pages.postPageContents(
+      await lib.pages.postPageContents(
         assembleUrl([basePath, '30%3A_Detailed_Licensing']),
         dynamicDetailedLicensingLayout,
         {
@@ -286,7 +284,7 @@ export class BookService {
       responseType: 'arraybuffer',
     });
     const thumbnail = Buffer.from(thumbnailRes.data);
-    await lib.api.pages.putPageFileName(basePath, '=mindtouch.page%2523thumbnail', thumbnail);
+    await lib.pages.putPageFileName(basePath, '=mindtouch.page%2523thumbnail', thumbnail);
   }
 
   /**
@@ -302,14 +300,13 @@ export class BookService {
     coverPageInfo: BookPageInfo;
     overwriteExisting?: boolean;
   }) {
-    const lib = new LibraryService({ lib: coverPageInfo.pageID.lib });
-    await lib.init();
+    const lib = await ExpertWithSSM.getInstance().forLibrary(coverPageInfo.pageID.lib);
     await CXOneRateLimiter.waitUntilAPIAvailable(2);
 
     // TitlePage
     const QRoptions = { errorCorrectionLevel: 'L', margin: 2, scale: 2 };
     try {
-      await lib.api.pages.postPageContents(
+      await lib.pages.postPageContents(
         assembleUrl([coverPageInfo.url, '00%3AFront_Matter', '01%3A_TitlePage']),
         `
         <div style="height:95vh; display:flex; flex-direction: column; position: relative; align-items: center">
@@ -336,7 +333,7 @@ export class BookService {
 
     // InfoPage
     try {
-      await lib.api.pages.postPageContents(
+      await lib.pages.postPageContents(
         assembleUrl([coverPageInfo.url, '00%3AFront_Matter', '02%3A_InfoPage']),
         `
         <p class=\\"mt-script-comment\\">Cross Library Transclusion</p><pre class=\\"script\\">template('CrossTransclude/Web',{'Library':'chem','PageID':170365});</pre>
@@ -357,7 +354,7 @@ export class BookService {
 
     // Table of Contents
     try {
-      await lib.api.pages.postPageContents(
+      await lib.pages.postPageContents(
         assembleUrl([coverPageInfo.url, '00%3AFront_Matter', '03%3A_Table_of_Contents']),
         dynamicTOCLayout,
         {
@@ -375,7 +372,7 @@ export class BookService {
 
     // Licensing
     try {
-      await lib.api.pages.postPageContents(
+      await lib.pages.postPageContents(
         assembleUrl([coverPageInfo.url, '00%3AFront_Matter', '04%3A_Licensing']),
         dynamicLicensingLayout,
         {
@@ -397,7 +394,7 @@ export class BookService {
       responseType: 'arraybuffer',
     });
     const thumbnail = Buffer.from(thumbnailRes.data);
-    await lib.api.pages.putPageFileName(
+    await lib.pages.putPageFileName(
       assembleUrl([coverPageInfo.url, '00%3AFront_Matter']),
       '=mindtouch.page%2523thumbnail',
       thumbnail,
@@ -423,14 +420,13 @@ export class BookService {
     overwriteExisting?: boolean;
   }) {
     try {
-      const lib = new LibraryService({ lib: coverPageInfo.pageID.lib });
-      await lib.init();
+      const lib = await ExpertWithSSM.getInstance().forLibrary(coverPageInfo.pageID.lib);
 
       await CXOneRateLimiter.waitUntilAPIAvailable(4);
 
       // Create root matter page (e.g., "zz%3ABack_Matter" or "00%3AFront_Matter")
       try {
-        await lib.api.pages.postPageContents(
+        await lib.pages.postPageContents(
           this.getMatterRootPagePath(coverPageInfo.url, mode),
           `<p>{{template.ShowOrg()}}</p><p class="template:tag-insert"><em>Tags recommended by the template: </em><a href="#">article:topic-guide</a></p>`,
           {
@@ -463,11 +459,7 @@ export class BookService {
           this.logger.debug(
             `Setting property ${p.property} for ${mode} matter page of book ${coverPageInfo.pageID.toString()}`,
           );
-          await lib.api.pages.putPageProperties(
-            this.getMatterRootPagePath(coverPageInfo.url, mode),
-            p.property,
-            p.value,
-          );
+          await lib.pages.putPageProperties(this.getMatterRootPagePath(coverPageInfo.url, mode), p.property, p.value);
           this.logger.debug(`Successfully set property ${p.property}`);
         } catch (error) {
           // Log the error but continue with other properties
@@ -538,13 +530,12 @@ export class BookService {
           return cached as BookPages;
         }
       }
-      const lib = new LibraryService({ lib: libName });
-      await lib.init();
+      const lib = await ExpertWithSSM.getInstance().forLibrary(libName);
       await CXOneRateLimiter.waitUntilAPIAvailable(2);
-      const pagesRespRaw = await lib.api.pages.getPageTree(pageID);
+      const pagesRespRaw = await lib.pages.getPageTree(pageID);
       const pagesRaw = pagesRespRaw.page;
 
-      const pages = await this.getPageInfo(libName, pagesRaw, lib);
+      const pages = await this.getPageInfo(libName, pagesRaw);
       const glossaryService = new GlossaryService();
       const glossaryData = await glossaryService.getGlossaryTermsForBook(bookID);
       this.bookGlossaryCache.set(bookID.toString(), glossaryData.terms);
@@ -575,17 +566,13 @@ export class BookService {
    * should be treated as TOC entries, as well as ensuring front/back matter are indexed correctly.
    * @param libName - the subdomain/library name
    * @param p - the page object
-   * @param libService - Optional LibraryService instance to avoid re-initializing for each page. If not provided, a new instance will be created.
    * @returns a Promise that resolves to a BookPageInfo object
    */
-  public async getPageInfo(libName: string, p: GetPagesResponse, libService?: LibraryService): Promise<BookPageInfo> {
-    if (!libService) {
-      libService = new LibraryService({ lib: libName });
-      await libService.init();
-    }
+  public async getPageInfo(libName: string, p: GetPagesResponse): Promise<BookPageInfo> {
+    const lib = await ExpertWithSSM.getInstance().forLibrary(libName);
 
     await CXOneRateLimiter.waitUntilAPIAvailable(2);
-    const pageDetails = await libService.api.pages.getPage(Number(p['@id']), {
+    const pageDetails = await lib.pages.getPage(Number(p['@id']), {
       format: 'html',
       include: 'contents',
       mode: 'view',
@@ -612,7 +599,7 @@ export class BookService {
       : (pageDetails as any).content?.body
         ? [(pageDetails as any).content.body as string]
         : [];
-    const contentAttributions = await this.getContentAttributions(body.join(''), Number(p['@id']), libService);
+    const contentAttributions = await this.getContentAttributions(body.join(''), Number(p['@id']));
     const printInfo = await this.resolvePrintInfo({
       authorTag,
       tags: parsedTags,
@@ -634,7 +621,7 @@ export class BookService {
       printInfo,
       properties: parsedProperties,
       subdomain: libName,
-      subpages: await Promise.all(subpages.map((s) => this.getPageInfo(libName, s, libService))),
+      subpages: await Promise.all(subpages.map((s) => this.getPageInfo(libName, s))),
       summary: summaryProp?.value ?? '',
       // @ts-expect-error needs fix upstream in cxone sdk
       tail: pageDetails.content?.tail ?? '',
@@ -654,8 +641,7 @@ export class BookService {
    */
   public async getBookContents(coverPageID: PageID, pages: BookPageInfo[]): Promise<BookPageInfoWithContent[]> {
     try {
-      const lib = new LibraryService({ lib: coverPageID.lib });
-      await lib.init();
+      const lib = await ExpertWithSSM.getInstance().forLibrary(coverPageID.lib);
 
       const htmlCacheDir = Environment.getOptional('HTML_CACHE_DIR');
 
@@ -699,7 +685,7 @@ export class BookService {
               // Consume rate-limit tokens before hitting the API
               await CXOneRateLimiter.waitUntilAPIAvailable(2);
 
-              pageContent = await lib.api.pages.getPageContents(page.pageID.pageNum, {
+              pageContent = await lib.pages.getPageContents(page.pageID.pageNum, {
                 mode: 'view',
                 format: 'html',
               });
@@ -736,16 +722,16 @@ export class BookService {
   }
 
   public async getIDFromURL(urlRaw: string): Promise<PageID | null> {
-    const lib = getSubdomainFromURL(urlRaw);
+    const subdomain = getSubdomainFromURL(urlRaw);
     const path = getPathFromURL(urlRaw);
-    const libClient = new LibraryService({ lib });
-    await libClient.init();
 
-    const page = await libClient.api.pages.getPage(path);
+    const lib = await ExpertWithSSM.getInstance().forLibrary(subdomain);
+
+    const page = await lib.pages.getPage(path);
     if (!page) return null;
     if (Number.isNaN(Number(page['@id']))) return null;
 
-    return new PageID({ lib, pageNum: Number(page['@id']) });
+    return new PageID({ lib: subdomain, pageNum: Number(page['@id']) });
   }
 
   public flattenPagesObj(pagesRaw: BookPageInfo) {
@@ -804,11 +790,7 @@ export class BookService {
   }
 
   /** LibreLens port **/
-  private async getContentAttributions(
-    body: string,
-    currentPageNum: number,
-    libService: LibraryService,
-  ): Promise<ContentAttribution[]> {
+  private async getContentAttributions(body: string, currentPageNum: number): Promise<ContentAttribution[]> {
     if (!body) return [];
     const $ = cheerio.load(body, null, false);
 
@@ -829,7 +811,7 @@ export class BookService {
     for (const [key, { lib, pageNum }] of sources) {
       let entry = this.attributionCache.get(key);
       if (entry === undefined) {
-        entry = await this.fetchAttribution(lib, pageNum, libService);
+        entry = await this.fetchAttribution(lib, pageNum);
         this.attributionCache.set(key, entry);
       }
       if (entry) attributions.push(entry);
@@ -837,14 +819,12 @@ export class BookService {
     return attributions;
   }
 
-  private async fetchAttribution(
-    lib: string,
-    pageNum: number,
-    libService: LibraryService,
-  ): Promise<ContentAttribution | null> {
+  private async fetchAttribution(subdomain: string, pageNum: number): Promise<ContentAttribution | null> {
     try {
       await CXOneRateLimiter.waitUntilAPIAvailable(2);
-      const page = await libService.api.pages.getPage(pageNum);
+      const lib = await ExpertWithSSM.getInstance().forLibrary(subdomain);
+
+      const page = await lib.pages.getPage(pageNum);
       const tags = isNonNullCXOneObject(page.tags) ? this.parseTags(page.tags) : [];
 
       // Author: authorname: tag → commons lookup; author@ tags override the display name (joined).
@@ -867,7 +847,7 @@ export class BookService {
         ...(source && source !== 'native' && { source }),
       };
     } catch (error) {
-      this.logger.withMetadata({ lib, pageNum }).warn('Could not fetch transcluded source for attribution');
+      this.logger.withMetadata({ lib: subdomain, pageNum }).warn('Could not fetch transcluded source for attribution');
       return null;
     }
   }
