@@ -98,18 +98,29 @@ registry.registerPath({
   method: 'post',
   path: '/job',
   summary: 'Submit an export job',
-  description: 'Enqueues a new export job for the given LibreTexts book URL.',
+  description:
+    'Enqueues a new export job for the given LibreTexts book URL. If an export for the same book is ' +
+    'already queued or running, no second job is created — the in-flight job is returned instead ' +
+    'with `duplicate: true`, and clients should poll that identifier.',
   tags: ['Jobs'],
   request: {
     body: { required: true, content: { 'application/json': { schema: jobCreateBody } } },
   },
   responses: {
     200: jsonResponse(
-      'Job created successfully.',
+      'Job created, or an equivalent job was already in flight.',
       z.object({
         data: z.object({
+          duplicate: z.boolean().openapi({
+            description:
+              'True when an export for this book was already in progress. No new job was queued and ' +
+              '`id` refers to the existing job, which can be polled as normal.',
+            example: false,
+          }),
           id: z.string().uuid().openapi({ example: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' }),
-          status: z.literal('created'),
+          status: _jobStatusSchema.openapi({
+            description: "Always `created` for a new job; the existing job's current status when `duplicate` is true.",
+          }),
         }),
         status: statusField,
       }),
