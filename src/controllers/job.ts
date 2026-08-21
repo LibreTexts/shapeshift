@@ -1,4 +1,5 @@
 import { JobService } from '../services/job';
+import { BookService } from '../services/book';
 import { QueueClient } from '../lib/queueClient';
 import zod from 'zod';
 import { Op } from 'sequelize';
@@ -23,22 +24,79 @@ export class JobController {
     const { highPriority = false, url } = req.validatedData?.body ?? {};
     const jobModel = new JobService();
     const requesterIp = extractIPFromHeaders(req);
-    const jobId = await jobModel.create({
+
+    // Resolve the book up front so a resubmission of work already in flight can be detected before
+    // anything is queued. Two URLs can point at the same book (vanity paths, aliases, casing), so
+    // the resolved identifier is the only reliable key to deduplicate on.
+    const bookID = await this.resolveBookID(url!);
+
+    const { isDuplicate, job } = await jobModel.createIfNoActiveJob({
+      ...(bookID && { bookID }),
       isHighPriority: highPriority,
       requesterIp,
       url: url!,
     });
-    this.logger.withMetadata({ highPriority, jobId, requesterIp, url }).info('Job created.');
 
-    await this.queueClient.sendJobMessage({ isHighPriority: highPriority, jobId });
+    if (isDuplicate) {
+      this.logger
+        .withMetadata({ bookID, existingJobId: job.id, existingStatus: job.status, requesterIp, url })
+        .info('Duplicate job submission; returning the job already in progress.');
+      return res.status(200).send({
+        data: {
+          duplicate: true,
+          id: job.id,
+          status: job.status,
+        },
+        status: 200,
+      });
+    }
+
+    this.logger.withMetadata({ bookID, highPriority, jobId: job.id, requesterIp, url }).info('Job created.');
+
+    try {
+      await this.queueClient.sendJobMessage({ isHighPriority: highPriority, jobId: job.id });
+    } catch (error) {
+      // The row is already committed. Leaving it on 'created' with no queue message behind it would
+      // make it look like active work and block resubmission of this book until it went stale, so
+      // fail it explicitly before surfacing the error.
+      await jobModel.setStatus(job.id, 'failed');
+      throw error;
+    }
 
     return res.status(200).send({
       data: {
-        id: jobId,
+        duplicate: false,
+        id: job.id,
         status: 'created',
       },
       status: 200,
     });
+  }
+
+  /**
+   * Resolves a book URL to its identifier for duplicate detection.
+   *
+   * This requires a CXOne lookup, which can fail independently of the request being valid. Rather
+   * than turn a CXOne outage into a submission outage, a failure here is logged and the job is
+   * accepted without a bookID: it simply skips the duplicate check, which is the behavior that
+   * existed before deduplication, and the processor resolves the book (or records the failure) as
+   * it always has.
+   */
+  private async resolveBookID(url: string): Promise<string | null> {
+    try {
+      const bookID = await new BookService().getIDFromURL(url);
+      if (!bookID) {
+        this.logger.withMetadata({ url }).warn('Could not resolve a book ID from the URL; skipping duplicate check.');
+        return null;
+      }
+      return bookID.toString();
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      this.logger
+        .withMetadata({ error: errorMsg, url })
+        .warn('Book ID lookup failed; accepting the job without a duplicate check.');
+      return null;
+    }
   }
 
   public async list(req: ZodRequest<zod.infer<typeof validators.jobs.list>>, res: Response) {
