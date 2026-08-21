@@ -51,7 +51,7 @@ const FORMAT_CONFIG: Record<string, FormatConfig> = {
   pages: { fileName: 'Individual.zip', contentType: 'application/zip', dir: 'pdf' },
   pdf: { fileName: 'Full.pdf', contentType: 'application/pdf' },
   publication: { fileName: 'Publication.zip', contentType: 'application/zip', dir: 'pdf' },
-  thincc: { fileName: 'LibreText.imscc', contentType: 'application/zip' },
+  thincc: { fileName: 'LibreText.imscc', contentType: 'application/octet-stream' },
 };
 
 /**
