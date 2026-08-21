@@ -2,7 +2,7 @@ import './zodOpenapi'; // Extends Zod with `.openapi()` before any schema below 
 import zod, { ZodObject, ZodError } from 'zod';
 import { Request, Response, NextFunction } from 'express';
 
-export const _bookIDSchema = zod.stringFormat('BookID', /[a-z1-2]{3,9}[-][0-9]{2,10}/i);
+export const _bookIDSchema = zod.stringFormat('BookID', /^[a-z1-2]{3,9}-[0-9]{2,10}$/i);
 export const _jobIDSchema = zod.uuidv4();
 export const _jobStatusSchema = zod.enum(['created', 'inprogress', 'finished', 'failed']);
 export const _exportFormatSchema = zod.enum([

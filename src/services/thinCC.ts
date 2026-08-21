@@ -10,6 +10,7 @@ import { createWriteStream } from 'node:fs';
 import Archiver from 'archiver';
 import { Upload } from '@aws-sdk/lib-storage';
 import { StorageService } from '../lib/storageService';
+import { fsPathToS3Key } from '../util/fsHelpers';
 
 type ThinCCTopicPageData = { title: string; url: string };
 
@@ -201,7 +202,7 @@ export class ThinCCService {
   }) {
     const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
     const baseDirPath = `${baseDir}/thincc/${bookID.toString()}`;
-    const outputPath = `${baseDirPath}/${bookID.toString()}.imscc`;
+    const outputPath = `${baseDirPath}/LibreText.imscc`;
     if (useLocalStorage) await fs.mkdir(baseDirPath, { recursive: true });
 
     const output = !useLocalStorage ? new PassThrough() : createWriteStream(outputPath);
@@ -219,7 +220,7 @@ export class ThinCCService {
     if (!useLocalStorage) {
       uploader = this.storageService.createStreamUploader({
         contentType: 'application/zip',
-        key: 'test',
+        key: fsPathToS3Key(outputPath),
         stream: output as PassThrough,
       });
     }
