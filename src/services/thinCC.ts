@@ -21,6 +21,15 @@ type ThinCCXMLEntry = {
   path: string;
 };
 
+/**
+ * `collapseContent` keeps element text on the same line as its tags. Without it the formatter
+ * pretty-prints leaf values onto their own indented lines, so `<schemaversion>` reads as
+ * "\n  1.1.0\n" instead of "1.1.0". Canvas compares that node's raw text to "1.1.0" with string
+ * equality when identifying an uploaded package, and rejects the cartridge with
+ * "Unsupported content package" if it doesn't match exactly.
+ */
+const XML_FORMAT_OPTIONS = { collapseContent: true, lineSeparator: '\n' } as const;
+
 export class ThinCCService {
   private readonly logger: LogLayer;
   private readonly logName = 'ThinCCService';
@@ -139,13 +148,16 @@ export class ThinCCService {
           `;
           resourceXMLEntries.push({
             path: `${identifier}_F.xml`,
-            data: formatXml(`
+            data: formatXml(
+              `
               <?xml version="1.0" encoding="UTF-8"?>
               <webLink xmlns="http://www.imsglobal.org/xsd/imsccv1p1/imswl_v1p1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.imsglobal.org/xsd/imsccv1p1/imswl_v1p1 http://www.imsglobal.org/profile/cc/ccv1p1/ccv1p1_imswl_v1p1.xsd">
                 <title>${this.escapeTitle(r.title)}</title>
                 <url href="${r.url.replace(/%3F/g, '%253F')}" target="_iframe"/>
               </webLink>
-            `),
+            `,
+              XML_FORMAT_OPTIONS,
+            ),
           });
         });
         org = `
@@ -162,7 +174,7 @@ export class ThinCCService {
   private generateXML({ org, pageInfo, resources }: { org: string; pageInfo: BookPageInfo; resources: string }) {
     const xml = `
       <?xml version="1.0" encoding="UTF-8"?>
-      <manifest xmlns="http://www.imsglobal.org/xsd/imsccv1p1/imscp_v1p1" xmlns:lom="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/resource" xmlns:lomimscc="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" identifier="cctd0015" xsi:schemaLocation="http://www.imsglobal.org/xsd/imslticc_v1p0 http://www.imsglobal.org/xsd/lti/ltiv1p0/imslticc_v1p0.xsd http://www.imsglobal.org/xsd/imslticp_v1p0 http://www.imsglobal.org/xsd/lti/ltiv1p0/imslticp_v1p0.xsd http://www.imsglobal.org/xsd/imslticm_v1p0 http://www.imsglobal.org/xsd/lti/ltiv1p0/imslticm_v1p0.xsd http://www.imsglobal.org/xsd/imsbasiclti_v1p0 http://www.imsglobal.org/xsd/lti/ltiv1p0/imsbasiclti_v1p0p1.xsd">
+      <manifest xmlns="http://www.imsglobal.org/xsd/imsccv1p1/imscp_v1p1" xmlns:lom="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/resource" xmlns:lomimscc="http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" identifier="cctd0015" xsi:schemaLocation="http://www.imsglobal.org/xsd/imsccv1p1/imscp_v1p1 http://www.imsglobal.org/profile/cc/ccv1p1/ccv1p1_imscp_v1p2_v1p0.xsd http://ltsc.ieee.org/xsd/imsccv1p1/LOM/resource http://www.imsglobal.org/profile/cc/ccv1p1/LOM/ccv1p1_lomresource_v1p0.xsd http://ltsc.ieee.org/xsd/imsccv1p1/LOM/manifest http://www.imsglobal.org/profile/cc/ccv1p1/LOM/ccv1p1_lommanifest_v1p0.xsd">
         <metadata>
           <schema>IMS Common Cartridge</schema>
           <schemaversion>1.1.0</schemaversion>
@@ -186,7 +198,7 @@ export class ThinCCService {
         </resources>
       </manifest>
     `;
-    return formatXml(xml);
+    return formatXml(xml, XML_FORMAT_OPTIONS);
   }
 
   private async writeFinalOutputFile({
@@ -219,7 +231,7 @@ export class ThinCCService {
     let uploader: Upload | undefined;
     if (!useLocalStorage) {
       uploader = this.storageService.createStreamUploader({
-        contentType: 'application/zip',
+        contentType: 'application/octet-stream',
         key: fsPathToS3Key(outputPath),
         stream: output as PassThrough,
       });
