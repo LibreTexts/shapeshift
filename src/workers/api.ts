@@ -66,15 +66,29 @@ const server = app.listen(port, async () => {
   console.log(`Shapeshift API worker listening on ${port}.`);
 });
 
+if (Environment.getSystemEnvironment() !== 'DEVELOPMENT') {
+  // Both must exceed the ALB idle timeout and headersTimeout must exceed keepAliveTimeout.
+  server.keepAliveTimeout = 65_000;
+  server.headersTimeout = 66_000;
+}
+
 server.on('error', (err: Error) => logger.error(err.message));
 
 function shutdown() {
   if (server.listening) {
     console.log('Attempting graceful shutdown of Shapeshift API worker...');
+    // sweep until close() reports every connection gone.
+    server.closeIdleConnections();
+    const sweep = setInterval(() => server.closeIdleConnections(), 250);
     server.close(async () => {
+      clearInterval(sweep);
       console.log('Shapeshift API worker shutdown successfully.');
       exit(0);
     });
+    setTimeout(() => {
+      console.log('Graceful shutdown timed out; exiting with connections still open.');
+      exit(0);
+    }, 10_000).unref();
   } else {
     exit(0);
   }
