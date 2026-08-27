@@ -808,3 +808,11 @@ dt {
 .glossary-v2-term {
   font-weight: bold;
 }
+/* Authored blank space from Template:FixedSpace/Activity. Height is set inline by
+   collapseFixedSpace(); this rule only supplies box behavior. Artifact keeps the empty
+   spacer out of the tagged-PDF structure tree. */
+.fixed-space {
+  display: block;
+  break-inside: avoid;
+  -prince-pdf-tag-type: Artifact;
+}
