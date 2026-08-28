@@ -4,6 +4,7 @@ import { Environment } from '../lib/environment';
 import { JobController } from '../controllers/job';
 import { validateZod, validators } from './validators';
 import { apiKeyAuth } from './middleware/apiKeyAuth';
+import { frameAncestors } from './middleware/frameAncestors';
 import { DownloadController } from '../controllers/download';
 import zod from 'zod';
 import { QueueClient } from '../lib/queueClient';
@@ -14,6 +15,7 @@ const router = express.Router();
 const jobController = new JobController();
 const downloadController = new DownloadController();
 
+router.use(frameAncestors);
 router.use(
   cors({
     origin(origin, callback) {
