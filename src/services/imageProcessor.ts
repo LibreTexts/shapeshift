@@ -11,6 +11,7 @@ import { log as logService } from '../lib/log';
 import { BookPageInfo } from '../types/book';
 import { optimizeImageBuffer } from '../util/imageOptimizer';
 import { USER_AGENT } from '../util/util';
+import { nullProgressReporter, type ProgressReporter } from '../lib/jobProgress';
 
 const DEFAULT_FETCH_CONCURRENCY = 8;
 const IMAGE_FETCH_TIMEOUT_MS = 30_000;
@@ -67,6 +68,7 @@ export class ImageProcessor {
   private readonly _cache = new Map<string, string | null>();
   private readonly _jpegQuality: number;
   private readonly _limit: ReturnType<typeof pLimit>;
+  private readonly _progress: ProgressReporter;
   private readonly _maxHeight: number;
   private readonly _maxWidth: number;
   private readonly _outputDir: string;
@@ -87,7 +89,9 @@ export class ImageProcessor {
     maxHeight?: number;
     maxWidth?: number;
     outputDir: string;
+    progress?: ProgressReporter;
   }) {
+    this._progress = opts.progress ?? nullProgressReporter;
     // Resolved once, up front: every path this class touches is checked for containment
     // within it, and that check is only meaningful against an absolute, normalized base.
     this._outputDir = resolve(opts.outputDir);
@@ -127,8 +131,20 @@ export class ImageProcessor {
     this._summary.discovered = urls.size;
     if (!urls.size) return this._summary;
 
-    // Phase 2: download + optimize, populating the URL -> local path cache.
-    await Promise.all(Array.from(urls).map((url) => this._limit(() => this.resolveLocalPath(url))));
+    // Phase 2: download + optimize, populating the URL -> local path cache. The distinct URL
+    // count is the denominator; each unit is one fetch plus one sharp re-encode.
+    this._progress.expect(urls.size);
+    await Promise.all(
+      Array.from(urls).map((url) =>
+        this._limit(async () => {
+          try {
+            return await this.resolveLocalPath(url);
+          } finally {
+            this._progress.tick();
+          }
+        }),
+      ),
+    );
 
     // Phase 3: rewrite the HTML to point at whatever landed on disk.
     for (const page of pages) {

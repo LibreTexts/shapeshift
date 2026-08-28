@@ -12,6 +12,13 @@ import { sleep } from '../util/util';
 import { LegacyAPIService } from './legacy-api';
 import { ConductorWebhookService } from './conductorWebhook';
 import PageID from '../util/pageID';
+import {
+  JobProgressReporter,
+  JOB_MAX_DURATION_MS,
+  JOB_STAGE_LABELS,
+  nullProgressReporter,
+  type ProgressReporter,
+} from '../lib/jobProgress';
 
 export type JobOutputFormat = 'EPUB' | 'PDF' | 'ThinCC';
 
@@ -68,10 +75,38 @@ export class JobService {
   /**
    * Number of minutes after which an unfinished job is presumed dead rather than active.
    *
-   * There is no heartbeat on a running job and the SQS message is deleted before processing starts
-   * (see workers/processor.ts), so a worker that crashes or is killed mid-job leaves its row stuck
-   * on 'inprogress' forever. Without a cutoff, that row would block every future submission for the
-   * same book.
+   * The SQS message is deleted before processing starts (see workers/processor.ts), so a worker
+   * that crashes or is killed mid-job leaves its row stuck on 'inprogress' forever. Without a
+   * cutoff, that row would block every future submission for the same book.
+   *
+   * JobProgressReporter (lib/jobProgress.ts) touches the row once a minute for as long as the
+   * worker holds the job, so the cutoff measures worker liveness rather than elapsed time. That is
+   * what keeps a book which legitimately runs longer than the cutoff from being reaped mid-flight
+   * and having a second worker start writing the same output keys.
+   *
+   * The heartbeat is a separate timer from the progress writes on purpose. Tying it to the
+   * reported percentage would have made a quiet stage look like a dead worker: the creep curve in
+   * during() flattens well before a slow Prince run finishes, and the archive-and-upload tails
+   * report nothing at all.
+   *
+   * A job that hangs while its worker stays alive is bounded twice over. JOB_MAX_DURATION_MS is
+   * the job's own deadline, checked at every open-ended phase (assertWithinBudget below, and
+   * PDFService.assertWithinJobBudget), so a runaway job fails itself and releases its book on its
+   * own terms. MAX_HEARTBEAT_AGE_MS sits a grace period above that deadline and is the backstop
+   * for the case the deadline cannot catch: a worker alive but wedged short of any checkpoint, a
+   * stalled CXOne fetch or a stuck upload with no timeout. Past that age the reporter stops
+   * touching the row and the job ages out normally. Without the backstop the heartbeat would have
+   * made a wedged job permanently unreapable; without the gap between the two, a job unwinding
+   * from its deadline could still be reaped mid-write.
+   *
+   * The cutoff now only has to outlast a run of missed heartbeats, so it looks oversized at 15
+   * minutes against a 60-second beat. Leave it there. Declaring death early is the expensive
+   * mistake: a second worker starts on the same book and both write the same S3 keys. Beats go
+   * missing for reasons that have nothing to do with a dead process — a long synchronous stretch
+   * in the MathJax prerender or a whole-book cheerio parse blocks the timer, and a transient DB
+   * outage swallows the write outright (see the catch in JobProgressReporter.enqueue). Fifteen
+   * minutes of margin absorbs all of those. The only thing a shorter window buys is returning a
+   * genuinely crashed worker's book to service sooner, which is not worth the trade.
    */
   private getStaleAfterMinutes() {
     const parsed = Number.parseInt(Environment.getOptional('JOB_STALE_AFTER_MINUTES', '15'));
@@ -193,24 +228,37 @@ export class JobService {
     }
   }
 
+  /**
+   * `useMaster` because callers poll this to watch `progress` climb. When DB_HOST_READ is set the
+   * default read goes to a replica (see model/index.ts), and replica lag would show a polling
+   * client progress moving backwards. It is a single primary-key lookup, so the writer barely
+   * notices; the bulk list endpoint stays on the replica.
+   */
   public async get(id: string): Promise<Job | null> {
     const foundJob = await Job.findOne({
       where: {
         id,
       },
+      useMaster: true,
     });
     if (!foundJob) return null;
     return foundJob;
   }
 
   public async run(jobMsg: JobQueueMessage) {
+    let progress: ProgressReporter = nullProgressReporter;
     try {
       log.debug(`Starting job with ID ${jobMsg.jobId}`);
       await this.setStatus(jobMsg.jobId, 'inprogress');
 
       const job = await this.get(jobMsg.jobId);
       log.debug(`Running job with ID ${jobMsg.jobId} and URL ${job?.url}`);
-      if (!job?.url) return;
+      if (!job?.url) {
+        // Nothing to convert. Returning without a terminal write would leave the row on
+        // 'inprogress' until the staleness reaper caught it, blocking resubmission in the meantime.
+        await this.fail(jobMsg, `Job ${jobMsg.jobId} has no URL to convert.`);
+        return;
+      }
 
       const useLocalStorage =
         Environment.getOptional(
@@ -226,28 +274,37 @@ export class JobService {
       ) as JobOutputFormat[];
       log.debug(`ENABLED_FORMATS is set to ${enabledFormats.join(', ')}`);
 
+      // The stage plan is weighted by which formats are actually enabled, so a PDF-only deployment
+      // still reaches 100 instead of stalling where the EPUB and ThinCC bands would have been.
+      const reporter = new JobProgressReporter(jobMsg.jobId, { enabledFormats });
+      progress = reporter;
+
       try {
+        progress.enter('resolving');
         const bookModel = new BookService();
         const bookID = await bookModel.getIDFromURL(job.url);
         log.debug(`Extracted book ID: ${bookID?.toString()}`);
         if (!bookID) {
-          await this.setStatus(jobMsg.jobId, 'failed');
-          await this.finish(jobMsg);
+          await this.fail(jobMsg, `Could not resolve a book ID from URL ${job.url}.`);
           return;
         }
 
         let PDFPrintContentPageCount = 1; // This is a temporary workaround to pass `numPages` to the legacy `endpoint` API until we implement a more robust solution for retrieving book info in bulk
 
         await job.update({ bookID: bookID.toString() });
-        const pages = await bookModel.discoverPages(bookID.lib, bookID.pageNum);
+        progress.enter('discovering');
+        const pages = await bookModel.discoverPages(bookID.lib, bookID.pageNum, { progress });
         log.debug(`Discovered ${pages.flat.length} pages for book ${bookID.toString()}`);
 
         // Single content page (no children) — generate a simple PDF only
         const isSinglePage = pages.flat.length === 1;
         if (isSinglePage) {
           log.info(`Single page detected for ${bookID.toString()}, generating single-page PDF`);
+          // Most of the PDF pipeline is skipped on this path, so re-plan the remaining bands over
+          // the stages that will actually run. The monotonic floor carries over.
+          reporter.useSinglePagePlan();
           if (enabledFormats.includes('PDF')) {
-            const pdfService = new PDFService(bookID, jobMsg.jobId, { useLocalStorage });
+            const pdfService = new PDFService(bookID, jobMsg.jobId, { progress, useLocalStorage });
             try {
               const pdfPath = await pdfService.convertSinglePage(pages.tree);
               log.info(`Single-page PDF generated at path: ${pdfPath}`);
@@ -258,6 +315,12 @@ export class JobService {
               throw pdfError;
             }
           }
+          progress.enter('finalizing');
+          // stop() first: flush() awaits a snapshot of the write chain, so a heartbeat firing
+          // during that round trip would queue a write nobody waits for, and it could land after
+          // finish() and drag the stored percentage back down.
+          progress.stop();
+          await progress.flush();
           await this.finish(jobMsg, bookID, 1);
           return;
         }
@@ -276,7 +339,7 @@ export class JobService {
         }
 
         // <generate pdf>
-        const pdfService = new PDFService(bookID, jobMsg.jobId, { useLocalStorage });
+        const pdfService = new PDFService(bookID, jobMsg.jobId, { progress, useLocalStorage });
         let pdfPath: string | null = null;
         if (enabledFormats.includes('PDF')) {
           try {
@@ -295,19 +358,25 @@ export class JobService {
 
         // <generate epub>
         if (enabledFormats.includes('EPUB')) {
+          this.assertWithinBudget(progress, 'EPUB generation');
+          progress.enter('epub');
           const epubService = new EPUBService();
-          const epubPath = await epubService.convertBook(pages, { useLocalStorage });
+          const epubPath = await epubService.convertBook(pages, { progress, useLocalStorage });
           if (epubPath) log.info(`EPUB generated at path: ${epubPath}`);
         }
         // </generate epub>
 
         // <generate thincc>
         if (enabledFormats.includes('ThinCC')) {
+          this.assertWithinBudget(progress, 'ThinCC generation');
+          progress.enter('thincc');
           const thinCCService = new ThinCCService();
           const thinCCPath = await thinCCService.convertBook(pages, { useLocalStorage });
           if (thinCCPath) log.info(`ThinCC generated at path: ${thinCCPath}`);
         }
         // </generate thincc>
+
+        progress.enter('finalizing');
 
         const legacyAPIService = new LegacyAPIService();
         await legacyAPIService.updateBookInfo({ bookID, pageCount: PDFPrintContentPageCount }).catch((legacyError) => {
@@ -315,15 +384,25 @@ export class JobService {
           log.error(`Failed to update legacy API: ${errorMsg}`);
         }); // A legacy API update failure should not cause the whole job to fail, so we catch errors here and log them without re-throwing
 
+        // Stop the timers, then settle every outstanding write, before finish() stamps 100. Both
+        // halves matter: a live heartbeat can enqueue past flush()'s snapshot of the chain, and an
+        // unsettled write would land after finish() and drag the reported value back down.
+        progress.stop();
+        await progress.flush();
         await this.finish(jobMsg, bookID, PDFPrintContentPageCount);
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         log.error(`Job failed: ${errorMsg}`);
-        await this.setStatus(jobMsg.jobId, 'failed');
+        // Leave `progress` frozen where the pipeline died — it tells the caller how far it got.
+        progress.stop();
+        await progress.flush();
+        await this.writeTerminalStatus(jobMsg.jobId, { status: 'failed' });
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
       log.error(`A fatal error occurred while running the job: ${errorMsg}`);
+    } finally {
+      progress.stop();
     }
   }
 
@@ -331,11 +410,80 @@ export class JobService {
     await Job.update({ status: newStatus }, { where: { id } });
   }
 
-  public async finish(job: JobQueueMessage, bookID?: PageID, printContentPageCount?: number) {
-    await this.setStatus(job.jobId, 'finished');
+  /**
+   * Writes a terminal outcome, but only while this worker still owns the job.
+   *
+   * `failStaleJobs` can flip a row out from under a worker that is still running, which releases
+   * the book to a fresh submission (the heartbeat in lib/jobProgress.ts makes that rare, not
+   * impossible — see MAX_HEARTBEAT_AGE_MS). An unconditional write here would stamp our outcome
+   * back over that hand-off and leave a row that looks perfectly healthy, while in fact two
+   * workers had been writing the same S3 keys. Scoping the update to a row still marked
+   * 'inprogress' turns the lost race into a zero-row result, which is the only signal the system
+   * gets that it happened.
+   *
+   * Returns true when this worker still held the job.
+   */
+  private async writeTerminalStatus(
+    id: string,
+    values: { progress?: number; stage?: string; status: JobStatus },
+  ): Promise<boolean> {
+    const [affected] = await Job.update(values, { where: { id, status: 'inprogress' } });
+    if (affected > 0) return true;
+    log.warn(
+      `Job ${id} was no longer 'inprogress' when writing '${values.status}'. Either the staleness ` +
+        'reaper released this book to another worker, or the row is gone. Leaving it as it stands.',
+    );
+    return false;
+  }
+
+  /**
+   * Throws once the job has spent its wall-clock budget.
+   *
+   * Checked between output formats as well as inside the PDF pipeline, because the heartbeat stops
+   * a fixed grace period after this point and the job has to have failed itself by then. A job
+   * still running when the heartbeat quits is a job the staleness reaper hands to a second worker
+   * while the first is mid-write.
+   */
+  private assertWithinBudget(progress: ProgressReporter, phase: string) {
+    const elapsedMs = progress.elapsedMs();
+    if (elapsedMs <= JOB_MAX_DURATION_MS) return;
+    throw new Error(`Job exceeded maximum duration (${Math.round(elapsedMs / 60_000)} minutes) before ${phase}`);
+  }
+
+  /**
+   * Terminal failure path. Mirrors finish()'s queue cleanup but records the job as failed, and
+   * leaves `progress` frozen wherever the pipeline got to rather than stamping it complete.
+   */
+  public async fail(job: JobQueueMessage, reason: string) {
+    log.error(`Job ${job.jobId} failed: ${reason}`);
+    await this.writeTerminalStatus(job.jobId, { status: 'failed' });
 
     if (Environment.getSystemEnvironment() === 'DEVELOPMENT') return;
     await this.queueClient.deleteJobMessage(job.receiptHandle);
+  }
+
+  public async finish(job: JobQueueMessage, bookID?: PageID, printContentPageCount?: number) {
+    // Status and progress move in one statement. Split across two, a poll landing between them
+    // reads a 'finished' row still carrying its last in-progress percentage, which the list
+    // endpoint would hand straight to the client. 100 is only ever written here, so a running job
+    // can never report complete.
+    const stillOwned = await this.writeTerminalStatus(job.jobId, {
+      status: 'finished',
+      progress: 100,
+      stage: JOB_STAGE_LABELS.complete,
+    });
+
+    if (Environment.getSystemEnvironment() === 'DEVELOPMENT') return;
+    await this.queueClient.deleteJobMessage(job.receiptHandle);
+
+    // Losing the row means another worker owns this book and is still writing the same output
+    // keys. Our files are complete, but announcing them now would point Conductor at objects that
+    // are about to be overwritten. Stay quiet and let the worker that actually owns the book
+    // announce when it is done.
+    if (!stillOwned) {
+      log.warn(`Skipping the Conductor webhook for job ${job.jobId}: another worker owns this book.`);
+      return;
+    }
 
     // If the webhook service is configured and we have a valid bookID, notify Conductor,
     // but never let a webhook failure affect job completion.

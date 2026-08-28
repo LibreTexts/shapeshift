@@ -8,6 +8,7 @@ import { validators } from '../api/validators';
 import { LogLayer } from 'loglayer';
 import { log as logService } from '../lib/log';
 import { Job } from '../model';
+import { JOB_STAGE_LABELS, MAX_INPROGRESS_PROGRESS } from '../lib/jobProgress';
 import { extractIPFromHeaders, ZodRequest } from '../util/util';
 
 export class JobController {
@@ -105,7 +106,7 @@ export class JobController {
     const sort = req.validatedData?.query?.sort ?? 'desc';
     const statusFilter = req.validatedData?.query?.status;
     const { count, rows } = await Job.findAndCountAll({
-      attributes: ['bookID', 'id', 'status', 'isHighPriority', 'url', 'createdAt'],
+      attributes: ['bookID', 'id', 'progress', 'stage', 'status', 'isHighPriority', 'url', 'createdAt'],
       limit,
       offset,
       order: [['createdAt', sort.toUpperCase()]],
@@ -117,7 +118,10 @@ export class JobController {
         limit,
         total: count,
       },
-      data: rows,
+      // Same reconciliation the single-job endpoint applies, so the two describe a job identically.
+      // Without it a list row reports the raw column and a client polling the list sees a finished
+      // job at whatever percentage it last checkpointed at.
+      data: rows.map((job) => ({ ...job.toJSON(), ...JobController.presentProgress(job) })),
       status: 200,
     });
   }
@@ -133,15 +137,37 @@ export class JobController {
       });
     }
 
+    const { progress, stage } = JobController.presentProgress(job);
     return res.status(200).send({
       data: {
         bookID: job.bookID,
         id: job.id,
         isHighPriority: job.isHighPriority,
+        progress,
+        stage,
         status: job.status,
         url: job.url,
       },
       status: 200,
     });
+  }
+
+  /**
+   * Reconciles the stored progress with the job's status so a client never sees a contradiction:
+   * no percentage on a job that hasn't started, and never 100 on one that isn't finished. A failed
+   * job keeps whatever it reached, which is the useful part — it says how far it got.
+   */
+  private static presentProgress(job: Job): { progress: number; stage: string | null } {
+    const stored = Math.max(0, Math.min(100, job.progress ?? 0));
+    switch (job.status) {
+      case 'created':
+        return { progress: 0, stage: JOB_STAGE_LABELS.queued };
+      case 'finished':
+        return { progress: 100, stage: JOB_STAGE_LABELS.complete };
+      case 'inprogress':
+        return { progress: Math.min(Math.max(stored, 1), MAX_INPROGRESS_PROGRESS), stage: job.stage ?? null };
+      default:
+        return { progress: stored, stage: job.stage ?? null };
+    }
   }
 }

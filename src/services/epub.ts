@@ -19,6 +19,7 @@ import PageID from '../util/pageID';
 import { optimizeImageBuffer } from '../util/imageOptimizer';
 import { PassThrough } from 'node:stream';
 import { Upload } from '@aws-sdk/lib-storage';
+import { nullProgressReporter, type ProgressReporter } from '../lib/jobProgress';
 
 const DEFAULT_EPUB_IMAGE_MAX_EDGE = 1600;
 const EPUB_IMAGE_JPEG_QUALITY = 80;
@@ -68,7 +69,7 @@ export class EPUBService {
     }
   }
 
-  public async convertBook(pagesInput: BookPages, opt?: { useLocalStorage?: boolean }) {
+  public async convertBook(pagesInput: BookPages, opt?: { progress?: ProgressReporter; useLocalStorage?: boolean }) {
     if (!pagesInput?.flat?.length) return null;
     const { flat: pagesRaw } = pagesInput;
     const coverPage = pagesRaw[0];
@@ -84,7 +85,11 @@ export class EPUBService {
     const author = coverPage.printInfo.authorName || 'Unknown';
     const language = 'en'; // TODO: multi-language support
     const modifiedDate = today.toISOString();
-    const { images, pages: writtenPages } = await this.processContentPages({ bookID, pages: pages.slice(1) });
+    const { images, pages: writtenPages } = await this.processContentPages({
+      bookID,
+      pages: pages.slice(1),
+      progress: opt?.progress,
+    });
     const containerXMLDataStr = xmlBuilder.build({
       container: {
         $version: '1.0',
@@ -243,8 +248,19 @@ export class EPUBService {
     return outputPath;
   }
 
-  private async processContentPages({ bookID, pages }: { bookID: PageID; pages: BookPageInfoForEPUB[] }) {
+  private async processContentPages({
+    bookID,
+    pages,
+    progress = nullProgressReporter,
+  }: {
+    bookID: PageID;
+    pages: BookPageInfoForEPUB[];
+    progress?: ProgressReporter;
+  }) {
     if (!pages.length) return { images: [], pages: [] };
+    // This loop is sequential all the way down (one page, then one image at a time), so a plain
+    // completion counter tracks it exactly.
+    progress.expect(pages.length);
     const imageURLToMeta = new Map<string, { fileName: string; mimeType: string; uuid: string }>();
     const pagesToWrite: { htmlContent: string; sectionId: string }[] = [];
     const calcPageIndexPrefix = (title: string) => {
@@ -272,7 +288,10 @@ export class EPUBService {
     const pageLinksToSectionIds = pages.reduce((acc, p) => acc.set(p.url, p.sectionId), new Map<string, string>());
     for (const { pageID, ...page } of pages) {
       this.logger.withMetadata({ pageID }).debug('Processing page');
-      if (!page?.body?.length) continue;
+      if (!page?.body?.length) {
+        progress.tick(); // skipped pages still count, or the bar stops short of the band top
+        continue;
+      }
       const subdomain = pageID.lib;
       const pageIndexPrefix = calcPageIndexPrefix(page.title);
       const rawContent = page.body[0];
@@ -401,6 +420,7 @@ export class EPUBService {
         sectionId: page.sectionId,
       });
       this.logger.withMetadata({ pageID }).debug('Finished processing page');
+      progress.tick();
     }
 
     await runBatchedPromises(

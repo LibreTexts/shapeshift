@@ -30,6 +30,7 @@ import {
 import { GlossaryEntry, GlossaryEntryForPage } from '../types/glossary';
 import { GlossaryService } from './glossary';
 import { escapeHTML } from '../util/glossaryHelpers';
+import { nullProgressReporter, type ProgressReporter } from '../lib/jobProgress';
 
 /**
  * Maximum number of concurrent page content fetches from the CXOne API.
@@ -161,6 +162,20 @@ function getInteractiveLabel(tag: string, url: string): string {
   return TAG_LABELS[tag] || 'Interactive Content';
 }
 
+/**
+ * Counts every page in a raw CXOne page tree. Mirrors the subpage-shape handling in
+ * BookService.getPageInfo(), where `subpages.page` is an array, a bare object, or absent.
+ */
+function countPagesInTree(node: GetPagesResponse): number {
+  const subpagesRaw = isNonNullCXOneObject(node.subpages) ? node.subpages : null;
+  const subpages = Array.isArray(subpagesRaw?.page)
+    ? subpagesRaw.page
+    : typeof subpagesRaw?.page === 'object'
+      ? [subpagesRaw.page]
+      : [];
+  return 1 + subpages.reduce((sum: number, child: GetPagesResponse) => sum + countPagesInTree(child), 0);
+}
+
 export class BookService {
   private readonly logger: LogLayer;
   private readonly logName: 'BookService';
@@ -168,6 +183,12 @@ export class BookService {
   private attributionCache = new Map<string, ContentAttribution | null>();
   private bookGlossaryCache = new Map<string, GlossaryEntry[]>();
   private glossaryTermsByPageCache = new Map<string, GlossaryEntryForPage[]>();
+  /**
+   * Progress sink for the current discoverPages() call. It lives on the instance rather than
+   * being threaded through getPageInfo(), because that function recurses and fans out over
+   * siblings — there is no single loop to count from.
+   */
+  private _progress: ProgressReporter = nullProgressReporter;
   private readonly DEFAULT_THUMBNAILS = {
     BACK_MATTER: 'https://cdn.libretexts.net/DefaultImages/Back%20matter.jpg',
     DEFAULT: 'https://cdn.libretexts.net/DefaultImages/default.png',
@@ -524,7 +545,11 @@ export class BookService {
    * @param pageID - the root page ID of the book
    * @param opt - Optional settings.
    */
-  public async discoverPages(libName: string, pageID: number, opt?: { forceRefresh?: boolean }): Promise<BookPages> {
+  public async discoverPages(
+    libName: string,
+    pageID: number,
+    opt?: { forceRefresh?: boolean; progress?: ProgressReporter },
+  ): Promise<BookPages> {
     try {
       const bookID = new PageID({ lib: libName, pageNum: pageID });
       if (
@@ -544,12 +569,19 @@ export class BookService {
       const pagesRespRaw = await lib.api.pages.getPageTree(pageID);
       const pagesRaw = pagesRespRaw.page;
 
+      // getPageTree returns the whole hierarchy in one call, so the exact page count is known
+      // before any content is fetched. The extra unit covers the preprocessHTML pass below, which
+      // keeps the bar just short of the band top until discovery is genuinely done.
+      this._progress = opt?.progress ?? nullProgressReporter;
+      this._progress.expect(countPagesInTree(pagesRaw) + 1);
+
       const pages = await this.getPageInfo(libName, pagesRaw, lib);
       const glossaryService = new GlossaryService();
       const glossaryData = await glossaryService.getGlossaryTermsForBook(bookID);
       this.bookGlossaryCache.set(bookID.toString(), glossaryData.terms);
       glossaryData.termsByPage.forEach((v, k) => this.glossaryTermsByPageCache.set(k, v));
       await this.preprocessHTML(pages);
+      this._progress.tick();
       const result = {
         flat: this.flattenPagesObj(pages),
         tree: pages,
@@ -590,6 +622,7 @@ export class BookService {
       include: 'contents',
       mode: 'view',
     });
+    this._progress.tick();
     const url = pageDetails['uri.ui']!;
 
     const subpagesRaw = isNonNullCXOneObject(p.subpages) ? p.subpages : null;

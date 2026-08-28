@@ -17,11 +17,32 @@ const bearerAuth = registry.registerComponent('securitySchemes', 'bearerAuth', {
 registry.register('JobStatus', _jobStatusSchema);
 registry.register('ExportFormat', _exportFormatSchema);
 
+// Shared progress fields, so the single-job response and the list item describe them identically.
+const progressField = z
+  .number()
+  .int()
+  .min(0)
+  .max(100)
+  .openapi({
+    description:
+      'Coarse completion estimate, 0-100. Monotonic, and deliberately conservative: it is capped at ' +
+      '99 until `status` is `finished`, at which point it is always 100. A `failed` job keeps the ' +
+      'value it reached before it died.',
+    example: 47,
+  });
+
+const stageField = z.string().nullable().openapi({
+  description: 'Human-readable label for the pipeline stage the job is currently in.',
+  example: 'Generating PDF',
+});
+
 const JobSchema = registry.register(
   'Job',
   z.object({
     bookID: z.string().nullable().openapi({ example: 'phys-123456' }),
     id: z.string().uuid().openapi({ example: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' }),
+    progress: progressField,
+    stage: stageField,
     status: _jobStatusSchema,
     isHighPriority: z.boolean(),
     url: z.url().openapi({ example: EXAMPLE_BOOK_URL }),
@@ -133,7 +154,9 @@ registry.registerPath({
   method: 'get',
   path: '/job/{jobID}',
   summary: 'Get a job by ID',
-  description: 'Returns the current status and metadata for a single export job.',
+  description:
+    'Returns the current status, progress, and metadata for a single export job. Poll this ' +
+    'endpoint to track a running export; `progress` never decreases between polls.',
   tags: ['Jobs'],
   request: { params: jobGetParams },
   responses: {
@@ -144,6 +167,8 @@ registry.registerPath({
           bookID: z.string(),
           id: z.string(),
           isHighPriority: z.boolean(),
+          progress: progressField,
+          stage: stageField,
           status: _jobStatusSchema,
           url: z.url(),
         }),

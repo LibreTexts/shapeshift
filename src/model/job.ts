@@ -18,13 +18,16 @@ interface JobAttributes {
   createdAt: Date;
   id: string;
   isHighPriority: boolean;
+  progress: number;
   requesterIp: string;
+  stage: string | null;
   status: JobStatus;
   updatedAt?: Date;
   url: string;
 }
 
-interface JobCreationAttributes extends Optional<JobAttributes, 'createdAt' | 'id' | 'status' | 'updatedAt'> {}
+interface JobCreationAttributes
+  extends Optional<JobAttributes, 'createdAt' | 'id' | 'progress' | 'stage' | 'status' | 'updatedAt'> {}
 
 @Table({
   timestamps: true,
@@ -48,6 +51,21 @@ export class Job extends Model<JobAttributes, JobCreationAttributes> {
 
   @Column(DataType.STRING)
   declare bookID: string;
+
+  /**
+   * Coarse completion estimate for the job, 0-100. Written by the processor at throttled
+   * checkpoints (see lib/jobProgress.ts) and read back by GET /job/:jobID. Deliberately
+   * conservative: it is capped at 99 until the job reaches 'finished'.
+   */
+  @AllowNull(false)
+  @Default(0)
+  @Column(DataType.TINYINT.UNSIGNED)
+  declare progress: number;
+
+  /** Human-readable label for the pipeline stage `progress` was last measured in. */
+  @AllowNull(true)
+  @Column(DataType.STRING(64))
+  declare stage: string | null;
 
   @Column(DataType.BOOLEAN)
   declare isHighPriority: boolean;

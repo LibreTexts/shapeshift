@@ -47,6 +47,7 @@ import { generateSubpageListing, injectDirectoryListing, isCoverpage, isPublicat
 import { sleep, USER_AGENT } from '../util/util';
 import { renderAutoAttribution } from '../util/licensing';
 import { ImageProcessor } from './imageProcessor';
+import { JOB_MAX_DURATION_MS, nullProgressReporter, type ProgressReporter } from '../lib/jobProgress';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -116,7 +117,9 @@ const RETRY_CONFIG = {
 
 const CIRCUIT_BREAKER_CONFIG = {
   maxConsecutiveFailures: 5,
-  maxJobDurationMs: 4 * 60 * 60 * 1000, // 4 hours
+  // Shared with the heartbeat ceiling in lib/jobProgress.ts, which is derived from this value.
+  // The two have to stay related: a job must fail itself before the reaper can release its book.
+  maxJobDurationMs: JOB_MAX_DURATION_MS,
 };
 
 /**
@@ -133,6 +136,15 @@ const MAX_PAGES_PER_GROUP = 6;
  * resource pressure. Tune via PRINCE_CONCURRENCY env var.
  */
 const DEFAULT_PRINCE_CONCURRENCY = 4;
+
+/**
+ * Rough wall-clock estimate for one whole-document Prince invocation, used only to shape the
+ * progress creep curve while the subprocess runs. It sets how fast the bar approaches the top of
+ * its band; being wrong makes the creep look fast or slow, never wrong.
+ */
+function estimateFullRunMs(pageCount: number) {
+  return Math.max(15_000, pageCount * 400);
+}
 
 export class PDFService {
   private _bookID!: PageID;
@@ -151,10 +163,12 @@ export class PDFService {
   /* True only for a tagged book, i.e. one whose root page is a cover/TOC */
   private _isTaggedBook = false;
   private _urlToAnchor: Map<string, string> = new Map();
+  private readonly _progress: ProgressReporter;
 
-  constructor(bookID: PageID, jobID?: string, opts?: { useLocalStorage?: boolean }) {
+  constructor(bookID: PageID, jobID?: string, opts?: { progress?: ProgressReporter; useLocalStorage?: boolean }) {
     this._bookID = bookID;
     this._jobID = jobID;
+    this._progress = opts?.progress ?? nullProgressReporter;
     this._useLocalStorage = opts?.useLocalStorage ?? false;
 
     if (!bookID || !(bookID instanceof PageID)) {
@@ -205,6 +219,28 @@ export class PDFService {
    * introduced by the inline `[url]` annotations, so it reads slightly higher than the digital
    * edition — it is the number print/ordering services need.
    */
+  /**
+   * Aborts the conversion once the job has burned its wall-clock budget.
+   *
+   * Two clocks, because they measure different things. `startTime` covers this service alone,
+   * which is all a standalone caller has. The reporter's clock starts when the job does, so it
+   * also counts page discovery and any formats generated before this one. Take the larger: the
+   * budget is a statement about the job, not about one service's share of it.
+   *
+   * The check is repeated across the later phases rather than only guarding the two Prince
+   * fan-outs. Those fan-outs were the only bounded part of the pipeline; everything after Pass 2
+   * (the two whole-document runs, Individual.zip, the covers, the S3 uploads) is open-ended. A job
+   * that sailed past the budget in one of them used to keep running until the heartbeat quit
+   * underneath it, at which point the staleness reaper released the book and a resubmission put a
+   * second worker on the same S3 keys. Failing here, loudly and on our own terms, is what closes
+   * that window.
+   */
+  private assertWithinJobBudget(startTime: number, phase: string) {
+    const elapsedMs = Math.max(Date.now() - startTime, this._progress.elapsedMs());
+    if (elapsedMs <= CIRCUIT_BREAKER_CONFIG.maxJobDurationMs) return;
+    throw new Error(`Job exceeded maximum duration (${Math.round(elapsedMs / 60_000)} minutes) before ${phase}`);
+  }
+
   public async convertBook(pagesInput: BookPages): Promise<{ filePath: string; pageCount: number } | null> {
     if (!pagesInput?.flat?.length) return null;
     const { flat: pages } = pagesInput;
@@ -221,6 +257,7 @@ export class PDFService {
         throw new Error('Preflight checks failed: Prince binary is not properly configured');
       }
 
+      this._progress.enter('images');
       await this.optimizeBookImages(pages);
 
       // Build conversion tasks with correct ordering and TOC placement, then group
@@ -239,6 +276,10 @@ export class PDFService {
       // renders would race on it.  We complete all math work before spawning any
       // Prince processes so Phase 2 is free of MathJax state.
       this.logger.withMetadata({ totalGroups: pageGroups.length }).info('Pre-rendering math for all groups');
+      // Sequential and one unit per content page, so this counter is exact. It is also the longest
+      // stage on a large book, which is why it carries the heaviest weight in the stage plan.
+      this._progress.enter('math');
+      this._progress.expect(conversionTasks.filter((t) => t.type === 'page').length);
       const prerenderedMap = new Map<string, PrerenderedTask[]>();
       for (const group of pageGroups) {
         const pageTasks = group.tasks.filter((t) => t.type === 'page');
@@ -252,9 +293,13 @@ export class PDFService {
             const renderedBody = await prerenderMath(rawHTML, t.pageInfo);
             const renderedBodyPath = await this._createTempFile(renderedBody);
             rendered.push({ task: t, renderedBodyPath });
+            this._progress.tick();
           }
           prerenderedMap.set(group.sortKey, rendered);
         } catch (mathError) {
+          // The group falls back to inline rendering, but its pages are done as far as this stage
+          // is concerned — count them, or the bar stalls short of the band top.
+          this._progress.tick(pageTasks.length - rendered.length);
           // Discard any temp files already written for this partially-rendered group so they
           // don't leak; the group falls back to inline rendering during conversion below.
           await Promise.all(rendered.map((p) => this._deleteTempFile(p.renderedBodyPath).catch(() => {})));
@@ -288,18 +333,24 @@ export class PDFService {
         .info('Pass 1: generating group PDFs to measure page counts');
 
       // ── Phase 2a: Pass 1 ──
+      // Groups complete out of order under pLimit, so progress is a completion counter rather than
+      // an index. Ticking in `finally` keeps a failed group from stalling the bar.
+      this._progress.enter('pdfPass1');
+      this._progress.expect(pageGroups.length);
       const pass1Results = await Promise.allSettled(
         pageGroups.map((group) =>
           princeLimit(async () => {
-            if (Date.now() - startTime > CIRCUIT_BREAKER_CONFIG.maxJobDurationMs) {
-              throw new Error('Job exceeded maximum duration (4 hours)');
-            }
+            this.assertWithinJobBudget(startTime, `Pass 1 group ${group.fileName}`);
             const prerendered = prerenderedMap.get(group.sortKey) ?? null;
-            const result = await this.retryWithBackoff(
-              () => this.convertPageGroup(group, prerendered),
-              `Pass 1 group: ${group.fileName} (${group.tasks.length} page(s))`,
-            );
-            return { group, result };
+            try {
+              const result = await this.retryWithBackoff(
+                () => this.convertPageGroup(group, prerendered),
+                `Pass 1 group: ${group.fileName} (${group.tasks.length} page(s))`,
+              );
+              return { group, result };
+            } finally {
+              this._progress.tick();
+            }
           }),
         ),
       );
@@ -373,25 +424,29 @@ export class PDFService {
       // sortKey order and passed to a single Prince invocation that produces the
       // entire content PDF with a unified tagged structure tree.
       type Pass2GroupResult = { group: PageGroup; htmlPaths: string[] };
+      this._progress.enter('pdfPass2');
+      this._progress.expect(pageGroups.length);
       const pass2Results = await Promise.allSettled(
         pageGroups.map((group) =>
           princeLimit(async () => {
-            if (Date.now() - startTime > CIRCUIT_BREAKER_CONFIG.maxJobDurationMs) {
-              throw new Error('Job exceeded maximum duration (4 hours)');
-            }
+            this.assertWithinJobBudget(startTime, `Pass 2 group ${group.fileName}`);
             const prerendered = prerenderedMap.get(group.sortKey) ?? null;
             const config = groupConfigs.get(group.sortKey);
             const pageOffset = config?.pageOffset;
             const useRomanNumerals = config?.useRomanNumerals ?? false;
-            const result = await this.retryWithBackoff(
-              () => this.convertPageGroup(group, prerendered, pageOffset, true, useRomanNumerals),
-              `Pass 2 HTML group: ${group.fileName} (${group.tasks.length} page(s))`,
-            );
-            if (!result.success || !result.result) {
-              throw result.error ?? new Error('No HTML paths returned');
+            try {
+              const result = await this.retryWithBackoff(
+                () => this.convertPageGroup(group, prerendered, pageOffset, true, useRomanNumerals),
+                `Pass 2 HTML group: ${group.fileName} (${group.tasks.length} page(s))`,
+              );
+              if (!result.success || !result.result) {
+                throw result.error ?? new Error('No HTML paths returned');
+              }
+              const htmlPaths = Array.isArray(result.result) ? result.result : [result.result];
+              return { group, htmlPaths } satisfies Pass2GroupResult;
+            } finally {
+              this._progress.tick();
             }
-            const htmlPaths = Array.isArray(result.result) ? result.result : [result.result];
-            return { group, htmlPaths } satisfies Pass2GroupResult;
           }),
         ),
       );
@@ -478,17 +533,26 @@ export class PDFService {
       this.logger
         .withMetadata({ totalHTMLFiles: fullDocHTMLPaths.length })
         .info('All HTML generated, running single Prince invocation for full document');
+      this.assertWithinJobBudget(startTime, 'the full-document PDF run');
       const finalFilePath = await this.generateFullDocumentOutputFilePath();
       const finalDir = getDirectoryPathFromFilePath(finalFilePath);
       await fs.mkdir(finalDir, { recursive: true });
-      await this.runPrinceConversion({
-        inputPath: fullDocHTMLPaths,
-        outputPath: finalFilePath,
-        pageInfo: coverPageInfo,
+      // One Prince subprocess over every HTML file, with no sub-progress to read. Creep the bar
+      // along an asymptote instead, sized off the page count.
+      await this._progress.during('pdfFull', estimateFullRunMs(pages.length), async () => {
+        await this.runPrinceConversion({
+          inputPath: fullDocHTMLPaths,
+          outputPath: finalFilePath,
+          pageInfo: coverPageInfo,
+        });
+        if (!this._useLocalStorage) await this.streamFileToS3(finalFilePath);
       });
-      if (!this._useLocalStorage) await this.streamFileToS3(finalFilePath);
 
       // ── Phase 4b: Generate per-section Individual.zip ──
+      // Checked before the try, not inside it: that catch logs and continues, which is right for a
+      // failed zip and wrong for a spent budget.
+      this.assertWithinJobBudget(startTime, 'the individual-pages zip');
+      this._progress.enter('pdfPages');
       try {
         const totalSections = fullDocHTMLPaths.length;
         const pad = Math.max(3, String(totalSections).length);
@@ -522,6 +586,7 @@ export class PDFService {
       // We modify the HTML files directly (they are deleted shortly after anyway):
       //  1. Inject print-edition CSS inline so it wins the cascade over existing styles.
       //  2. Append the URL as text after each link using cheerio.
+      this.assertWithinJobBudget(startTime, 'the print edition');
       this.logger.info('Generating print edition content PDF');
 
       // Build reverse map: anchor fragment → short URL (e.g. "#page-chem-123" → "go.libretexts.org/chem-123")
@@ -566,18 +631,21 @@ export class PDFService {
         ),
       );
       const printFullFilePath = join(getDirectoryPathFromFilePath(finalFilePath), 'Full_Print.pdf');
-      await this.runPrinceConversion({
-        inputPath: fullDocHTMLPaths,
-        outputPath: printFullFilePath,
-        pageInfo: coverPageInfo,
-        taggedPdf: false,
-      });
-
       const contentFilePath = await this.generateContentOutputFilePath();
-      await extractPDFPages({
-        inputPath: printFullFilePath,
-        outputPath: contentFilePath,
-        pageStart: mainCoverTempPath ? 2 : 1, // page 1 is the Main cover, when there is one
+      // The second whole-document Prince run, equally opaque. It reflows longer than the digital
+      // edition (every link gains its URL as visible text), so estimate it slightly higher.
+      await this._progress.during('pdfPrint', estimateFullRunMs(pages.length) * 1.2, async () => {
+        await this.runPrinceConversion({
+          inputPath: fullDocHTMLPaths,
+          outputPath: printFullFilePath,
+          pageInfo: coverPageInfo,
+          taggedPdf: false,
+        });
+        await extractPDFPages({
+          inputPath: printFullFilePath,
+          outputPath: contentFilePath,
+          pageStart: mainCoverTempPath ? 2 : 1, // page 1 is the Main cover, when there is one
+        });
       });
       await fs.unlink(printFullFilePath).catch(() => {});
       this.logger.info('Print edition content PDF generated successfully');
@@ -608,6 +676,9 @@ export class PDFService {
           opt: COVER_TYPE_CONFIG[coverType].opt,
         }));
 
+        this.assertWithinJobBudget(startTime, 'cover generation');
+        this._progress.enter('pdfCovers');
+        this._progress.expect(coverConfigs.length);
         const coversPath = await this.ensureCoversDirectory();
         const coverResults = await Promise.allSettled(
           coverConfigs.map(async (config) => {
@@ -631,6 +702,7 @@ export class PDFService {
                 })
                 .error('Cover generation failed after retries');
             }
+            this._progress.tick();
             return result;
           }),
         );
@@ -683,29 +755,35 @@ export class PDFService {
 
       const rawBody = pageInfo.body.join('');
       const bodyWithTitle = this.addPageTitle(pageInfo, rawBody);
+      this._progress.enter('math');
       const renderedBody = await prerenderMath(this.decodeHTML(bodyWithTitle), pageInfo);
 
       const sortKey = '0001';
-      const pdfPath = await this.convertPage({
-        pageID: pageInfo.pageID,
-        pageInfo,
-        pageBodyHTML: rawBody,
-        preRenderedBodyHTML: renderedBody,
-        pageHeadHTML: pageInfo.head,
-        pageTailHTML: pageInfo.tail,
-        sortKey,
-        pageOffset: 0,
+      const finalPath = await this._progress.during('pdfFull', estimateFullRunMs(1), async () => {
+        const pdfPath = await this.convertPage({
+          pageID: pageInfo.pageID,
+          pageInfo,
+          pageBodyHTML: rawBody,
+          preRenderedBodyHTML: renderedBody,
+          pageHeadHTML: pageInfo.head,
+          pageTailHTML: pageInfo.tail,
+          sortKey,
+          pageOffset: 0,
+        });
+
+        if (!pdfPath) return null;
+
+        // Move workdir PDF to the final Full.pdf location
+        const outPath = await this.generateFullDocumentOutputFilePath();
+        const finalDir = getDirectoryPathFromFilePath(outPath);
+        await fs.mkdir(finalDir, { recursive: true });
+        await fs.rename(pdfPath, outPath);
+
+        if (!this._useLocalStorage) await this.streamFileToS3(outPath);
+        return outPath;
       });
 
-      if (!pdfPath) return null;
-
-      // Move workdir PDF to the final Full.pdf location
-      const finalPath = await this.generateFullDocumentOutputFilePath();
-      const finalDir = getDirectoryPathFromFilePath(finalPath);
-      await fs.mkdir(finalDir, { recursive: true });
-      await fs.rename(pdfPath, finalPath);
-
-      if (!this._useLocalStorage) await this.streamFileToS3(finalPath);
+      if (!finalPath) return null;
 
       this.logger
         .withMetadata({ duration: Date.now() - startTime })
@@ -1206,21 +1284,31 @@ ${stripBlocklistedScripts(pageTailHTML)}
       parseInt(Environment.getOptional('PRINCE_CONCURRENCY', String(DEFAULT_PRINCE_CONCURRENCY)), 10) ||
       DEFAULT_PRINCE_CONCURRENCY;
     const limit = pLimit(princeConcurrency);
+    // One Prince run per section, so a completion counter over `sections` tracks this exactly.
+    // Sections finish out of order under pLimit, hence a counter rather than an index.
+    this._progress.expect(sections.length);
     const renderResults = await Promise.allSettled(
       sections.map((section) =>
         limit(async () => {
-          const html = await fs.readFile(section.htmlPath, 'utf-8');
-          const rewritten = this.rewriteInternalLinksToFullUrls(html, anchorToFullUrl);
-          const htmlInputPath = join(workdir, `${section.name}.html`);
-          await fs.writeFile(htmlInputPath, rewritten);
-          const pdfPath = join(workdir, section.name);
-          await this.runPrinceConversion({
-            inputPath: htmlInputPath,
-            outputPath: pdfPath,
-            pageInfo: section.pageInfo,
-          });
-          await fs.unlink(htmlInputPath).catch(() => {});
-          return { name: section.name, pdfPath };
+          try {
+            const html = await fs.readFile(section.htmlPath, 'utf-8');
+            const rewritten = this.rewriteInternalLinksToFullUrls(html, anchorToFullUrl);
+            const htmlInputPath = join(workdir, `${section.name}.html`);
+            await fs.writeFile(htmlInputPath, rewritten);
+            const pdfPath = join(workdir, section.name);
+            await this.runPrinceConversion({
+              inputPath: htmlInputPath,
+              outputPath: pdfPath,
+              pageInfo: section.pageInfo,
+            });
+            await fs.unlink(htmlInputPath).catch(() => {});
+            return { name: section.name, pdfPath };
+          } finally {
+            // Ticking here rather than on entry keeps the band tracking finished sections, and
+            // matches the two Prince passes above. A failed section still counts, or a single
+            // bad page would stall the bar short of the band top.
+            this._progress.tick();
+          }
         }),
       ),
     );
@@ -1299,6 +1387,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         bookID: this._bookID.toString(),
         jobID: this._jobID,
         outputDir: resolve(`${baseDir}/pdf/${this._bookID.toString()}/images`),
+        progress: this._progress,
       });
       await processor.optimizePages(pages);
     } catch (error) {
