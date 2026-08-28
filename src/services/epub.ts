@@ -209,6 +209,12 @@ export class EPUBService {
           clip: rect(0, 0, 0, 0);
           border: 0;
       }
+
+      /* Authored blank space from Template:FixedSpace/Activity. Height is set inline
+         by collapseFixedSpace(). */
+      .fixed-space {
+          display: block;
+      }
     `;
     await Promise.all([
       this.writeTemporaryFile({

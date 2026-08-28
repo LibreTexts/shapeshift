@@ -17,7 +17,7 @@ import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
 import * as cheerio from 'cheerio';
 import { Element } from 'domhandler';
 import { generateQRCode } from '../util/qrCode';
-import { demoteDecorativeHeadings, removeEmptyParagraphs } from '../util/htmlFilters';
+import { collapseFixedSpace, demoteDecorativeHeadings, removeEmptyParagraphs } from '../util/htmlFilters';
 import {
   assembleUrl,
   getPathFromURL,
@@ -960,7 +960,10 @@ export class BookService {
           const headingsFixed = this.autofixHeadingLevels(glossaryV2Rendered);
           const altTextFixed = this.autofixMissingAltText(headingsFixed);
           const cmsMarkupFixed = this.autofixCMSMarkup(altTextFixed);
-          const emptyParagraphsRemoved = removeEmptyParagraphs(cmsMarkupFixed);
+          // run collapseFixedSpace before removeEmptyParagraphs: the FixedSpace marker wraps the very
+          // <p>&nbsp;</p> elements removeEmptyParagraphs deletes
+          const fixedSpaceCollapsed = collapseFixedSpace(cmsMarkupFixed);
+          const emptyParagraphsRemoved = removeEmptyParagraphs(fixedSpaceCollapsed);
           const interactiveReplaced = await this.replaceInteractiveElements(emptyParagraphsRemoved, p.url);
           const answersExtracted = this.extractBoxAnswers(interactiveReplaced);
           p.body = [answersExtracted];
