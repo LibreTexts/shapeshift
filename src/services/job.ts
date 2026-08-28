@@ -285,7 +285,12 @@ export class JobService {
         const bookID = await bookModel.getIDFromURL(job.url);
         log.debug(`Extracted book ID: ${bookID?.toString()}`);
         if (!bookID) {
-          await this.fail(jobMsg, `Could not resolve a book ID from URL ${job.url}.`);
+          // Previously this marked the job failed and then called finish(), which overwrote the
+          // status with 'finished'. An unresolvable URL is a failure and has to read as one.
+          await this.fail(
+            jobMsg.jobId,
+            `Could not resolve a book ID from the submitted URL: ${job.url}. The page may not exist, may not be public, or may not be a book coverpage.`,
+          );
           return;
         }
 
@@ -396,7 +401,7 @@ export class JobService {
         // Leave `progress` frozen where the pipeline died — it tells the caller how far it got.
         progress.stop();
         await progress.flush();
-        await this.writeTerminalStatus(jobMsg.jobId, { status: 'failed' });
+        await this.fail(jobMsg.jobId, error);
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -451,15 +456,25 @@ export class JobService {
   }
 
   /**
-   * Terminal failure path. Mirrors finish()'s queue cleanup but records the job as failed, and
-   * leaves `progress` frozen wherever the pipeline got to rather than stamping it complete.
+   * Marks a job failed and records why.
+   *
+   * A failed export nearly always means the book needs a content fix before it is worth
+   * resubmitting, so the reason belongs on the row alongside the status. Without it the only record
+   * is a log line on whichever worker happened to pick the job up, which is not something anyone can
+   * query when a title is reported as broken.
    */
-  public async fail(job: JobQueueMessage, reason: string) {
-    log.error(`Job ${job.jobId} failed: ${reason}`);
-    await this.writeTerminalStatus(job.jobId, { status: 'failed' });
+  public async fail(id: string, reason: unknown) {
+    await Job.update({ status: 'failed', failureReason: JobService.toFailureReason(reason) }, { where: { id } });
+  }
 
-    if (Environment.getSystemEnvironment() === 'DEVELOPMENT') return;
-    await this.queueClient.deleteJobMessage(job.receiptHandle);
+  /** A reason long enough to need truncating is a stack trace, not a diagnosis. */
+  private static readonly maxFailureReasonLength = 2000;
+
+  private static toFailureReason(reason: unknown): string {
+    const text = (reason instanceof Error ? reason.message : String(reason)).trim() || 'Unknown error';
+    return text.length > JobService.maxFailureReasonLength
+      ? `${text.slice(0, JobService.maxFailureReasonLength - 1)}…`
+      : text;
   }
 
   public async finish(job: JobQueueMessage, bookID?: PageID, printContentPageCount?: number) {

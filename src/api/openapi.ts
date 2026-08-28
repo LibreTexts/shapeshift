@@ -40,6 +40,10 @@ const JobSchema = registry.register(
   'Job',
   z.object({
     bookID: z.string().nullable().openapi({ example: 'phys-123456' }),
+    failureReason: z.string().nullable().openapi({
+      description: 'Why the job failed. Null unless `status` is `failed`.',
+      example: 'Job failed: 8 group(s) failed to convert. 9999:4: Detailed Licensing unavailable …',
+    }),
     id: z.string().uuid().openapi({ example: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' }),
     progress: progressField,
     stage: stageField,
@@ -165,6 +169,9 @@ registry.registerPath({
       z.object({
         data: z.object({
           bookID: z.string(),
+          failureReason: z.string().nullable().openapi({
+            description: 'Why the job failed. Null unless `status` is `failed`.',
+          }),
           id: z.string(),
           isHighPriority: z.boolean(),
           progress: progressField,

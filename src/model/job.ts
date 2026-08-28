@@ -16,6 +16,7 @@ import { Optional } from 'sequelize';
 interface JobAttributes {
   bookID?: string;
   createdAt: Date;
+  failureReason?: string | null;
   id: string;
   isHighPriority: boolean;
   progress: number;
@@ -27,7 +28,8 @@ interface JobAttributes {
 }
 
 interface JobCreationAttributes
-  extends Optional<JobAttributes, 'createdAt' | 'id' | 'progress' | 'stage' | 'status' | 'updatedAt'> {}
+ 
+  extends Optional<JobAttributes, 'createdAt' | 'failureReason' | 'id' | 'progress' | 'stage' | 'status' | 'updatedAt'> {}
 
 @Table({
   timestamps: true,
@@ -75,6 +77,15 @@ export class Job extends Model<JobAttributes, JobCreationAttributes> {
 
   @Column(DataType.STRING)
   declare url: string;
+
+  /**
+   * Why a failed job failed, in the operator's words rather than a stack trace. A book that fails
+   * conversion almost always needs a content fix upstream before it is worth resubmitting, and
+   * without this the only record of what to fix is a log line on whichever worker happened to run
+   * it. TEXT rather than STRING because the reason names the offending pages.
+   */
+  @Column(DataType.TEXT)
+  declare failureReason: string | null;
 
   @Index({ order: 'DESC' })
   @CreatedAt

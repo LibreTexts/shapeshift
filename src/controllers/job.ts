@@ -9,7 +9,7 @@ import { LogLayer } from 'loglayer';
 import { log as logService } from '../lib/log';
 import { Job } from '../model';
 import { JOB_STAGE_LABELS, MAX_INPROGRESS_PROGRESS } from '../lib/jobProgress';
-import { extractIPFromHeaders, ZodRequest } from '../util/util';
+import { extractIPFromHeaders, getErrorMessage, ZodRequest } from '../util/util';
 
 export class JobController {
   private readonly logger: LogLayer;
@@ -60,7 +60,7 @@ export class JobController {
       // The row is already committed. Leaving it on 'created' with no queue message behind it would
       // make it look like active work and block resubmission of this book until it went stale, so
       // fail it explicitly before surfacing the error.
-      await jobModel.setStatus(job.id, 'failed');
+      await jobModel.fail(job.id, `Could not enqueue the job for processing: ${getErrorMessage(error)}`);
       throw error;
     }
 
@@ -106,7 +106,7 @@ export class JobController {
     const sort = req.validatedData?.query?.sort ?? 'desc';
     const statusFilter = req.validatedData?.query?.status;
     const { count, rows } = await Job.findAndCountAll({
-      attributes: ['bookID', 'id', 'progress', 'stage', 'status', 'isHighPriority', 'url', 'createdAt'],
+      attributes: ['bookID', 'failureReason', 'id', 'progress', 'stage', 'status', 'isHighPriority', 'url', 'createdAt'],
       limit,
       offset,
       order: [['createdAt', sort.toUpperCase()]],
@@ -141,6 +141,7 @@ export class JobController {
     return res.status(200).send({
       data: {
         bookID: job.bookID,
+        failureReason: job.failureReason ?? null,
         id: job.id,
         isHighPriority: job.isHighPriority,
         progress,
