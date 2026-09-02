@@ -39,7 +39,8 @@ import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { decode } from 'html-entities';
 import { generateDetailedLicensingHTML } from '../util/detailedLicensingHelpers';
-import axios from 'axios';
+import { DetailedLicensingReport } from '../types/licensing';
+import axios, { type AxiosResponse } from 'axios';
 import { PassThrough } from 'node:stream';
 import Archiver from 'archiver';
 import { Upload } from '@aws-sdk/lib-storage';
@@ -48,6 +49,7 @@ import { sleep, USER_AGENT } from '../util/util';
 import { renderAutoAttribution } from '../util/licensing';
 import { ImageProcessor } from './imageProcessor';
 import { JOB_MAX_DURATION_MS, nullProgressReporter, type ProgressReporter } from '../lib/jobProgress';
+import { ExportFailure, safeFailureText } from '../lib/exportFailure';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -117,10 +119,44 @@ const RETRY_CONFIG = {
 
 const CIRCUIT_BREAKER_CONFIG = {
   maxConsecutiveFailures: 5,
-  // Shared with the heartbeat ceiling in lib/jobProgress.ts, which is derived from this value.
-  // The two have to stay related: a job must fail itself before the reaper can release its book.
   maxJobDurationMs: JOB_MAX_DURATION_MS,
 };
+
+/**
+ * A conversion failure that must fail the whole book on its own, without waiting for the group
+ * circuit breaker to reach `maxConsecutiveFailures`, and without being retried.
+ *
+ * The breaker exists to tolerate scattered flakiness across many groups. A failure raises this
+ * instead when it is deterministic *and* the resulting book would be wrong rather than merely
+ * incomplete, so that retrying only burns time and shipping is not an option.
+ *
+ * NOTHING CURRENTLY THROWS THIS. The one site that did was Detailed Licensing, and it was the wrong
+ * call: the report comes from a separate service with its own outages, so a transient 502 there was
+ * failing whole books over a single back matter page. That case degrades to a placeholder page now
+ * (see `readLicensingReport`). The class and the collection paths below are kept because the
+ * distinction they draw is real and the next content-fatal case will want it. Treat the branches
+ * that reference it as an extension point, not as live protection.
+ */
+export class FatalConversionError extends ExportFailure {
+  constructor(message: string) {
+    super(message);
+    this.name = 'FatalConversionError';
+  }
+}
+
+/**
+ * Joins per-group failure reasons into the single line stored on the job row. A book that breaks in
+ * one place usually breaks in several, so the list is capped to keep the stored reason readable
+ * while still naming enough groups to act on.
+ *
+ * The entries are already provenance-checked by `safeFailureText` at the collection sites, so this
+ * only has to bound the length.
+ */
+function summarizeFailures(reasons: string[], max = 5): string {
+  const shown = reasons.slice(0, max).join(' | ');
+  const remaining = reasons.length - max;
+  return remaining > 0 ? `${shown} (+${remaining} more)` : shown;
+}
 
 /**
  * Maximum number of content pages per chapter sub-group in a single Prince invocation.
@@ -238,7 +274,9 @@ export class PDFService {
   private assertWithinJobBudget(startTime: number, phase: string) {
     const elapsedMs = Math.max(Date.now() - startTime, this._progress.elapsedMs());
     if (elapsedMs <= CIRCUIT_BREAKER_CONFIG.maxJobDurationMs) return;
-    throw new Error(`Job exceeded maximum duration (${Math.round(elapsedMs / 60_000)} minutes) before ${phase}`);
+    throw new ExportFailure(
+      `Job exceeded maximum duration (${Math.round(elapsedMs / 60_000)} minutes) before ${phase}`,
+    );
   }
 
   public async convertBook(pagesInput: BookPages): Promise<{ filePath: string; pageCount: number } | null> {
@@ -358,13 +396,19 @@ export class PDFService {
       // ── Phase 2b: Count pages per group, compute cumulative offsets ──
       type GroupCount = { group: PageGroup; pageCount: number };
       let pass1FailureCount = 0;
+      let fatalFailure: FatalConversionError | undefined;
       const pass1Counts: GroupCount[] = [];
+      const pass1Failures: string[] = [];
       for (const r of pass1Results) {
         if (r.status === 'rejected') {
           pass1FailureCount++;
+          pass1Failures.push(safeFailureText(r.reason, 'a group failed to convert'));
+          if (r.reason instanceof FatalConversionError) fatalFailure ??= r.reason;
           this.logger.withMetadata({ error: r.reason }).error('Group Pass 1 promise rejected');
         } else if (!r.value.result.success) {
           pass1FailureCount++;
+          pass1Failures.push(safeFailureText(r.value.result.error, `${r.value.group.fileName}: conversion failed`));
+          if (r.value.result.error instanceof FatalConversionError) fatalFailure ??= r.value.result.error;
           this.logger
             .withMetadata({
               error: r.value.result.error,
@@ -378,8 +422,14 @@ export class PDFService {
         }
       }
 
+      // A fatal failure means the book cannot be produced completely, so it stops the job on its own
+      // rather than waiting for enough sibling groups to fail alongside it.
+      if (fatalFailure) throw fatalFailure;
+
       if (pass1FailureCount >= CIRCUIT_BREAKER_CONFIG.maxConsecutiveFailures) {
-        throw new Error(`Job failed in Pass 1: ${pass1FailureCount} group(s) failed to convert`);
+        throw new ExportFailure(
+          `Job failed in Pass 1: ${pass1FailureCount} group(s) failed to convert. ${summarizeFailures(pass1Failures)}`,
+        );
       }
 
       // Identify front-matter and content boundaries for page counter resets.
@@ -440,7 +490,17 @@ export class PDFService {
                 `Pass 2 HTML group: ${group.fileName} (${group.tasks.length} page(s))`,
               );
               if (!result.success || !result.result) {
-                throw result.error ?? new Error('No HTML paths returned');
+                // Name the group here. Promise.allSettled only hands the rejection reason back to the
+                // collector below, so anything not carried in this message is lost to the job record.
+                // The detail is provenance-checked: an arbitrary error's text would end up on a
+                // publicly readable column (see lib/exportFailure.ts).
+                const detail = result.error
+                  ? safeFailureText(result.error, 'conversion failed')
+                  : 'produced no HTML output';
+                const message = `${group.fileName}: ${detail}`;
+                throw result.error instanceof FatalConversionError
+                  ? new FatalConversionError(message)
+                  : new ExportFailure(message);
               }
               const htmlPaths = Array.isArray(result.result) ? result.result : [result.result];
               return { group, htmlPaths } satisfies Pass2GroupResult;
@@ -453,13 +513,18 @@ export class PDFService {
 
       // ── Phase 2d: Collect HTML paths ──
       let failureCount = 0;
+      let fatalPass2Failure: FatalConversionError | undefined;
       const pass2Groups: Pass2GroupResult[] = [];
+      const pass2Failures: string[] = [];
       for (const r of pass2Results) {
         if (r.status === 'rejected') {
           failureCount++;
+          pass2Failures.push(safeFailureText(r.reason, 'a group failed to convert'));
+          if (r.reason instanceof FatalConversionError) fatalPass2Failure ??= r.reason;
           this.logger.withMetadata({ error: r.reason }).error('Group Pass 2 promise rejected');
         } else if (!r.value.htmlPaths) {
           failureCount++;
+          pass2Failures.push(`${r.value.group.fileName}: no HTML paths returned`);
           this.logger
             .withMetadata({ group: r.value.group.fileName })
             .error('Group failed Pass 2: no HTML paths returned');
@@ -468,8 +533,12 @@ export class PDFService {
         }
       }
 
+      if (fatalPass2Failure) throw fatalPass2Failure;
+
       if (failureCount >= CIRCUIT_BREAKER_CONFIG.maxConsecutiveFailures) {
-        throw new Error(`Job failed: ${failureCount} group(s) failed to convert`);
+        throw new ExportFailure(
+          `Job failed: ${failureCount} group(s) failed to convert. ${summarizeFailures(pass2Failures)}`,
+        );
       }
 
       // Cleanup pre-rendered math temp files.
@@ -814,6 +883,9 @@ export class PDFService {
         this.logger
           .withMetadata({ context, attempt, error: lastError.message })
           .warn(`Operation failed, attempt ${attempt}/${RETRY_CONFIG.maxAttempts}`);
+
+        // A fatal failure is deterministic by definition, so further attempts only cost time.
+        if (lastError instanceof FatalConversionError) return { success: false, error: lastError };
 
         if (attempt < RETRY_CONFIG.maxAttempts) {
           const delayMs = Math.min(
@@ -1638,9 +1710,15 @@ ${stripBlocklistedScripts(pageTailHTML)}
           title: pageInfo.title,
         });
 
+        // injectDirectoryListing needs a `.mt-guide-content` or `.mt-category-container` element to
+        // replace. A directory page without one cannot carry its subpage listing, which means the
+        // chapter would be missing from the finished book. Report the page rather than returning
+        // null: a silent skip here is invisible in Pass 1 and reaches the operator, at best, as an
+        // unattributed count in Pass 2.
         if (!updatedHTML) {
-          this.logger.withMetadata({ url: pageInfo.url }).warn('Failed to process directory page for TOC');
-          return null;
+          throw new ExportFailure(
+            `Directory page ${pageInfo.url} has no .mt-guide-content or .mt-category-container element to hold its subpage listing`,
+          );
         }
 
         const outputPath = await this.convertPage({
@@ -1803,6 +1881,54 @@ ${stripBlocklistedScripts(pageTailHTML)}
     }
   }
 
+  /**
+   * Reads a Detailed Licensing response, returning null when the report is unusable.
+   *
+   * Null is the renderer's own signal to emit "Detailed licensing information for this resource is
+   * not available at this time" (see generateDetailedLicensingHTML), so an unreachable or malformed
+   * report costs the book one back matter page instead of the whole export. That is the right
+   * trade: the report service is a separate system with its own outages, and a transient 502 there
+   * has nothing to say about whether this book converts.
+   *
+   * Validating the shape is not paranoia. The previous code passed the response body straight to
+   * the renderer, so a non-200 handed it an error string and it crashed on `.meta` a moment later,
+   * turning a missing page into a failed group. Anything that is not a report is now a null.
+   *
+   * Logged at warn rather than info. A book that quietly ships without its licensing report is
+   * silent data loss on a page about attribution, and somebody has to know to chase it.
+   */
+  private readLicensingReport(res: AxiosResponse, pageInfo: BookPageInfo): DetailedLicensingReport | null {
+    const warn = (reason: string, detail: unknown) =>
+      this.logger
+        .withMetadata({
+          bookID: this._bookID.toString(),
+          detail,
+          jobID: this._jobID,
+          status: res.status,
+          url: pageInfo.url,
+        })
+        .warn(
+          `Detailed Licensing report unusable (${reason}). The book will ship with a placeholder ` +
+            'page in place of its licensing report.',
+        );
+
+    if (res.status !== 200) {
+      // The body is the diagnosis for a 4xx ("Provided URL is not a coverpage!"). Bounded, because
+      // a proxy or WAF answers with a whole HTML page.
+      warn('non-200 response', typeof res.data === 'string' ? res.data.trim().slice(0, 500) : res.data);
+      return null;
+    }
+
+    // The renderer dereferences meta.specialRestrictions and text without guards, so check both
+    // here. A 200 carrying an HTML error page from an intermediary lands in exactly this branch.
+    const report = res.data as DetailedLicensingReport | undefined;
+    if (!Array.isArray(report?.meta?.specialRestrictions) || !report?.text) {
+      warn('unexpected payload shape', typeof res.data === 'string' ? res.data.trim().slice(0, 500) : typeof res.data);
+      return null;
+    }
+    return report;
+  }
+
   private async generateDetailedLicensing({
     htmlOnly = false,
     pageInfo,
@@ -1818,17 +1944,17 @@ ${stripBlocklistedScripts(pageTailHTML)}
   }) {
     try {
       this.logger.withMetadata({ bookID: pageInfo.pageID.toString() }).info('Starting Detailed Licensing generation');
+      // validateStatus keeps axios from collapsing a non-2xx into "Request failed with status code
+      // 400". The report service explains itself in the body (e.g. "Provided URL is not a
+      // coverpage!"), and that sentence is the whole diagnosis, so it has to reach the logs.
       const licensingReportRes = await axios.get(`https://api.libretexts.org/endpoint/licensereport/${pageInfo.url}`, {
         headers: {
           Origin: 'downloads.libretexts.org',
           'User-Agent': USER_AGENT,
         },
+        validateStatus: () => true,
       });
-      if (licensingReportRes.status !== 200 || !licensingReportRes.data) {
-        this.logger
-          .withMetadata({ bookID: pageInfo.pageID.toString() })
-          .info('No detailed licensing report found or error encountered.');
-      }
+      const licensingReport = this.readLicensingReport(licensingReportRes, pageInfo);
 
       const anchorMap = new Map<string, string>();
       for (const page of this._allPages) {
@@ -1840,7 +1966,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           <h1 id="libre-print-directory-header">Detailed Licensing</h1>
         </div>
         <div id="libre-detailed-licensing">
-          ${generateDetailedLicensingHTML(licensingReportRes.data, anchorMap)}
+          ${generateDetailedLicensingHTML(licensingReport as DetailedLicensingReport, anchorMap)}
         </div>
       `;
 

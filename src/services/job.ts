@@ -12,6 +12,7 @@ import { sleep } from '../util/util';
 import { LegacyAPIService } from './legacy-api';
 import { ConductorWebhookService } from './conductorWebhook';
 import PageID from '../util/pageID';
+import { ExportFailure } from '../lib/exportFailure';
 import {
   JobProgressReporter,
   JOB_MAX_DURATION_MS,
@@ -256,7 +257,7 @@ export class JobService {
       if (!job?.url) {
         // Nothing to convert. Returning without a terminal write would leave the row on
         // 'inprogress' until the staleness reaper caught it, blocking resubmission in the meantime.
-        await this.fail(jobMsg, `Job ${jobMsg.jobId} has no URL to convert.`);
+        await this.fail(jobMsg.jobId, `Job ${jobMsg.jobId} has no URL to convert.`);
         return;
       }
 
@@ -285,7 +286,12 @@ export class JobService {
         const bookID = await bookModel.getIDFromURL(job.url);
         log.debug(`Extracted book ID: ${bookID?.toString()}`);
         if (!bookID) {
-          await this.fail(jobMsg, `Could not resolve a book ID from URL ${job.url}.`);
+          // Previously this marked the job failed and then called finish(), which overwrote the
+          // status with 'finished'. An unresolvable URL is a failure and has to read as one.
+          await this.fail(
+            jobMsg.jobId,
+            `Could not resolve a book ID from the submitted URL: ${job.url}. The page may not exist, may not be public, or may not be a book coverpage.`,
+          );
           return;
         }
 
@@ -396,7 +402,7 @@ export class JobService {
         // Leave `progress` frozen where the pipeline died — it tells the caller how far it got.
         progress.stop();
         await progress.flush();
-        await this.writeTerminalStatus(jobMsg.jobId, { status: 'failed' });
+        await this.fail(jobMsg.jobId, error);
       }
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
@@ -447,19 +453,61 @@ export class JobService {
   private assertWithinBudget(progress: ProgressReporter, phase: string) {
     const elapsedMs = progress.elapsedMs();
     if (elapsedMs <= JOB_MAX_DURATION_MS) return;
-    throw new Error(`Job exceeded maximum duration (${Math.round(elapsedMs / 60_000)} minutes) before ${phase}`);
+    throw new ExportFailure(
+      `Job exceeded maximum duration (${Math.round(elapsedMs / 60_000)} minutes) before ${phase}`,
+    );
   }
 
   /**
-   * Terminal failure path. Mirrors finish()'s queue cleanup but records the job as failed, and
-   * leaves `progress` frozen wherever the pipeline got to rather than stamping it complete.
+   * Marks a job failed and records why.
+   *
+   * A failed export nearly always means the book needs a content fix before it is worth
+   * resubmitting, so the reason belongs on the row alongside the status. Without it the only record
+   * is a log line on whichever worker happened to pick the job up, which is not something anyone can
+   * query when a title is reported as broken.
+   *
+   * Unlike `finish`, this deliberately writes without the `status: 'inprogress'` ownership guard,
+   * and it is safe for a reason that does not apply there. Every submission gets its own row, so
+   * the row `failStaleJobs` reaps is this worker's own; re-stamping it 'failed' with a reason
+   * attached only improves the record. The guard exists to stop `finish` marking a reaped row
+   * 'finished', which would hide the hand-off behind a healthy-looking success. There is no
+   * equivalent lie to tell here. `fail` also has to work from the API worker, where the row is
+   * still on 'created' and an 'inprogress' guard would match nothing.
+   *
+   * `reason` is filtered by provenance before it is stored. See `toFailureReason`.
    */
-  public async fail(job: JobQueueMessage, reason: string) {
-    log.error(`Job ${job.jobId} failed: ${reason}`);
-    await this.writeTerminalStatus(job.jobId, { status: 'failed' });
+  public async fail(id: string, reason: unknown) {
+    await Job.update({ status: 'failed', failureReason: this.toFailureReason(id, reason) }, { where: { id } });
+  }
 
-    if (Environment.getSystemEnvironment() === 'DEVELOPMENT') return;
-    await this.queueClient.deleteJobMessage(job.receiptHandle);
+  /** A reason long enough to need truncating is a stack trace, not a diagnosis. */
+  private static readonly maxFailureReasonLength = 2000;
+
+  /**
+   * Renders a failure into the text stored on the row.
+   *
+   * `failureReason` is served by `GET /job/:jobID`, which is unauthenticated, so this column is
+   * public. Only two things reach it verbatim: a string, which a call site wrote by hand for this
+   * purpose, and an `ExportFailure`, which the pipeline throws to assert the same thing (see
+   * lib/exportFailure.ts). Anything else is an error this codebase did not compose — an S3 client
+   * error naming a bucket and key, a Sequelize error naming columns, an ENOENT naming a container
+   * path — and is replaced with a generic line, with the real message sent to the logs instead.
+   *
+   * The error's constructor name survives into the public text. It narrows the problem for whoever
+   * reads the logs next without describing any infrastructure.
+   */
+  private toFailureReason(id: string, reason: unknown): string {
+    const isPublishable = typeof reason === 'string' || reason instanceof ExportFailure;
+    if (!isPublishable) {
+      const detail = reason instanceof Error ? reason.message : String(reason);
+      const kind = reason instanceof Error ? reason.constructor.name : typeof reason;
+      log.error(`Job ${id} failed with an unpublishable error (${kind}): ${detail}`);
+      return `The export failed with an unexpected internal error (${kind}). Check the job logs for details.`;
+    }
+    const text = (reason instanceof Error ? reason.message : String(reason)).trim() || 'Unknown error';
+    return text.length > JobService.maxFailureReasonLength
+      ? `${text.slice(0, JobService.maxFailureReasonLength - 1)}…`
+      : text;
   }
 
   public async finish(job: JobQueueMessage, bookID?: PageID, printContentPageCount?: number) {
