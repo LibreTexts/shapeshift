@@ -106,7 +106,17 @@ export class JobController {
     const sort = req.validatedData?.query?.sort ?? 'desc';
     const statusFilter = req.validatedData?.query?.status;
     const { count, rows } = await Job.findAndCountAll({
-      attributes: ['bookID', 'failureReason', 'id', 'progress', 'stage', 'status', 'isHighPriority', 'url', 'createdAt'],
+      attributes: [
+        'bookID',
+        'failureReason',
+        'id',
+        'progress',
+        'stage',
+        'status',
+        'isHighPriority',
+        'url',
+        'createdAt',
+      ],
       limit,
       offset,
       order: [['createdAt', sort.toUpperCase()]],

@@ -483,12 +483,12 @@ export class PDFService {
               );
               if (!result.success || !result.result) {
                 // Name the group here. Promise.allSettled only hands the rejection reason back to the
-              // collector below, so anything not carried in this message is lost to the job record.
-              const detail = result.error ? toErrorText(result.error) : 'produced no HTML output';
-              const message = `${group.fileName}: ${detail}`;
-              throw result.error instanceof FatalConversionError
-                ? new FatalConversionError(message)
-                : new Error(message);
+                // collector below, so anything not carried in this message is lost to the job record.
+                const detail = result.error ? toErrorText(result.error) : 'produced no HTML output';
+                const message = `${group.fileName}: ${detail}`;
+                throw result.error instanceof FatalConversionError
+                  ? new FatalConversionError(message)
+                  : new Error(message);
               }
               const htmlPaths = Array.isArray(result.result) ? result.result : [result.result];
               return { group, htmlPaths } satisfies Pass2GroupResult;

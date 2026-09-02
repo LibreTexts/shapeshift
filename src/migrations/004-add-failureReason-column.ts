@@ -4,7 +4,7 @@ import { Environment } from '../lib/environment';
 import { sequelize } from '../model';
 import { exit } from 'process';
 
-const MIGRATION_NAME = '003-add-failureReason-column';
+const MIGRATION_NAME = '004-add-failureReason-column';
 
 async function run() {
   Environment.load();

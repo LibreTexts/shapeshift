@@ -28,8 +28,10 @@ interface JobAttributes {
 }
 
 interface JobCreationAttributes
- 
-  extends Optional<JobAttributes, 'createdAt' | 'failureReason' | 'id' | 'progress' | 'stage' | 'status' | 'updatedAt'> {}
+  extends Optional<
+    JobAttributes,
+    'createdAt' | 'failureReason' | 'id' | 'progress' | 'stage' | 'status' | 'updatedAt'
+  > {}
 
 @Table({
   timestamps: true,

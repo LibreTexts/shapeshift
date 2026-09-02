@@ -256,7 +256,7 @@ export class JobService {
       if (!job?.url) {
         // Nothing to convert. Returning without a terminal write would leave the row on
         // 'inprogress' until the staleness reaper caught it, blocking resubmission in the meantime.
-        await this.fail(jobMsg, `Job ${jobMsg.jobId} has no URL to convert.`);
+        await this.fail(jobMsg.jobId, `Job ${jobMsg.jobId} has no URL to convert.`);
         return;
       }
 
