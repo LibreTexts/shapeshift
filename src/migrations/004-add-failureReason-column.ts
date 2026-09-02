@@ -26,9 +26,12 @@ async function run() {
     return;
   }
 
-  await qi.addColumn('jobs', 'failureReason', { type: 'TEXT', allowNull: true, after: 'status' } as any);
+  // No `after`, for the reason 003 spells out: positional ADD COLUMN is INSTANT only on MySQL
+  // 8.0.29+, and below that it rebuilds the whole `jobs` table under an exclusive metadata lock.
+  // Appending is INSTANT from 8.0.12, and physical column order buys nothing here.
+  await qi.addColumn('jobs', 'failureReason', { type: 'TEXT', allowNull: true } as any);
 
-  console.log('Added "failureReason" column after "status".');
+  console.log('Added "failureReason" column.');
 }
 
 run()

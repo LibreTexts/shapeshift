@@ -60,7 +60,13 @@ export class JobController {
       // The row is already committed. Leaving it on 'created' with no queue message behind it would
       // make it look like active work and block resubmission of this book until it went stale, so
       // fail it explicitly before surfacing the error.
-      await jobModel.fail(job.id, `Could not enqueue the job for processing: ${getErrorMessage(error)}`);
+      //
+      // The SDK's own message stays in the logs. It names the queue URL, which carries the AWS
+      // account ID, and `failureReason` is served by an unauthenticated endpoint.
+      this.logger
+        .withMetadata({ bookID, error: getErrorMessage(error), jobId: job.id })
+        .error('Failed to enqueue job message.');
+      await jobModel.fail(job.id, 'Could not enqueue the job for processing. Please try submitting it again.');
       throw error;
     }
 

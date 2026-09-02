@@ -128,8 +128,14 @@ export const JOB_MAX_DURATION_MS = 4 * 60 * 60 * 1000;
  * return first. The grace has to cover that overshoot plus the unwind, or the reaper releases the
  * book while the job is still on its way to failing itself, which is precisely the double-writer
  * case the heartbeat exists to prevent.
+ *
+ * Thirty minutes, not the hour it started at. The longest single uninterruptible step is one Prince
+ * invocation over a whole book followed by its upload, and nothing observed comes close to half an
+ * hour. The cost of the surplus is real and paid by the wrong party: every minute here is a minute
+ * a wedged worker keeps its book unsubmittable, so the grace should cover the worst plausible
+ * overshoot and stop there. Raise it only against a measured phase duration, never a guess.
  */
-const HEARTBEAT_GRACE_MS = 60 * 60 * 1000;
+const HEARTBEAT_GRACE_MS = 30 * 60 * 1000;
 
 /**
  * Absolute ceiling on how long one job may keep manufacturing liveness.
@@ -150,6 +156,11 @@ const HEARTBEAT_GRACE_MS = 60 * 60 * 1000;
  * Past this age the heartbeat stops and the row is allowed to go stale. Real progress writes still
  * land (they bump `updatedAt` too), so a job that is genuinely still working keeps its liveness;
  * only a silent one gets released.
+ *
+ * This is the number that sets the worst case for a book nobody can resubmit: 4h30m here, plus
+ * JOB_STALE_AFTER_MINUTES before the reaper acts, so 4h45m at the default. It only applies to a
+ * worker that is alive but stuck short of every checkpoint. A crashed or evicted container stops
+ * beating immediately and its book comes back in the usual 15 minutes.
  */
 const MAX_HEARTBEAT_AGE_MS = JOB_MAX_DURATION_MS + HEARTBEAT_GRACE_MS;
 /** Creep stops this far into its band, so it can never collide with the next real checkpoint. */
@@ -218,6 +229,11 @@ export class JobProgressReporter implements ProgressReporter {
   private lastValue = 0;
   private lastLabel: string | null = null;
   private lastWriteAt = 0;
+  /**
+   * The most recent value the throttle in `emit` turned away, held so `flush` can still write it.
+   * Cleared on every real write. Null when nothing is outstanding.
+   */
+  private pending: { progress: number; stage: string } | null = null;
   private creepTimer: NodeJS.Timeout | null = null;
   private heartbeatTimer: NodeJS.Timeout | null = null;
   /** Serializes writes so a slow UPDATE can't land after a newer one and move progress backwards. */
@@ -282,6 +298,12 @@ export class JobProgressReporter implements ProgressReporter {
       return;
     }
     if (Date.now() - this.lastWriteAt < HEARTBEAT_INTERVAL_MS) return;
+    // A value the throttle turned away is newer than lastValue, so spend the beat on it rather
+    // than rewriting a stale number and leaving the fresh one waiting for the next one.
+    if (this.pending) {
+      this.write(this.pending.progress, this.pending.stage);
+      return;
+    }
     this.lastWriteAt = Date.now();
     this.enqueue(this.lastValue, this.lastLabel ?? this.current.label);
   }
@@ -359,9 +381,9 @@ export class JobProgressReporter implements ProgressReporter {
     }
   }
 
-  /** Forces any pending value to disk and waits for every queued write to settle. */
+  /** Forces any throttled value to disk and waits for every queued write to settle. */
   public async flush() {
-    this.emit(this.lastValue, true);
+    if (this.pending) this.write(this.pending.progress, this.pending.stage);
     await this.inFlight;
   }
 
@@ -387,7 +409,12 @@ export class JobProgressReporter implements ProgressReporter {
     const next = clamp(Math.round(value), this.lastValue, MAX_INPROGRESS_PROGRESS);
     const changed = next !== this.lastValue || this.current.label !== this.lastLabel;
     if (!changed) return;
-    if (!force && Date.now() - this.lastWriteAt < this.minWriteIntervalMs) return;
+    if (!force && Date.now() - this.lastWriteAt < this.minWriteIntervalMs) {
+      // Throttled, not discarded. Without this the last value of a stage is lost whenever the stage
+      // ends inside the throttle window, and flush() has nothing left to write.
+      this.pending = { progress: next, stage: this.current.label };
+      return;
+    }
     this.write(next, this.current.label);
   }
 
@@ -395,6 +422,7 @@ export class JobProgressReporter implements ProgressReporter {
     this.lastValue = progress;
     this.lastLabel = stage;
     this.lastWriteAt = Date.now();
+    this.pending = null;
     this.enqueue(progress, stage);
   }
 
