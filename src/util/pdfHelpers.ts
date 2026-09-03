@@ -6,6 +6,8 @@ import { PDFDocument } from 'pdf-lib';
 import { BookPageInfo } from '../types/book';
 import { PDFCoverOpts, PDFCoverType, PDFCoverDimensions } from '../types/pdf';
 import libraries from '../librariesmap';
+import { getLicenseDisplayTitle } from './licensing';
+import { getPathFromURL } from './util';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export const PDF_COVER_TYPES = ['Amazon', 'CaseWrap', 'CoilBound', 'Main', 'PerfectBound'] as const;
@@ -435,24 +437,67 @@ function _generatePDFSpineContent({
 }
 
 /**
- * Maps a `BookPageInfo` into the values shape consumed by `fillCoverTemplate`
- * (src/util/coverTemplateFiller.ts). Field names match the spec in
- * docs/COVER_TEMPLATE_GUIDELINES.md. Missing/unknown values are emitted as
- * empty strings so the filler skips them.
+ * Undoes the non-breaking hyphens `BookService.resolvePrintInfo()` substitutes into
+ * author names. They are right for the HTML covers, which need the name to stay
+ * unbroken across a line wrap, but a template's embedded font subset frequently has
+ * no U+2011 glyph, and `encodeAndMeasure()` throws on a missing glyph — which costs
+ * the book its custom cover over a name like "Jean-Luc Picard".
+ */
+const NON_BREAKING_HYPHEN = /\u2011/g;
+
+/** First path segment a custom-cover book lives under. Mirrors CustomCoverService. */
+const COURSE_PATH_PREFIX = 'courses';
+
+/**
+ * COURSE fallback for a coverpage whose `lulu@` tag carries no institution.
  *
- * COURSE and SUBJECT have no canonical source in book metadata today; callers
- * that have them can merge in via the service's `extraValues` parameter.
+ * Custom covers only apply to books under `Courses/`, where the second path segment
+ * is the institution: `/Courses/De_Anza_College/Introductory_Differential_Equations`
+ * gives "De Anza College". Any other shape returns '' rather than guessing.
+ *
+ * Never throws. It runs inside cover assembly, where a throw costs the book its
+ * custom cover entirely.
+ */
+function courseFromBookURL(url: string | undefined): string {
+  if (!url) return '';
+  try {
+    const segments = getPathFromURL(url)
+      .split('/')
+      .filter(Boolean)
+      .map((s) => decodeURIComponent(s));
+    if (segments[0]?.toLowerCase() !== COURSE_PATH_PREFIX) return '';
+    return (segments[1] ?? '').replace(/_/g, ' ').trim();
+  } catch {
+    return '';
+  }
+}
+
+/**
+ * Maps a `BookPageInfo` into the values shape consumed by `fillCoverTemplate`
+ * (src/util/coverTemplateFiller.ts). Field names are the canonical set in that
+ * file's `ALL_FIELDS`. Missing/unknown values are emitted as empty strings so the
+ * filler skips them.
+ *
+ * Everything here is already parsed off the coverpage's CXOne tags upstream:
+ * `printInfo` comes from the `lulu@` tag via `BookService.resolvePrintInfo()`, and
+ * `license` from `license:`/`licenseversion:` via `getLicense()`. This function only
+ * chooses which of it lands on which field.
+ *
+ * SUBJECT has no source in book metadata today; callers that have one can merge it
+ * in via the service's `extraValues` parameter.
  */
 export function buildCoverValues(bookInfo: BookPageInfo): Record<string, string> {
   const libraryName = libraries.find((l) => l.key === bookInfo.subdomain)?.name ?? bookInfo.subdomain ?? '';
+  const course = (bookInfo.printInfo?.companyName || '').trim();
   return {
-    TITLE: bookInfo.printInfo?.title || bookInfo.title || '',
-    AUTHOR: bookInfo.printInfo?.authorName || '',
+    TITLE: (bookInfo.printInfo?.title || bookInfo.title || '').trim(),
+    AUTHOR: (bookInfo.printInfo?.authorName || '').replace(NON_BREAKING_HYPHEN, '-').trim(),
     LIBRARY: libraryName,
     BOOK_ID: bookInfo.pageID?.toString() ?? '',
-    LICENSE: bookInfo.license?.label ?? '',
+    // `license.label` is CC icon markup, not text — see getLicenseDisplayTitle.
+    LICENSE: getLicenseDisplayTitle(bookInfo.license ?? null),
     SUBJECT: '',
-    COURSE: '',
+    COURSE: course || courseFromBookURL(bookInfo.url),
   };
 }
 

@@ -934,10 +934,13 @@ export class BookService {
             ? tag.split(',')
             : [];
       if (!items.length) continue;
-      info.title = items[1] ?? '';
-      info.authorName = items[2] ?? '';
-      info.companyName = items[3] ?? '';
-      info.spineTitle = items[4] ?? '';
+      // Keep what we already have where a section is missing or blank. Assigning
+      // unconditionally meant a half-filled tag like `lulu@@Author@` wiped the page
+      // title to an empty string instead of falling back to it.
+      info.title = items[1]?.trim() || info.title;
+      info.authorName = items[2]?.trim() || info.authorName;
+      info.companyName = items[3]?.trim() || info.companyName;
+      info.spineTitle = items[4]?.trim() || info.spineTitle;
     }
     if (!info.authorName && authorTag) {
       const author = await this.getAuthor(authorTag);

@@ -117,6 +117,27 @@ const MAX_LINES: Record<CanonicalFieldName, number> = {
   BOOK_ID: 1,
 };
 
+/**
+ * True when a field value carries markup rather than text.
+ *
+ * These values are drawn straight into a PDF appearance stream — nothing on this
+ * path renders HTML — so a tag, a `data:` URI, or an escaped entity means something
+ * upstream handed us the wrong object. LICENSE did exactly that for a while, fed
+ * `ccIconsSVGs()` output, which MAX_CHARS then cropped to half a base64 blob and
+ * printed onto a cover bound for a printer. A blank field is the better failure.
+ *
+ * A bare `&` stays legal: "Vinh Kha Nguyen, Neelam R. Shukla & Fatemeh Yarahmadi" is
+ * a real author line. Only a complete entity (`&amp;`, `&#39;`) is rejected, and a
+ * `<` is only suspicious when a name character follows it, so "3 < x < 7" passes.
+ */
+export function looksLikeMarkup(value: string): boolean {
+  return (
+    /<[a-zA-Z/!?]/.test(value) ||
+    /\bdata:[a-z]+\/[a-z0-9.+-]+/i.test(value) ||
+    /&(?:#\d+|#x[0-9a-f]+|[a-z][a-z0-9]{1,31});/i.test(value)
+  );
+}
+
 const PADDING_PT = 2;
 const LINE_GAP = 1.2;
 const DEFAULT_ASCENT_RATIO = 0.8;
@@ -983,6 +1004,15 @@ export async function fillCoverTemplate({
     }
 
     const rawStr = String(raw);
+    // Checked before truncation, so the test sees the whole value rather than a
+    // 50-character slice of it. Skipping lands on the same path as a missing
+    // value: this field renders blank and the rest of the cover fills normally.
+    if (looksLikeMarkup(rawStr)) {
+      console.warn(`Field "${fieldName}": value looks like markup, not text \u2014 rendering it blank.`);
+      dbg(`field ${fieldName}: rejected as markup`, { length: rawStr.length, head: rawStr.slice(0, 60) });
+      continue;
+    }
+
     const truncated = rawStr.slice(0, MAX_CHARS[fieldName]);
     if (rawStr.length > MAX_CHARS[fieldName]) {
       dbg(`field ${fieldName}: value length ${rawStr.length} exceeds max ${MAX_CHARS[fieldName]} — truncated`);

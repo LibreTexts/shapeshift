@@ -15,7 +15,7 @@ import {
 /** Books outside this path prefix can never carry a custom cover. */
 const CUSTOM_COVER_PATH_PREFIX = 'Courses/';
 
-const DEFAULT_COMMONS_BASE_URL = 'https://commons.libretexts.org';
+const DEFAULT_COMMONS_BASE_URL = 'https://commons.libretexts.org/api/v1';
 
 /** Commons is a hard dependency of nothing here, so give up on it quickly. */
 const CONFIG_FETCH_TIMEOUT_MS = 5_000;
