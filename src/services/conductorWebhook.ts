@@ -11,6 +11,13 @@ type BookCompiledWebhookPayload = {
    * can decide if it wants to retain the last known value or use some other default.
    */
   contentPageCount?: number;
+  /**
+   * Display name of the organization whose cover templates were used, set only
+   * when the custom covers actually shipped. Intentionally denormalized: sending
+   * the name rather than the orgID saves Conductor a lookup, and the value is
+   * only ever used for display.
+   */
+  customCoverOrg?: string;
   timestamp: number; // Unix timestamp in milliseconds
 };
 
@@ -39,7 +46,12 @@ export class ConductorWebhookService {
   async sendWebhook(payload: BookCompiledWebhookPayload) {
     try {
       this.logger
-        .withMetadata({ bookID: payload.bookID.toString(), timestamp: payload.timestamp, url: this.webhookUrl })
+        .withMetadata({
+          bookID: payload.bookID.toString(),
+          timestamp: payload.timestamp,
+          url: this.webhookUrl,
+          ...(payload.customCoverOrg ? { customCoverOrg: payload.customCoverOrg } : {}),
+        })
         .info('Sending Conductor webhook');
 
       await axios.post(
@@ -49,6 +61,7 @@ export class ConductorWebhookService {
           bookID: payload.bookID.toString(),
           timestamp: payload.timestamp,
           ...(payload.contentPageCount !== undefined ? { contentPageCount: payload.contentPageCount } : {}),
+          ...(payload.customCoverOrg ? { customCoverOrg: payload.customCoverOrg } : {}),
         },
         {
           headers: {

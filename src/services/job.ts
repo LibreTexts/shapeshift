@@ -11,6 +11,8 @@ import { isCoverpage } from '../util/bookHelpers';
 import { sleep } from '../util/util';
 import { LegacyAPIService } from './legacy-api';
 import { ConductorWebhookService } from './conductorWebhook';
+import { CustomCoverService } from './customCover';
+import { ResolvedCustomCover } from '../types/customCover';
 import PageID from '../util/pageID';
 import { ExportFailure } from '../lib/exportFailure';
 import {
@@ -344,14 +346,32 @@ export class JobService {
           log.warn(`Back matter is missing for book ${bookID.toString()}.`);
         }
 
+        // <resolve custom cover>
+        // Two cheap gates before the network. Custom covers are a PDF-only
+        // artifact, so an EPUB- or ThinCC-only deployment must not pay for the
+        // lookup at all; and only books under `Courses/` can have one, which
+        // keeps the Commons round trip off the path of every other book.
+        // `resolve` never throws: a missing config, an unreachable Commons, or
+        // an undownloadable template all come back as null and the book
+        // compiles with the standard covers.
+        let customCover: ResolvedCustomCover | null = null;
+        if (enabledFormats.includes('PDF') && CustomCoverService.appliesTo(coverPageInfo.url)) {
+          customCover = await new CustomCoverService().resolve(bookID);
+        }
+        // </resolve custom cover>
+
         // <generate pdf>
-        const pdfService = new PDFService(bookID, jobMsg.jobId, { progress, useLocalStorage });
+        const pdfService = new PDFService(bookID, jobMsg.jobId, { progress, useLocalStorage, customCover });
         let pdfPath: string | null = null;
+        // Named to Conductor only when the covers actually shipped, so a
+        // template that failed mid-compile can't be reported as branded.
+        let customCoverApplied = false;
         if (enabledFormats.includes('PDF')) {
           try {
             const pdfResult = await pdfService.convertBook(pages);
             pdfPath = pdfResult?.filePath || null;
             PDFPrintContentPageCount = pdfResult?.pageCount || 1;
+            customCoverApplied = pdfResult?.customCoverApplied ?? false;
             log.info(`PDF generated at path: ${pdfPath}`);
           } catch (pdfError) {
             const errorMsg = pdfError instanceof Error ? pdfError.message : String(pdfError);
@@ -395,7 +415,12 @@ export class JobService {
         // unsettled write would land after finish() and drag the reported value back down.
         progress.stop();
         await progress.flush();
-        await this.finish(jobMsg, bookID, PDFPrintContentPageCount);
+        await this.finish(
+          jobMsg,
+          bookID,
+          PDFPrintContentPageCount,
+          customCoverApplied ? customCover?.org.name : undefined,
+        );
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
         log.error(`Job failed: ${errorMsg}`);
@@ -510,7 +535,7 @@ export class JobService {
       : text;
   }
 
-  public async finish(job: JobQueueMessage, bookID?: PageID, printContentPageCount?: number) {
+  public async finish(job: JobQueueMessage, bookID?: PageID, printContentPageCount?: number, customCoverOrg?: string) {
     // Status and progress move in one statement. Split across two, a poll landing between them
     // reads a 'finished' row still carrying its last in-progress percentage, which the list
     // endpoint would hand straight to the client. 100 is only ever written here, so a running job
@@ -540,6 +565,7 @@ export class JobService {
         await this.conductorWebhookService.sendWebhook({
           bookID,
           contentPageCount: printContentPageCount,
+          ...(customCoverOrg ? { customCoverOrg } : {}),
           timestamp: Date.now(),
         });
       } catch (webhookError) {
