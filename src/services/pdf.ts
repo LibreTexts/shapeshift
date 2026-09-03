@@ -19,6 +19,7 @@ import {
   extractPDFPages,
   getCoverDimensions,
   getPDFPageDimensionsIn,
+  generateBlankCoverPageHTML,
 } from '../util/pdfHelpers';
 import { buildTagIndex, generateIndexHTML } from '../util/indexHelpers';
 import { parseGlossaryTable, buildGlossaryData, generateGlossaryHTML } from '../util/glossaryHelpers';
@@ -48,6 +49,8 @@ import { generateSubpageListing, injectDirectoryListing, isCoverpage, isPublicat
 import { sleep, USER_AGENT } from '../util/util';
 import { renderAutoAttribution } from '../util/licensing';
 import { ImageProcessor } from './imageProcessor';
+import { CoverTemplateService } from './coverTemplate';
+import { ResolvedCustomCover } from '../types/customCover';
 import { JOB_MAX_DURATION_MS, nullProgressReporter, type ProgressReporter } from '../lib/jobProgress';
 import { ExportFailure, safeFailureText } from '../lib/exportFailure';
 
@@ -77,6 +80,23 @@ export const COVER_TYPE_CONFIG: Record<PDFCoverType, { opt?: PDFCoverOpts; usesP
   Main: { usesPageCount: false },
   PerfectBound: { opt: { extraPadding: true }, usesPageCount: true },
 };
+
+/**
+ * One entry in Individual.zip: an already-generated HTML file, the name its PDF
+ * takes in the archive, and (for a custom cover) the art to paint over it.
+ */
+type IndividualPageSection = {
+  htmlPath: string;
+  name: string;
+  pageInfo: BookPageInfo;
+  overlayFrontTemplate?: Uint8Array;
+};
+
+/**
+ * The two wrap bindings a custom cover template can produce. The other print
+ * covers (Amazon, CoilBound) always use the generated HTML covers.
+ */
+const CUSTOM_WRAP_COVER_TYPES: PDFCoverType[] = ['CaseWrap', 'PerfectBound'];
 
 type ConversionTask = {
   _id: string;
@@ -200,12 +220,25 @@ export class PDFService {
   private _isTaggedBook = false;
   private _urlToAnchor: Map<string, string> = new Map();
   private readonly _progress: ProgressReporter;
+  /**
+   * An org's cover templates, already downloaded and validated by
+   * CustomCoverService. When set, this book's CaseWrap and PerfectBound covers
+   * are assembled from those templates instead of the generic Prince covers,
+   * and the filled front template is painted over page 1 of Full.pdf.
+   */
+  private readonly _customCover: ResolvedCustomCover | null;
+  private _coverTemplateService: CoverTemplateService | null = null;
 
-  constructor(bookID: PageID, jobID?: string, opts?: { progress?: ProgressReporter; useLocalStorage?: boolean }) {
+  constructor(
+    bookID: PageID,
+    jobID?: string,
+    opts?: { progress?: ProgressReporter; useLocalStorage?: boolean; customCover?: ResolvedCustomCover | null },
+  ) {
     this._bookID = bookID;
     this._jobID = jobID;
     this._progress = opts?.progress ?? nullProgressReporter;
     this._useLocalStorage = opts?.useLocalStorage ?? false;
+    this._customCover = opts?.customCover ?? null;
 
     if (!bookID || !(bookID instanceof PageID)) {
       throw new Error('Book ID is required and must be a valid PageID instance');
@@ -279,7 +312,9 @@ export class PDFService {
     );
   }
 
-  public async convertBook(pagesInput: BookPages): Promise<{ filePath: string; pageCount: number } | null> {
+  public async convertBook(
+    pagesInput: BookPages,
+  ): Promise<{ filePath: string; pageCount: number; customCoverApplied: boolean } | null> {
     if (!pagesInput?.flat?.length) return null;
     const { flat: pages } = pagesInput;
     this._allPages = pages;
@@ -287,6 +322,13 @@ export class PDFService {
     this._hasCover = isPublicationRoot(pagesInput.tree);
     this.buildUrlToAnchorMap();
     const startTime = Date.now();
+    // Only true once the org templates have produced every custom artifact this
+    // book should carry. The job uses it to decide whether to name the org to
+    // Conductor, so it must not be set while any piece silently fell back.
+    let customCoverApplied = false;
+    // Defaults true so a book with no custom cover at all is decided purely by
+    // the wrap covers below, which in that case never run either.
+    let customCoverArtApplied = true;
     const pagesMap = new Map(pages.map((c) => [c.pageID.toString(), c] as [string, BookPageInfo]));
 
     try {
@@ -587,13 +629,23 @@ export class PDFService {
       // ── Phase 3: Generate Main cover HTML and prepend to the Prince input ──
       // The Main cover doesn't need a page count and must suppress header/footer.
       const coverPageInfo = pagesMap.get(this._bookID.toString())!;
+
+      // With a custom cover, the front template is filled here and the page
+      // Prince renders is left blank — `overlayOnFirstPage` paints the art on
+      // after the run. Filling before the HTML is chosen is deliberate: a
+      // template that fails to fill falls back to the generated cover, so a bad
+      // template can never leave a blank page 1 in the shipped book.
+      const filledFrontTemplate = this._hasCover ? await this.fillCustomFrontTemplate(coverPageInfo) : null;
+
       const mainCoverTempPath = this._hasCover
         ? await this._createTempFile(
-            generatePDFCoverHTML({
-              bookInfo: coverPageInfo,
-              coverType: 'Main',
-              numPages: null,
-            }),
+            filledFrontTemplate
+              ? generateBlankCoverPageHTML()
+              : generatePDFCoverHTML({
+                  bookInfo: coverPageInfo,
+                  coverType: 'Main',
+                  numPages: null,
+                }),
           )
         : null;
 
@@ -614,6 +666,12 @@ export class PDFService {
           outputPath: finalFilePath,
           pageInfo: coverPageInfo,
         });
+        // Paint the custom front art onto the blank page 1 Prince just made.
+        // Must happen before the upload, and before Individual.zip reuses the
+        // same cover HTML for its own section render.
+        if (filledFrontTemplate) {
+          customCoverArtApplied = await this.applyCustomCoverArt(finalFilePath, filledFrontTemplate);
+        }
         if (!this._useLocalStorage) await this.streamFileToS3(finalFilePath);
       });
 
@@ -625,8 +683,18 @@ export class PDFService {
       try {
         const totalSections = fullDocHTMLPaths.length;
         const pad = Math.max(3, String(totalSections).length);
-        const pagesSections: { htmlPath: string; name: string; pageInfo: BookPageInfo }[] = mainCoverTempPath
-          ? [{ htmlPath: mainCoverTempPath, name: `${'0'.padStart(pad, '0')}_Cover.pdf`, pageInfo: coverPageInfo }]
+        const pagesSections: IndividualPageSection[] = mainCoverTempPath
+          ? [
+              {
+                htmlPath: mainCoverTempPath,
+                name: `${'0'.padStart(pad, '0')}_Cover.pdf`,
+                pageInfo: coverPageInfo,
+                // This section re-renders the same blank cover HTML, so it needs
+                // the same overlay Full.pdf got — otherwise the zip ships a
+                // blank first page.
+                ...(filledFrontTemplate ? { overlayFrontTemplate: filledFrontTemplate } : {}),
+              },
+            ]
           : [];
         let ordinal = 1;
         for (const { group, htmlPaths } of pass2Groups) {
@@ -739,16 +807,38 @@ export class PDFService {
             delta: printContentPageCount - (numPages - 1),
           })
           .info('Generating publication covers');
-        const coverConfigs = PDF_COVER_TYPES.filter((t) => t !== 'Main').map((coverType) => ({
+        this.assertWithinJobBudget(startTime, 'cover generation');
+        this._progress.enter('pdfCovers');
+        // Expect the full set regardless of which branch runs below, so the
+        // band still sums to its top when the custom pair replaces two of them.
+        this._progress.expect(PDF_COVER_TYPES.length - 1);
+        const coversPath = await this.ensureCoversDirectory();
+
+        // The custom pair is written to CaseWrap.pdf / PerfectBound.pdf, the
+        // exact filenames the generated covers use, so everything downstream
+        // (dimension verification, Publication.zip, the per-file S3 uploads,
+        // the /download cover-* routes) picks them up with no changes.
+        const wrapCoversApplied = await this.generateCustomWrapCovers({
+          bookInfo: coverPageInfo,
+          coversDirPath: coversPath,
+          numPages: printContentPageCount,
+        });
+        // Both halves have to have landed. A blank page 1 in Full.pdf is not a
+        // book anyone should describe as carrying the org's branding, even when
+        // the print covers came out perfectly.
+        customCoverApplied = wrapCoversApplied && customCoverArtApplied;
+        if (wrapCoversApplied) this._progress.tick(CUSTOM_WRAP_COVER_TYPES.length);
+
+        // Whatever the custom path did not produce still needs a generated
+        // cover. On a custom failure both wrap types fall back into this list.
+        const coverConfigs = PDF_COVER_TYPES.filter(
+          (t) => t !== 'Main' && !(wrapCoversApplied && CUSTOM_WRAP_COVER_TYPES.includes(t)),
+        ).map((coverType) => ({
           coverType,
           numPages: COVER_TYPE_CONFIG[coverType].usesPageCount ? printContentPageCount : null,
           opt: COVER_TYPE_CONFIG[coverType].opt,
         }));
 
-        this.assertWithinJobBudget(startTime, 'cover generation');
-        this._progress.enter('pdfCovers');
-        this._progress.expect(coverConfigs.length);
-        const coversPath = await this.ensureCoversDirectory();
         const coverResults = await Promise.allSettled(
           coverConfigs.map(async (config) => {
             const result = await this.retryWithBackoff(
@@ -797,7 +887,7 @@ export class PDFService {
         .info('Book conversion completed successfully');
 
       await this.cleanupWorkdir();
-      return { filePath: finalFilePath, pageCount: printContentPageCount };
+      return { filePath: finalFilePath, pageCount: printContentPageCount, customCoverApplied };
     } catch (error) {
       this.logger.withMetadata({ error, duration: Date.now() - startTime }).error('Book conversion failed');
       throw error;
@@ -1335,9 +1425,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
    * every content page, and the synthesized TOC/Index/Glossary/Detailed-Licensing sections).
    * Reuses the screen-edition HTML files already produced during PDF conversion.
    */
-  private async generateIndividualPagesZipAndWrite(
-    sections: { htmlPath: string; name: string; pageInfo: BookPageInfo }[],
-  ) {
+  private async generateIndividualPagesZipAndWrite(sections: IndividualPageSection[]) {
     const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
     const workdir = resolve(`${baseDir}/pdf/${this._bookID.toString()}/workdir/pages`);
     await fs.mkdir(workdir, { recursive: true });
@@ -1373,6 +1461,9 @@ ${stripBlocklistedScripts(pageTailHTML)}
               outputPath: pdfPath,
               pageInfo: section.pageInfo,
             });
+            if (section.overlayFrontTemplate) {
+              await this.applyCustomCoverArt(pdfPath, section.overlayFrontTemplate);
+            }
             await fs.unlink(htmlInputPath).catch(() => {});
             return { name: section.name, pdfPath };
           } finally {
@@ -1546,6 +1637,122 @@ ${stripBlocklistedScripts(pageTailHTML)}
       if (fullUrl) $el.attr('href', fullUrl);
     });
     return $.html();
+  }
+
+  /** Lazily built, and only ever when this book actually has a custom cover. */
+  private get coverTemplateService(): CoverTemplateService {
+    if (!this._coverTemplateService) this._coverTemplateService = new CoverTemplateService();
+    return this._coverTemplateService;
+  }
+
+  /**
+   * Fills the org's front template with this book's metadata, or returns null
+   * when there is no custom cover — or when filling fails.
+   *
+   * Returning null is what makes the whole custom-cover path degrade cleanly:
+   * every caller reads it as "use the generic cover for this book".
+   */
+  private async fillCustomFrontTemplate(bookInfo: BookPageInfo): Promise<Uint8Array | null> {
+    if (!this._customCover) return null;
+    try {
+      const filled = await this.coverTemplateService.fillFromBookInfo(this._customCover.frontTemplateBytes, bookInfo);
+      this.logger
+        .withMetadata({ org: this._customCover.org.name, bytes: filled.byteLength })
+        .info('Filled the custom front cover template');
+      return filled;
+    } catch (error) {
+      this.logger
+        .withMetadata({
+          org: this._customCover.org.name,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        .error('Could not fill the custom front cover template; falling back to the generated cover');
+      return null;
+    }
+  }
+
+  /**
+   * Paints the filled front template onto page 1 of an already-rendered PDF.
+   *
+   * Best-effort: a failure here leaves the blank placeholder page in place,
+   * which is worse-looking than a generated cover but does not justify losing an
+   * otherwise complete book. The fill has already succeeded by this point, so
+   * the remaining work is an embed and a draw onto a document pdf-lib just
+   * parsed — this is the unlikely branch.
+   *
+   * Returns whether the art landed. The caller folds that into
+   * `customCoverApplied`, so a blank page 1 is never reported to Conductor as a
+   * branded book.
+   */
+  private async applyCustomCoverArt(targetPath: string, filledFrontTemplate: Uint8Array): Promise<boolean> {
+    try {
+      await this.coverTemplateService.overlayOnFirstPage(targetPath, filledFrontTemplate);
+      this.logger.withMetadata({ targetPath }).info('Applied the custom cover art to page 1');
+      return true;
+    } catch (error) {
+      this.logger
+        .withMetadata({ targetPath, error: error instanceof Error ? error.message : String(error) })
+        .error('Failed to apply the custom cover art; page 1 will be blank');
+      return false;
+    }
+  }
+
+  /**
+   * Builds the CaseWrap and PerfectBound wrap covers from the org's templates,
+   * writing them to the same filenames the generated covers would use so that
+   * `verifyCoverDimensions`, `Publication.zip`, and the per-file S3 uploads all
+   * pick them up unchanged.
+   *
+   * Returns false when there is no custom cover, or when assembly fails — in
+   * which case the caller generates the standard covers for both types instead.
+   */
+  private async generateCustomWrapCovers({
+    bookInfo,
+    coversDirPath,
+    numPages,
+  }: {
+    bookInfo: BookPageInfo;
+    coversDirPath: string;
+    numPages: number;
+  }): Promise<boolean> {
+    if (!this._customCover) return false;
+    const { org, frontTemplateBytes, backTemplateBytes, spineHex, spineImage } = this._customCover;
+    try {
+      const { casewrap, perfectBound } = await this.coverTemplateService.buildFinalCoversBothBindings({
+        frontTemplateBytes,
+        backTemplateBytes,
+        bookInfo,
+        numPages,
+        spineHex,
+        spineImage,
+      });
+      await Promise.all([
+        fs.writeFile(`${coversDirPath}/CaseWrap.pdf`, casewrap),
+        fs.writeFile(`${coversDirPath}/PerfectBound.pdf`, perfectBound),
+      ]);
+      this.logger
+        .withMetadata({
+          org: org.name,
+          orgID: org.orgID,
+          spineHex,
+          spineImage: !!spineImage,
+          numPages,
+          casewrapBytes: casewrap.byteLength,
+          perfectBoundBytes: perfectBound.byteLength,
+        })
+        .info('Generated custom wrap covers from the org templates');
+      return true;
+    } catch (error) {
+      this.logger
+        .withMetadata({
+          org: org.name,
+          orgID: org.orgID,
+          numPages,
+          error: error instanceof Error ? error.message : String(error),
+        })
+        .error('Custom wrap cover assembly failed; falling back to the standard covers');
+      return false;
+    }
   }
 
   private async generateCover({

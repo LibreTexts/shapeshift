@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PDFDocument } from 'pdf-lib';
 import { BookPageInfo } from '../types/book';
 import { PDFCoverOpts, PDFCoverType, PDFCoverDimensions } from '../types/pdf';
+import libraries from '../librariesmap';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
 export const PDF_COVER_TYPES = ['Amazon', 'CaseWrap', 'CoilBound', 'Main', 'PerfectBound'] as const;
@@ -137,6 +138,14 @@ const PERFECTBOUND_MIN_SPINE_IN = 0.06;
 const COVER_PAPERBACK_HEIGHT_IN = 11.25;
 /** Hardcover/CaseWrap cover height including bleed, in inches */
 const COVER_HARDCOVER_HEIGHT_IN = 12.75;
+/**
+ * Material folded around the board edge on a CaseWrap, in inches. Applies to the
+ * three outer edges of each panel (outer side, head, foot), never the spine
+ * side, so the visible board face is 8.75 x 11.5in: an 8.5 x 11in page plus the
+ * standard 0.25in board overhang. Art laid outside this inset turns in onto the
+ * inside of the board and is never seen.
+ */
+const CASEWRAP_WRAP_IN = 0.625;
 /**  */
 const PDF_COVER_WIDTHS: Record<string, number | null> = {
   '0': null,
@@ -184,6 +193,7 @@ export function getCoverDimensions(coverType: PDFCoverType, numPages: number | n
         spineWidth: 0,
         totalWidth: PDF_PAGE_WIDTH_IN,
         height: PDF_PAGE_HEIGHT_IN,
+        wrap: 0,
       };
 
     case 'Amazon': {
@@ -192,6 +202,7 @@ export function getCoverDimensions(coverType: PDFCoverType, numPages: number | n
         spineWidth,
         totalWidth: spineWidth + AMAZON_BINDING_ALLOWANCE_IN + STANDARD_COVER_PANELS_WIDTH_IN,
         height: COVER_PAPERBACK_HEIGHT_IN,
+        wrap: 0,
       };
     }
 
@@ -200,6 +211,7 @@ export function getCoverDimensions(coverType: PDFCoverType, numPages: number | n
         spineWidth: 0,
         totalWidth: COILBOUND_TOTAL_COVER_WIDTH_IN,
         height: COVER_PAPERBACK_HEIGHT_IN,
+        wrap: 0,
       };
 
     case 'CaseWrap': {
@@ -212,6 +224,7 @@ export function getCoverDimensions(coverType: PDFCoverType, numPages: number | n
         spineWidth,
         totalWidth: spineWidth + CASEWRAP_COVER_PANELS_WIDTH_IN,
         height: COVER_HARDCOVER_HEIGHT_IN,
+        wrap: CASEWRAP_WRAP_IN,
       };
     }
 
@@ -221,6 +234,7 @@ export function getCoverDimensions(coverType: PDFCoverType, numPages: number | n
         spineWidth,
         totalWidth: spineWidth + COILBOUND_TOTAL_COVER_WIDTH_IN,
         height: COVER_PAPERBACK_HEIGHT_IN,
+        wrap: 0,
       };
     }
   }
@@ -263,6 +277,41 @@ export function generatePDFFooter({ sectionNum, licenseLabel }: { sectionNum: st
       <div class="pdf-footer-center"></div>
       <div class="pdf-footer-right"></div>
     </div>
+  `;
+}
+
+/**
+ * An empty page at the Main cover's size, used as the substrate for a custom
+ * cover. `CoverTemplateService.overlayOnFirstPage` paints the org's filled front
+ * template onto it after Prince runs.
+ *
+ * Prince renders it as part of the same multi-file invocation as every other
+ * section, so page numbering, the print-edition pass, and the `Content.pdf`
+ * page-1 offset all behave exactly as they do with a generated cover. Blank
+ * rather than the generated cover so the opaque art isn't sitting on top of a
+ * full-page background image and a text layer naming the same title twice.
+ */
+export function generateBlankCoverPageHTML() {
+  return `
+    <!DOCTYPE html>
+    <html lang="en">
+      <head>
+        <meta charset="UTF-8" />
+        <title>Cover</title>
+        <style>
+          @page cover-page {
+            size: ${PDF_PAGE_WIDTH_IN}in ${PDF_PAGE_HEIGHT_IN}in;
+            margin: 0;
+          }
+          html, body { margin: 0; padding: 0; }
+          body { page: cover-page; }
+          #customCoverPlaceholder { height: ${PDF_PAGE_HEIGHT_IN}in; }
+        </style>
+      </head>
+      <body>
+        <div id="customCoverPlaceholder"></div>
+      </body>
+    </html>
   `;
 }
 
@@ -383,6 +432,28 @@ function _generatePDFSpineContent({
       }
     </style>
   `;
+}
+
+/**
+ * Maps a `BookPageInfo` into the values shape consumed by `fillCoverTemplate`
+ * (src/util/coverTemplateFiller.ts). Field names match the spec in
+ * docs/COVER_TEMPLATE_GUIDELINES.md. Missing/unknown values are emitted as
+ * empty strings so the filler skips them.
+ *
+ * COURSE and SUBJECT have no canonical source in book metadata today; callers
+ * that have them can merge in via the service's `extraValues` parameter.
+ */
+export function buildCoverValues(bookInfo: BookPageInfo): Record<string, string> {
+  const libraryName = libraries.find((l) => l.key === bookInfo.subdomain)?.name ?? bookInfo.subdomain ?? '';
+  return {
+    TITLE: bookInfo.printInfo?.title || bookInfo.title || '',
+    AUTHOR: bookInfo.printInfo?.authorName || '',
+    LIBRARY: libraryName,
+    BOOK_ID: bookInfo.pageID?.toString() ?? '',
+    LICENSE: bookInfo.license?.label ?? '',
+    SUBJECT: '',
+    COURSE: '',
+  };
 }
 
 /**

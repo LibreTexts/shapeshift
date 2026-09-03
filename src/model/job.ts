@@ -27,11 +27,10 @@ interface JobAttributes {
   url: string;
 }
 
-interface JobCreationAttributes
-  extends Optional<
-    JobAttributes,
-    'createdAt' | 'failureReason' | 'id' | 'progress' | 'stage' | 'status' | 'updatedAt'
-  > {}
+interface JobCreationAttributes extends Optional<
+  JobAttributes,
+  'createdAt' | 'failureReason' | 'id' | 'progress' | 'stage' | 'status' | 'updatedAt'
+> {}
 
 @Table({
   timestamps: true,
