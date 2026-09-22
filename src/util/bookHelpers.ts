@@ -64,8 +64,9 @@ export async function generateSubpageListing(pageInfo: BookPageInfo, level = 2, 
 
 /**
  * Injects a generated subpage listing into a page's `.mt-guide-content` /
- * `.mt-category-container` element. Returns null when the page has
- * no such container or when the listing is empty.
+ * `.mt-category-container` element (output of the ShowOrg() template). Pages
+ * without ShowOrg() get the listing appended after their content instead.
+ * Returns null only when the listing is empty.
  */
 export function injectDirectoryListing({
   html,
@@ -83,20 +84,23 @@ export function injectDirectoryListing({
 
   const $ = cheerio.load(html);
 
-  const directory = $('.mt-guide-content, .mt-category-container');
-  if (!directory.length) return null;
-
-  // Create a new directory element with the listing HTML and replace the existing directory content
   const newDirectory = $('<div></div>');
   newDirectory.html(listing);
   newDirectory.addClass('libre-print-directory');
-  directory.replaceWith(newDirectory);
 
-  if (!tags?.length) return null;
+  // Authors don't always use ShowOrg() on pages with subpages, so fall back to appending the listing
+  const directory = $('.mt-guide-content, .mt-category-container');
+  if (directory.length) {
+    directory.replaceWith(newDirectory);
+  } else {
+    $('body').append(newDirectory);
+  }
+
+  const safeTags = tags ?? [];
   const pageType =
-    isCoverpage(tags) || title?.includes('Table of Contents')
+    isCoverpage(safeTags) || title?.includes('Table of Contents')
       ? 'Table of Contents' // server-side TOC generation (deprecated)
-      : tags.includes('article:topic-guide')
+      : safeTags.includes('article:topic-guide')
         ? 'Chapter Overview'
         : 'Section Overview';
 

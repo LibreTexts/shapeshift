@@ -1917,15 +1917,12 @@ ${stripBlocklistedScripts(pageTailHTML)}
           title: pageInfo.title,
         });
 
-        // injectDirectoryListing needs a `.mt-guide-content` or `.mt-category-container` element to
-        // replace. A directory page without one cannot carry its subpage listing, which means the
-        // chapter would be missing from the finished book. Report the page rather than returning
-        // null: a silent skip here is invisible in Pass 1 and reaches the operator, at best, as an
-        // unattributed count in Pass 2.
+        // injectDirectoryListing only returns null when the listing is empty, which means no child
+        // page had a usable url and title. Report the page rather than returning null: a silent
+        // skip here is invisible in Pass 1 and reaches the operator, at best, as an unattributed
+        // count in Pass 2.
         if (!updatedHTML) {
-          throw new ExportFailure(
-            `Directory page ${pageInfo.url} has no .mt-guide-content or .mt-category-container element to hold its subpage listing`,
-          );
+          throw new ExportFailure(`Directory page ${pageInfo.url} produced an empty subpage listing`);
         }
 
         const outputPath = await this.convertPage({
