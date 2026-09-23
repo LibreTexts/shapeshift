@@ -1,4 +1,5 @@
 import * as cheerio from 'cheerio';
+import { decode } from 'html-entities';
 
 /**
  * Patterns matched against <script src="..."> attributes and inline script content.
@@ -180,4 +181,20 @@ export function collapseFixedSpace(html: string): string {
   });
 
   return $.html();
+}
+
+const STRUCTURAL_CHARS = new Set(['<', '>', '&', '"']);
+
+/**
+ * Decodes presentational entities (&ldquo;, &mdash;, &nbsp;, &#8217; ...) to Unicode
+ * while leaving any entity that decodes to <, >, & or " untouched. The output is
+ * re-parsed as HTML downstream, so those four must stay escaped in every spelling
+ * (named, decimal, hex): `\(a&#60;x&#60;b\)` would otherwise parse as a start tag,
+ * and `&#38;lt;` would turn into a fresh `&lt;` reference.
+ */
+export function decodePresentationalEntities(html: string): string {
+  return html.replace(/&[a-zA-Z0-9#]+;/g, (m) => {
+    const decoded = decode(m, { level: 'html5' });
+    return STRUCTURAL_CHARS.has(decoded) ? m : decoded;
+  });
 }
