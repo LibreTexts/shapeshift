@@ -1881,7 +1881,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
 
       if (isMainTOC) {
         const listing = await generateSubpageListing(pageInfo);
-        if (!listing) {
+        if (!listing.trim()) {
           this.logger.withMetadata({ url: pageInfo.url }).warn('Main TOC listing is empty, skipping conversion');
           return null;
         }

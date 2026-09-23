@@ -18,6 +18,10 @@ export function isPublicationRoot(pageInfo: BookPageInfo) {
   );
 }
 
+/**
+ * Builds the nested subpage listing for a directory page. Returns an empty string when no
+ * child produces an entry, so callers can treat a falsy result as "nothing to list".
+ */
 export async function generateSubpageListing(pageInfo: BookPageInfo, level = 2, isSubTOC?: boolean): Promise<string> {
   if (!pageInfo.subpages?.length) return '';
   let resolvedIsSubTOC = isSubTOC;
@@ -59,6 +63,8 @@ export async function generateSubpageListing(pageInfo: BookPageInfo, level = 2, 
     }),
   );
   const inner = innerRaw.join('');
+  // Every child was filtered out (empty Front/Back Matter, missing url or title), so there is nothing to list
+  if (!inner) return '';
   return `<ul class='libre-print-list' ${twoColumn ? 'style="column-count: 2;"' : ''}>${inner}</ul>`;
 }
 
