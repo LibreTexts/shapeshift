@@ -1115,13 +1115,16 @@ export class PDFService {
   }
 
   private decodeHTML(raw: string) {
-    // Protect &quot; (used in attribute values) from being decoded to a bare " that
-    // would break HTML attribute quoting. All other named entities — including curly
-    // quotes like &ldquo; / &rdquo; / &rsquo; — are decoded to their unicode equivalents
-    // so Prince receives plain text rather than literal entity strings.
-    return decode(raw.replaceAll('&quot;', 'QUOT_REPL'), {
-      level: 'html5',
-    }).replace(/QUOT_REPL/g, '&quot;');
+    // Decode presentational entities — curly quotes like &ldquo; / &rdquo; / &rsquo;,
+    // &mdash;, &nbsp; — so Prince and MathJax's liteDOM receive plain text rather than
+    // literal entity strings.
+    //
+    // The structural four must survive as entities: this string is re-parsed as HTML
+    // downstream (cheerio and liteDOM in prerenderMath, cheerio again for EPUB). A bare
+    // `<` there is tokenizer input, not text — `\(a&lt;x-1&lt;b\)` would decode to
+    // `\(a<x-1<b\)` and parse as a `<x-1<b\)>` start tag, swallowing the expression.
+    // `&quot;` is likewise kept so attribute quoting isn't broken.
+    return raw.replace(/&(?!lt;|gt;|amp;|quot;)[a-zA-Z0-9#]+;/g, (m) => decode(m, { level: 'html5' }));
   }
 
   private async convertPage({
