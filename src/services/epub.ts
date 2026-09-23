@@ -14,7 +14,7 @@ import { runBatchedPromises, USER_AGENT } from '../util/util';
 import axios, { AxiosError } from 'axios';
 import mime from 'mime';
 import beautify from 'js-beautify';
-import { decode } from 'html-entities';
+import { decodePresentationalEntities } from '../util/htmlFilters';
 import PageID from '../util/pageID';
 import { optimizeImageBuffer } from '../util/imageOptimizer';
 import { PassThrough } from 'node:stream';
@@ -295,13 +295,7 @@ export class EPUBService {
       const subdomain = pageID.lib;
       const pageIndexPrefix = calcPageIndexPrefix(page.title);
       const rawContent = page.body[0];
-      // Decode presentational entities only — `&lt; &gt; &amp; &quot;` must survive as
-      // entities because this string is re-parsed as HTML/XML below. A bare `<` there is
-      // tokenizer input, not text: `\(a&lt;x-1&lt;b\)` would parse as a start tag and
-      // swallow the expression.
-      const decodedContentRaw = rawContent.replace(/&(?!lt;|gt;|amp;|quot;)[a-zA-Z0-9#]+;/g, (m) =>
-        decode(m, { level: 'html5' }),
-      );
+      const decodedContentRaw = decodePresentationalEntities(rawContent);
       const decodedContent = decodedContentRaw.replaceAll(
         /\\\(\\PageIndex\{([^}]+)\}\\\)/g,
         (_match, index: string) => `${pageIndexPrefix}${index.trim()}`,

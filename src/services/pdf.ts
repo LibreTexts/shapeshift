@@ -35,10 +35,9 @@ import PageID from '../util/pageID';
 import * as cheerio from 'cheerio';
 import { PDFCoverOpts, PDFCoverType } from '../types/pdf';
 import { prerenderMath, stripMathJaxScripts, extractPageNumberPrefix } from '../util/mathjax';
-import { stripBlocklistedScripts } from '../util/htmlFilters';
+import { decodePresentationalEntities, stripBlocklistedScripts } from '../util/htmlFilters';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { decode } from 'html-entities';
 import { generateDetailedLicensingHTML } from '../util/detailedLicensingHelpers';
 import { DetailedLicensingReport } from '../types/licensing';
 import axios, { type AxiosResponse } from 'axios';
@@ -1115,16 +1114,9 @@ export class PDFService {
   }
 
   private decodeHTML(raw: string) {
-    // Decode presentational entities — curly quotes like &ldquo; / &rdquo; / &rsquo;,
-    // &mdash;, &nbsp; — so Prince and MathJax's liteDOM receive plain text rather than
-    // literal entity strings.
-    //
-    // The structural four must survive as entities: this string is re-parsed as HTML
-    // downstream (cheerio and liteDOM in prerenderMath, cheerio again for EPUB). A bare
-    // `<` there is tokenizer input, not text — `\(a&lt;x-1&lt;b\)` would decode to
-    // `\(a<x-1<b\)` and parse as a `<x-1<b\)>` start tag, swallowing the expression.
-    // `&quot;` is likewise kept so attribute quoting isn't broken.
-    return raw.replace(/&(?!lt;|gt;|amp;|quot;)[a-zA-Z0-9#]+;/g, (m) => decode(m, { level: 'html5' }));
+    // Prince and liteDOM need plain text for &ldquo; / &mdash; / &nbsp; etc., but any
+    // entity for < > & " must stay escaped. See decodePresentationalEntities.
+    return decodePresentationalEntities(raw);
   }
 
   private async convertPage({
