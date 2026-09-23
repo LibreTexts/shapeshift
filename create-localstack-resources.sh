@@ -64,6 +64,34 @@ awslocal ssm put-parameter \
 echo "Created SSM parameter: /libkeys/production/dev/secret"
 
 awslocal ssm put-parameter \
+    --name "/libkeys/production/bio/key" \
+    --type "SecureString" \
+    --value "${LIBKEYS_PROD_BIO_KEY}" \
+    --overwrite
+echo "Created SSM parameter: /libkeys/production/bio/key"
+
+awslocal ssm put-parameter \
+    --name "/libkeys/production/bio/secret" \
+    --type "SecureString" \
+    --value "${LIBKEYS_PROD_BIO_SECRET}" \
+    --overwrite
+echo "Created SSM parameter: /libkeys/production/bio/secret"
+
+awslocal ssm put-parameter \
+    --name "/libkeys/production/biz/key" \
+    --type "SecureString" \
+    --value "${LIBKEYS_PROD_BIZ_KEY}" \
+    --overwrite
+echo "Created SSM parameter: /libkeys/production/biz/key"
+
+awslocal ssm put-parameter \
+    --name "/libkeys/production/biz/secret" \
+    --type "SecureString" \
+    --value "${LIBKEYS_PROD_BIZ_SECRET}" \
+    --overwrite
+echo "Created SSM parameter: /libkeys/production/biz/secret"
+
+awslocal ssm put-parameter \
     --name "/libkeys/production/chem/key" \
     --type "SecureString" \
     --value "${LIBKEYS_PROD_CHEM_KEY}" \
@@ -76,6 +104,20 @@ awslocal ssm put-parameter \
     --value "${LIBKEYS_PROD_CHEM_SECRET}" \
     --overwrite
 echo "Created SSM parameter: /libkeys/production/chem/secret"
+
+awslocal ssm put-parameter \
+    --name "/libkeys/production/math/key" \
+    --type "SecureString" \
+    --value "${LIBKEYS_PROD_MATH_KEY}" \
+    --overwrite
+echo "Created SSM parameter: /libkeys/production/math/key"
+
+awslocal ssm put-parameter \
+    --name "/libkeys/production/math/secret" \
+    --type "SecureString" \
+    --value "${LIBKEYS_PROD_MATH_SECRET}" \
+    --overwrite
+echo "Created SSM parameter: /libkeys/production/math/secret"
 
 awslocal ssm put-parameter \
     --name "/libkeys/production/socialsci/key" \
@@ -105,5 +147,19 @@ awslocal ssm put-parameter \
     --value "${LIBKEYS_PROD_HUMAN_SECRET}" \
     --overwrite
 echo "Created SSM parameter: /libkeys/production/human/secret"
+
+awslocal ssm put-parameter \
+    --name "/libkeys/production/k12/key" \
+    --type "SecureString" \
+    --value "${LIBKEYS_PROD_K12_KEY}" \
+    --overwrite
+echo "Created SSM parameter: /libkeys/production/k12/key"
+
+awslocal ssm put-parameter \
+    --name "/libkeys/production/k12/secret" \
+    --type "SecureString" \
+    --value "${LIBKEYS_PROD_K12_SECRET}" \
+    --overwrite
+echo "Created SSM parameter: /libkeys/production/k12/secret"
 
 echo "LocalStack resources created successfully!"

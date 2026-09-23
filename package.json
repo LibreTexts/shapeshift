@@ -17,7 +17,8 @@
     "build-final-cover": "tsx src/buildFinalCover.ts",
     "migrate": "tsx",
     "build-backlog-per-instance": "rimraf ./bpi-dist && npx esbuild src/lambda/backlogPerInstance.ts --bundle --platform=node --target=node22 --format=cjs --outfile=bpi-dist/backlogPerInstance.js --minify --tree-shaking=true && cd bpi-dist && zip -9 -r ../backlogPerInstance.zip backlogPerInstance.js",
-    "make-test-pdf": "tsx src/makeTestPDF.ts"
+    "make-test-pdf": "tsx src/makeTestPDF.ts",
+    "make-default-cover": "tsx src/makeDefaultCover.ts"
   },
   "author": "LibreTexts <info@libretexts.org>",
   "license": "MIT",
