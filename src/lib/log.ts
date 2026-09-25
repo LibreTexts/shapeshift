@@ -10,3 +10,7 @@ export const log = new LogLayer({
     stringify: Environment.getSystemEnvironment() !== 'DEVELOPMENT',
   }),
 });
+
+if (Environment.getSystemEnvironment() !== 'DEVELOPMENT') {
+  log.setLevel('info');
+}
