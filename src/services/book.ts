@@ -29,7 +29,13 @@ import {
 } from '../util/util';
 import { GlossaryEntry, GlossaryEntryForPage } from '../types/glossary';
 import { GlossaryService } from './glossary';
-import { escapeHTML } from '../util/glossaryHelpers';
+import {
+  buildGlossaryData,
+  escapeHTML,
+  generateGlossaryHTML,
+  glossarySortKey,
+  type GlossaryEntry as GlossaryDisplayEntry,
+} from '../util/glossaryHelpers';
 import { nullProgressReporter, type ProgressReporter } from '../lib/jobProgress';
 
 /**
@@ -984,6 +990,7 @@ export class BookService {
   }
 
   private async preprocessHTML(pages: BookPageInfo) {
+    const bookID = pages.pageID.toString();
     const limit = pLimit(4);
     const proms: Promise<void>[] = [];
     const queueFixesRecursive = (p: BookPageInfo) => {
@@ -992,7 +999,7 @@ export class BookService {
           const bodyRaw = p.body.join('');
           if (!bodyRaw) return;
           // run renderGlossaryV2Output before removeEmptyParagraphs: glossary mount point is an empty element
-          const glossaryV2Rendered = await this.renderGlossaryV2Output(p.pageID, bodyRaw);
+          const glossaryV2Rendered = await this.renderGlossaryV2Output(p, bookID, bodyRaw);
           const headingsFixed = this.autofixHeadingLevels(glossaryV2Rendered);
           const altTextFixed = this.autofixMissingAltText(headingsFixed);
           const cmsMarkupFixed = this.autofixCMSMarkup(altTextFixed);
@@ -1185,14 +1192,33 @@ export class BookService {
     return $.html() + answersSection;
   }
 
-  private async renderGlossaryV2Output(pageID: PageID, content: string) {
+  private isBookGlossaryPage(page: BookPageInfo): boolean {
+    return page.matterType === 'Back' && (page.title === 'Glossary' || page.url.toLowerCase().includes('_glossary'));
+  }
+
+  /**
+   * Renders the whole-book glossary into the V2 mount point.
+   */
+  private renderBookGlossary($: cheerio.CheerioAPI, outputElem: cheerio.Cheerio<any>, bookID: string) {
+    const entries: GlossaryDisplayEntry[] = (this.bookGlossaryCache.get(bookID) ?? []).map((t) => ({
+      sortKey: glossarySortKey(t.term),
+      term: escapeHTML(t.term),
+      definition: escapeHTML(t.definition),
+      link: t.link ?? null,
+    }));
+    $('script[src*="glossarizer"]').remove();
+    $('input#pageId, input#coverID').remove();
+    outputElem.replaceWith($(generateGlossaryHTML(buildGlossaryData(entries))));
+    return $.html();
+  }
+
+  private async renderGlossaryV2Output(page: BookPageInfo, bookID: string, content: string) {
+    const pageID = page.pageID;
     if (!content) return content;
     const $ = cheerio.load(content, null, false);
     const outputElem = $('#glossary-output');
-    if (!outputElem.length) {
-      this.logger.withMetadata({ pageID: pageID.toString() }).debug('No glossary mount point on page.');
-      return content;
-    }
+    if (!outputElem.length) return content;
+    if (this.isBookGlossaryPage(page)) return this.renderBookGlossary($, outputElem, bookID);
 
     const termsForPage = [...(this.glossaryTermsByPageCache.get(pageID.toString()) ?? [])].sort((a, b) =>
       a.term.localeCompare(b.term),

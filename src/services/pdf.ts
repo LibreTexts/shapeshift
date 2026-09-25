@@ -2029,9 +2029,11 @@ ${stripBlocklistedScripts(pageTailHTML)}
       this.logger.withMetadata({ url: pageInfo.url }).info('Starting Glossary generation');
 
       const rawBody = pageInfo.body.join('');
-      const entries = parseGlossaryTable(rawBody);
+      // for Glossary V2, BookService has already rendered the whole-book glossary into the page body
+      const preRendered = rawBody.includes('id="libre-glossary-table"');
+      const entries = preRendered ? null : parseGlossaryTable(rawBody);
 
-      if (!entries || entries.length === 0) {
+      if (!preRendered && (!entries || entries.length === 0)) {
         this.logger
           .withMetadata({ url: pageInfo.url })
           .warn('No parseable glossary table found — falling back to raw page rendering');
@@ -2057,7 +2059,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           <h1 id="libre-print-directory-header">Glossary</h1>
         </div>
         <div id="libre-glossary">
-          ${generateGlossaryHTML(buildGlossaryData(entries))}
+          ${preRendered ? rawBody : generateGlossaryHTML(buildGlossaryData(entries!))}
         </div>
       `;
 

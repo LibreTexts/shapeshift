@@ -124,7 +124,7 @@ export function parseGlossaryTable(bodyHTML: string): GlossaryEntry[] | null {
       }
     }
 
-    const sortKey = trimLeadingArticle(termText.toLowerCase());
+    const sortKey = glossarySortKey(termText);
 
     entries.push({
       sortKey,
@@ -141,33 +141,47 @@ export function parseGlossaryTable(bodyHTML: string): GlossaryEntry[] | null {
 // Data building
 // ---------------------------------------------------------------------------
 
+// Group heading for entries that begin with a digit or symbol rather than a letter.
+export const GLOSSARY_OTHER_GROUP = '#';
+
 /**
- * Sorts entries alphabetically and groups them by first letter A–Z.
- * Entries whose sort key starts with a non-letter character are omitted,
- * consistent with buildTagIndex behaviour.
+ * Builds the sort key for a glossary term: HTML stripped, wrapping punctuation removed, leading
+ * article trimmed, lowercased.
+ */
+export function glossarySortKey(term: string): string {
+  const bare = stripHTMLTags(term)
+    .replace(/&nbsp;/g, ' ')
+    .replace(/\xa0/g, ' ')
+    // Unicode and ASCII quotes, brackets, and dashes authors wrap terms in.
+    .replace(/^[^\p{L}\p{N}]+/u, '')
+    .trim()
+    .toLowerCase();
+  return trimLeadingArticle(bare);
+}
+
+/**
+ * Sorts entries alphabetically and groups them by first letter A–Z. Entries starting with a digit
+ * or symbol collect into a leading "#" group.
  */
 export function buildGlossaryData(entries: GlossaryEntry[]): GlossaryData {
   const sorted = entries.slice().sort((a, b) => a.sortKey.localeCompare(b.sortKey));
 
+  const groups = new Map<string, GlossaryEntry[]>();
+  for (const entry of sorted) {
+    const first = entry.sortKey.charAt(0).toUpperCase();
+    const letter = /^[A-Z]$/.test(first) ? first : GLOSSARY_OTHER_GROUP;
+    const group = groups.get(letter);
+    if (group) {
+      group.push(entry);
+      continue;
+    }
+    groups.set(letter, [entry]);
+  }
+
   const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'.split('');
-  const byLetter: GlossaryLetter[] = [];
-
-  let pos = 0;
-  // Advance past entries that don't start with A–Z
-  while (pos < sorted.length && !/^[A-Z]/i.test(sorted[pos].sortKey.charAt(0))) {
-    pos++;
-  }
-
-  for (const letter of ALPHABET) {
-    const letterEntries: GlossaryEntry[] = [];
-    while (pos < sorted.length && sorted[pos].sortKey.toUpperCase().startsWith(letter)) {
-      letterEntries.push(sorted[pos]);
-      pos++;
-    }
-    if (letterEntries.length > 0) {
-      byLetter.push({ letter, entries: letterEntries });
-    }
-  }
+  const byLetter: GlossaryLetter[] = [GLOSSARY_OTHER_GROUP, ...ALPHABET]
+    .filter((letter) => groups.has(letter))
+    .map((letter) => ({ letter, entries: groups.get(letter)! }));
 
   return { byLetter };
 }
@@ -207,8 +221,9 @@ export function generateGlossaryHTML(data: GlossaryData): string {
         })
         .join('');
 
+      const anchor = group.letter === GLOSSARY_OTHER_GROUP ? 'other' : group.letter;
       return `
-      <div class="libre-glossary-letter-group" id="libre-glossary-${group.letter}">
+      <div class="libre-glossary-letter-group" id="libre-glossary-${anchor}">
         <h2 class="libre-glossary-letter">${group.letter}</h2>${entryItems}
       </div>`;
     })
