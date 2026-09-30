@@ -97,7 +97,7 @@ export class DownloadController {
 
     const extension = formatConfig.fileName.split('.').pop() ?? format;
     await this.recordDownloadEvent(bookID, formatConfig.fileName, extension);
-    const downloadUrl = this.buildDownloadUrl(s3Key, formatConfig.fileName, buildVersionToken(metadata));
+    const downloadUrl = this.buildDownloadUrl(s3Key, formatConfig, buildVersionToken(metadata));
     this.logger
       .withMetadata({
         bookID,
@@ -133,18 +133,19 @@ export class DownloadController {
   }
 
   /**
-   * Returns a public CloudFront URL for the given S3 key. The
-   * response-content-disposition param is included so browsers always prompt a
-   * download with the correct filename regardless of S3 object metadata.
+   * Returns a public CloudFront URL for the given S3 key. The response-content-disposition param
+   * sets the filename regardless of S3 object metadata: PDFs render inline in the browser, while
+   * every other format prompts a download.
    *
    * Object keys are stable across recompiles, so a `v` param derived from the object's current
    * identity is appended: when a book is rebuilt the URL changes, missing any browser or edge
    * cache entry holding the previous build.
    */
-  private buildDownloadUrl(s3Key: string, fileName: string, version: string | null): string {
+  private buildDownloadUrl(s3Key: string, formatConfig: FormatConfig, version: string | null): string {
     // Built with encodeURIComponent rather than URLSearchParams: the latter encodes spaces as
     // "+", which S3 does not decode back to a space in response-* overrides.
-    const disposition = `attachment; filename="${fileName}"`;
+    const dispositionType = formatConfig.contentType === 'application/pdf' ? 'inline' : 'attachment';
+    const disposition = `${dispositionType}; filename="${formatConfig.fileName}"`;
     const versionParam = version ? `&v=${version}` : '';
     return `https://${this.cloudFrontDistributionDomain}/${s3Key}?response-content-disposition=${encodeURIComponent(disposition)}${versionParam}`;
   }
