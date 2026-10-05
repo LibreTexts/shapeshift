@@ -106,6 +106,20 @@ awslocal ssm put-parameter \
 echo "Created SSM parameter: /libkeys/production/chem/secret"
 
 awslocal ssm put-parameter \
+    --name "/libkeys/production/eng/key" \
+    --type "SecureString" \
+    --value "${LIBKEYS_PROD_ENG_KEY}" \
+    --overwrite
+echo "Created SSM parameter: /libkeys/production/eng/key"
+
+awslocal ssm put-parameter \
+    --name "/libkeys/production/eng/secret" \
+    --type "SecureString" \
+    --value "${LIBKEYS_PROD_ENG_SECRET}" \
+    --overwrite
+echo "Created SSM parameter: /libkeys/production/eng/secret"
+
+awslocal ssm put-parameter \
     --name "/libkeys/production/math/key" \
     --type "SecureString" \
     --value "${LIBKEYS_PROD_MATH_KEY}" \

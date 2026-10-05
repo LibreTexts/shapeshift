@@ -1,16 +1,15 @@
 import { createHash } from 'node:crypto';
 import fs from 'node:fs/promises';
 import { isAbsolute, join, relative, resolve } from 'node:path';
-import axios from 'axios';
 import * as cheerio from 'cheerio';
 import { LogLayer } from 'loglayer';
 import pLimit from 'p-limit';
-import { CXOneRateLimiter } from '../lib/cxOneRateLimiter';
+import mime from 'mime';
+import { fetchCXOneAsset } from '../lib/cxOneAssetFetcher';
 import { Environment } from '../lib/environment';
 import { log as logService } from '../lib/log';
 import { BookPageInfo } from '../types/book';
 import { optimizeImageBuffer } from '../util/imageOptimizer';
-import { USER_AGENT } from '../util/util';
 import { nullProgressReporter, type ProgressReporter } from '../lib/jobProgress';
 
 const DEFAULT_FETCH_CONCURRENCY = 8;
@@ -29,11 +28,13 @@ const DEFAULT_JPEG_QUALITY = 80;
 
 /**
  * The only shape a generated image file name may take: a SHA-1 hex digest plus one of the
- * two extensions {@link optimizeImageBuffer} can emit. Everything written to (or read back
+ * two extensions {@link optimizeImageBuffer} can emit, or the extension of an original kept
+ * verbatim (see {@link ImageProcessor.resolveLocalPath}). Everything written to (or read back
  * from) the image directory is checked against this, so a hostile `src` in book content can
  * never steer a filesystem operation at a path we didn't construct ourselves.
  */
-const OPTIMIZED_FILE_NAME = /^[0-9a-f]{40}\.(?:jpg|png)$/;
+const OPTIMIZED_FILE_NAME = /^[0-9a-f]{40}\.(?:jpg|jpeg|png|gif|webp|svg)$/;
+const ORIGINAL_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg']);
 
 export interface ImageProcessingSummary {
   /** Total bytes of the source images that were replaced. */
@@ -177,10 +178,7 @@ export class ImageProcessor {
         : trimmed.startsWith('//')
           ? `https:${trimmed}`
           : `https://${subdomain}.libretexts.org/${trimmed.replace(/^\//, '')}`;
-      const url = new URL(raw);
-      // SVG is vector — re-encoding it would only make it bigger and blurrier.
-      if (url.pathname.toLowerCase().endsWith('.svg')) return null;
-      return url.toString();
+      return new URL(raw).toString();
     } catch {
       return null;
     }
@@ -233,24 +231,24 @@ export class ImageProcessor {
     if (cached !== undefined) return cached;
 
     try {
-      // CXOne-hosted files count against the same API budget as page content; CDN assets don't.
-      if (/(^|\.)libretexts\.org$/i.test(new URL(url).hostname)) {
-        await CXOneRateLimiter.waitUntilAPIAvailable();
-      }
-
-      const response = await axios.get<ArrayBuffer>(url, {
-        headers: { 'User-Agent': USER_AGENT },
-        responseType: 'arraybuffer',
+      const {
+        authenticated,
+        contentType,
+        data: original,
+      } = await fetchCXOneAsset(url, {
         timeout: IMAGE_FETCH_TIMEOUT_MS,
       });
-      const original = Buffer.from(response.data as unknown as ArrayBuffer);
 
-      const optimized = await optimizeImageBuffer(original, {
-        jpegQuality: this._jpegQuality,
-        maxHeight: this._maxHeight,
-        maxWidth: this._maxWidth,
-      });
-      if (!optimized) {
+      // SVG is vector — re-encoding it would only make it bigger and blurrier.
+      const isSVG = contentType?.includes('svg') || new URL(url).pathname.toLowerCase().endsWith('.svg');
+      const optimized = isSVG
+        ? null
+        : await optimizeImageBuffer(original, {
+            jpegQuality: this._jpegQuality,
+            maxHeight: this._maxHeight,
+            maxWidth: this._maxWidth,
+          });
+      if (!optimized && !authenticated) {
         // Vector, animated, or already smaller than anything we'd produce. Leaving the
         // remote URL in place lets Prince fetch it as before.
         this._summary.skipped++;
@@ -258,13 +256,23 @@ export class ImageProcessor {
         return null;
       }
 
-      const fileName = `${createHash('sha1').update(url).digest('hex')}.${optimized.extension}`;
-      const filePath = this.resolveOutputPath(fileName);
-      await fs.writeFile(filePath, optimized.data);
+      // An image that needed a server token (e.g. on a Private page) is unreachable for
+      // Prince, so when it can't be optimized the original bytes are kept locally instead.
+      const extension = optimized?.extension ?? this.originalExtension(contentType, isSVG);
+      if (!extension) throw new Error(`Unsupported content type for restricted image: ${contentType}`);
+      const data = optimized?.data ?? original;
 
-      this._summary.optimized++;
-      this._summary.bytesBefore += original.length;
-      this._summary.bytesAfter += optimized.data.length;
+      const fileName = `${createHash('sha1').update(url).digest('hex')}.${extension}`;
+      const filePath = this.resolveOutputPath(fileName);
+      await fs.writeFile(filePath, data);
+
+      if (optimized) {
+        this._summary.optimized++;
+        this._summary.bytesBefore += original.length;
+        this._summary.bytesAfter += data.length;
+      } else {
+        this._summary.skipped++;
+      }
       this._cache.set(url, filePath);
       return filePath;
     } catch (error) {
@@ -275,6 +283,13 @@ export class ImageProcessor {
         .warn('Failed to optimize image; falling back to the original source');
       return null;
     }
+  }
+
+  /** File extension for an original image kept verbatim, limited to formats Prince renders. */
+  private originalExtension(contentType: string | undefined, isSVG: boolean): string | null {
+    if (isSVG) return 'svg';
+    const extension = contentType ? mime.getExtension(contentType.split(';')[0].trim()) : null;
+    return extension && ORIGINAL_EXTENSIONS.has(extension) ? extension : null;
   }
 
   /**

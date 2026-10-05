@@ -10,13 +10,14 @@ import { v4 as uuid } from 'uuid';
 import { XMLBuilder } from 'fast-xml-parser';
 import Archiver from 'archiver';
 import * as cheerio from 'cheerio';
-import { runBatchedPromises, USER_AGENT } from '../util/util';
-import axios, { AxiosError } from 'axios';
+import { runBatchedPromises } from '../util/util';
+import { AxiosError } from 'axios';
 import mime from 'mime';
 import beautify from 'js-beautify';
 import { decodePresentationalEntities } from '../util/htmlFilters';
 import PageID from '../util/pageID';
 import { optimizeImageBuffer } from '../util/imageOptimizer';
+import { fetchCXOneAsset } from '../lib/cxOneAssetFetcher';
 import { PassThrough } from 'node:stream';
 import { Upload } from '@aws-sdk/lib-storage';
 import { nullProgressReporter, type ProgressReporter } from '../lib/jobProgress';
@@ -323,12 +324,7 @@ export class EPUBService {
           }
 
           // <download image, store metadata, and replace URL>
-          const imageResp = await axios.get(fqImageURL, {
-            responseType: 'arraybuffer',
-            headers: { 'User-Agent': USER_AGENT },
-          });
-          const originalData = Buffer.from(imageResp.data, 'binary');
-          const responseMimeType = imageResp.headers['content-type'] as string | undefined;
+          const { contentType: responseMimeType, data: originalData } = await fetchCXOneAsset(fqImageURL);
 
           // CMS images are routinely far larger than any reader displays them at; embedding
           // them verbatim is what makes EPUBs (like PDFs) balloon. `null` means the image is

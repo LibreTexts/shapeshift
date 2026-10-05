@@ -78,6 +78,22 @@ export class LibraryService {
     return this.expertClient!;
   }
 
+  /**
+   * Mints a fresh server token header for requests made outside the Expert client, such as
+   * raw file downloads. Server tokens embed a timestamp, so callers should request a new
+   * header per request rather than holding on to one.
+   */
+  public getAuthHeaders(): Record<string, string> {
+    this._ensureInitialized();
+    const token = this.expertClient!.auth.ServerToken({
+      key: this.keyPair!.key,
+      secret: this.keyPair!.secret,
+      user: this.user,
+    }).getToken();
+    if (!token) throw new Error(`[${this.logName}] Failed to mint server token for ${this.lib}`);
+    return { 'X-Deki-Token': token };
+  }
+
   private _generateLibrariesSSMClient(): LibrariesSSMClient | null {
     try {
       const libTokenPairPath = process.env.AWS_SSM_LIB_TOKEN_PAIR_PATH || '/libkeys/production';
