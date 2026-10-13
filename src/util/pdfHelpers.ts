@@ -65,7 +65,7 @@ export async function extractPDFPages({
 }
 
 /**
- * Generates @font-face CSS for Atkinson Hyperlegible using absolute file:// URLs.
+ * Generates @font-face CSS for Atkinson Hyperlegible (body) and Liberation Mono (code) using absolute file:// URLs.
  * Required because CSS is inlined into HTML with no base URL, so Prince cannot
  * resolve relative paths from within an inline <style> block.
  */
@@ -96,6 +96,24 @@ export function generateFontCSS(): string {
       font-style: italic;
       font-weight: 700;
       src: url('${toURL('atkinson-hyperlegible-700i.ttf')}') format('truetype');
+    }
+    @font-face {
+      font-family: 'Liberation Mono';
+      font-style: normal;
+      font-weight: 400;
+      src: url('${toURL('liberation-mono-400.ttf')}') format('truetype');
+    }
+    @font-face {
+      font-family: 'Liberation Mono';
+      font-style: normal;
+      font-weight: 700;
+      src: url('${toURL('liberation-mono-700.ttf')}') format('truetype');
+    }
+    @font-face {
+      font-family: 'Liberation Mono';
+      font-style: italic;
+      font-weight: 400;
+      src: url('${toURL('liberation-mono-400i.ttf')}') format('truetype');
     }
   `;
 }
