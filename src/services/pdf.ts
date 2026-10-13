@@ -36,6 +36,7 @@ import * as cheerio from 'cheerio';
 import { PDFCoverOpts, PDFCoverType } from '../types/pdf';
 import { prerenderMath, stripMathJaxScripts, extractPageNumberPrefix } from '../util/mathjax';
 import { decodePresentationalEntities, stripBlocklistedScripts } from '../util/htmlFilters';
+import { formatCodeBlocksForPDF } from '../util/codeBlocks';
 import { dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { generateDetailedLicensingHTML } from '../util/detailedLicensingHelpers';
@@ -1156,9 +1157,11 @@ export class PDFService {
       // The outer decodeHTML is a catch-all for any other content paths (TOC, Index, etc.).
       const renderedBodyHTML = this.rewriteInternalLinks(
         this.decodeHTML(
-          this.sanitizeImagesForPDF(
-            preRenderedBodyHTML ??
-              (await prerenderMath(this.decodeHTML(this.addPageTitle(pageInfo, pageBodyHTML)), pageInfo)),
+          formatCodeBlocksForPDF(
+            this.sanitizeImagesForPDF(
+              preRenderedBodyHTML ??
+                (await prerenderMath(this.decodeHTML(this.addPageTitle(pageInfo, pageBodyHTML)), pageInfo)),
+            ),
           ),
         ),
       );
@@ -2618,10 +2621,12 @@ ${stripBlocklistedScripts(pageTailHTML)}
         const preRendered = await this.readPrerenderedBody(prerendered?.find((p) => p.task._id === t._id));
         const anchor = `<span id="page-${t.pageID}" class="pdf-anchor">&#8203;</span>`;
         const renderedBody = this.rewriteInternalLinks(
-          this.sanitizeImagesForPDF(
-            directoryHTML != null
-              ? `${anchor}${await prerenderMath(directoryHTML, t.pageInfo)}`
-              : (preRendered ?? (await prerenderMath(this.addPageTitle(t.pageInfo, rawBody), t.pageInfo))),
+          formatCodeBlocksForPDF(
+            this.sanitizeImagesForPDF(
+              directoryHTML != null
+                ? `${anchor}${await prerenderMath(directoryHTML, t.pageInfo)}`
+                : (preRendered ?? (await prerenderMath(this.addPageTitle(t.pageInfo, rawBody), t.pageInfo))),
+            ),
           ),
         );
         const cleanedHeadHTML = stripBlocklistedScripts(stripMathJaxScripts(t.pageInfo.head));
