@@ -624,13 +624,132 @@ picture > img {
   background-color:#9e0000
 }
 
-/* Code blocks */
+/* Code blocks. CMS <pre> blocks are rewritten by util/codeBlocks.ts into one
+   .pdf-code-line span per line. The gutter numbers and zebra rows mirror CXOne's
+   client-side SyntaxHighlighter, which never runs during conversion. */
 pre {
-  color: green;
+  font-family: 'Liberation Mono', monospace;
+  color: #222;
 }
 
 code {
   color: green;
+}
+
+.pdf-code-title {
+  font-weight: bold;
+  margin: 0.6em 0 0.2em;
+}
+
+.pdf-code {
+  border: 1px solid #cfd8dc;
+  background-color: #f5f9fc;
+  padding: 0.5em;
+  margin: 0.6em 0;
+  orphans: 3;
+  widows: 3;
+}
+
+.pdf-code-body {
+  font-family: 'Liberation Mono', monospace;
+  font-size: 8.5pt;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  color: #222;
+  background-color: #fff;
+  border: 1px solid #e0e0e0;
+  margin: 0;
+  padding: 0;
+  counter-reset: code-line;
+}
+
+.pdf-code-body code {
+  color: inherit;
+}
+
+/* Hanging indent: wrapped continuation lines sit under the code, not the gutter. */
+.pdf-code-line {
+  display: block;
+  counter-increment: code-line;
+  padding-left: 3.6em;
+  text-indent: -3.6em;
+  break-inside: avoid;
+}
+
+.pdf-code-line:nth-child(even) {
+  background-color: #f0f0f0;
+}
+
+/* Artifact tagging keeps line numbers out of the structure tree and copied text. */
+.pdf-code-line::before {
+  content: counter(code-line, decimal-leading-zero);
+  display: inline-block;
+  width: 2.6em;
+  margin-right: 0.5em;
+  padding-right: 0.3em;
+  text-indent: 0;
+  text-align: right;
+  color: #888;
+  border-right: 1px solid #c0c0c0;
+  prince-pdf-tag-type: Artifact;
+}
+
+/* highlight.js token colors: light palette, dark enough to hold up in B&W print. */
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-doctag,
+.hljs-meta .hljs-keyword {
+  color: #a626a4;
+}
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+  color: #3d7f3a;
+}
+.hljs-comment,
+.hljs-quote {
+  color: #6a737d;
+  font-style: italic;
+}
+.hljs-number,
+.hljs-literal,
+.hljs-symbol,
+.hljs-bullet {
+  color: #986801;
+}
+.hljs-title,
+.hljs-title.function_,
+.hljs-section,
+.hljs-name {
+  color: #2f5fc4;
+}
+.hljs-type,
+.hljs-built_in,
+.hljs-title.class_,
+.hljs-selector-class,
+.hljs-selector-id {
+  color: #b35900;
+}
+.hljs-variable,
+.hljs-template-variable,
+.hljs-attr,
+.hljs-params {
+  color: #a3242a;
+}
+.hljs-meta {
+  color: #4a6b8a;
+}
+.hljs-deletion {
+  color: #a3242a;
+}
+.hljs-emphasis {
+  font-style: italic;
+}
+.hljs-strong {
+  font-weight: bold;
 }
 
 /* Binder cells */
