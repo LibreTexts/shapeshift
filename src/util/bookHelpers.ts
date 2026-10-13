@@ -1,11 +1,35 @@
 import * as cheerio from 'cheerio';
-import { BookPageInfo } from '../types/book';
+import { GetPageResponse } from '@libretexts/cxone-expert-node';
+import { BookPageInfo, PageRestriction } from '../types/book';
+
+const PAGE_RESTRICTIONS: PageRestriction[] = ['Public', 'Semi-Public', 'Semi-Private', 'Private'];
 
 export function isCoverpage(pageInfo: BookPageInfo): boolean;
 export function isCoverpage(tags: string[]): boolean;
 export function isCoverpage(input: BookPageInfo | string[]) {
   const tags = Array.isArray(input) ? input : input.tags;
   return tags?.includes('coverpage:yes') || tags?.includes('coverpage:nocommons');
+}
+
+/**
+ * Reads the page restriction from a CXOne page's security block. Returns null when the block is
+ * missing or holds a value we don't recognize.
+ */
+export function parseRestriction(security: GetPageResponse['security']): PageRestriction | null {
+  if (!security || typeof security !== 'object') return null;
+  const pagePerms = security['permissions.page'] as unknown;
+  const perms = Array.isArray(pagePerms) ? pagePerms[0] : pagePerms;
+  const raw = (perms as { restriction?: { '#text'?: string } } | undefined)?.restriction?.['#text'];
+  if (typeof raw !== 'string') return null;
+  return PAGE_RESTRICTIONS.find((r) => r.toLowerCase() === raw.trim().toLowerCase()) ?? null;
+}
+
+/**
+ * Whether anonymous readers can see a page. Unknown restrictions count as not visible, so a page we
+ * can't classify is never compiled into a public book.
+ */
+export function isPubliclyVisible(restriction: PageRestriction | null): boolean {
+  return restriction === 'Public' || restriction === 'Semi-Public';
 }
 
 /**
@@ -52,7 +76,6 @@ export async function generateSubpageListing(pageInfo: BookPageInfo, level = 2, 
   // Get subtitles
   const innerRaw = await Promise.all(
     pages.map(async (elem) => {
-      // if (elem.modified === 'restricted') return ''; // private page - FIXME
       const isSubtopic = level > 2 ? `indent${level - 2}` : null;
       const subPageDir = await generateSubpageListing(elem, level + 1, resolvedIsSubTOC);
       const subListSpacing = subPageDir?.length > 0 ? `libre-print-sublisting${level - 2}` : '';

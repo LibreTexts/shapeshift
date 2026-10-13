@@ -17,6 +17,7 @@ import { getDirectoryPathFromFilePath } from '../util/fsHelpers';
 import * as cheerio from 'cheerio';
 import { Element } from 'domhandler';
 import { generateQRCode } from '../util/qrCode';
+import { isPubliclyVisible, parseRestriction } from '../util/bookHelpers';
 import { collapseFixedSpace, demoteDecorativeHeadings, removeEmptyParagraphs } from '../util/htmlFilters';
 import {
   assembleUrl,
@@ -182,6 +183,41 @@ function countPagesInTree(node: GetPagesResponse): number {
   return 1 + subpages.reduce((sum: number, child: GetPagesResponse) => sum + countPagesInTree(child), 0);
 }
 
+/**
+ * Flattens a raw CXOne page tree into every node it contains, root first.
+ */
+function collectPagesInTree(node: GetPagesResponse): GetPagesResponse[] {
+  const subpagesRaw = isNonNullCXOneObject(node.subpages) ? node.subpages : null;
+  const subpages = Array.isArray(subpagesRaw?.page)
+    ? subpagesRaw.page
+    : typeof subpagesRaw?.page === 'object'
+      ? [subpagesRaw.page]
+      : [];
+  return [node, ...subpages.flatMap((child: GetPagesResponse) => collectPagesInTree(child))];
+}
+
+/**
+ * Normalizes a page URL for comparison: resolves it against `base` when relative, then keeps only host and decoded
+ * path without trailing slash, so `../02%3A_Second_Chapter/?x#y` on a dev page and
+ * `https://dev.libretexts.org/.../02:_Second_Chapter` match. Returns null when the URL can't be parsed.
+ */
+function normalizePageURL(url: string, base?: string): string | null {
+  let parsed: URL;
+  try {
+    parsed = new URL(url.trim(), base);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  let path = parsed.pathname.replace(/\/+$/, '');
+  try {
+    path = decodeURIComponent(path);
+  } catch {
+    /* keep the encoded form */
+  }
+  return `${parsed.host}${path}`.toLowerCase();
+}
+
 export class BookService {
   private readonly logger: LogLayer;
   private readonly logName: 'BookService';
@@ -195,6 +231,11 @@ export class BookService {
    * siblings — there is no single loop to count from.
    */
   private _progress: ProgressReporter = nullProgressReporter;
+  /**
+   * Pages (including pruned descendants) left out of the current discoverPages() call by privacy rules.
+   * Kept so preprocessHTML() can strip links to them that CXOne rendered into other pages' bodies.
+   */
+  private _excludedPages = { ids: new Set<string>(), urls: new Set<string>() };
   private readonly DEFAULT_THUMBNAILS = {
     BACK_MATTER: 'https://cdn.libretexts.net/DefaultImages/Back%20matter.jpg',
     DEFAULT: 'https://cdn.libretexts.net/DefaultImages/default.png',
@@ -580,8 +621,17 @@ export class BookService {
       // keeps the bar just short of the band top until discovery is genuinely done.
       this._progress = opt?.progress ?? nullProgressReporter;
       this._progress.expect(countPagesInTree(pagesRaw) + 1);
+      this._excludedPages = { ids: new Set(), urls: new Set() };
 
       const pages = await this.getPageInfo(libName, pagesRaw, lib);
+      this.logger
+        .withMetadata({
+          bookID: bookID.toString(),
+          coverRestriction: pages.restriction,
+          publicOnly: isPubliclyVisible(pages.restriction),
+          excludedCount: this._excludedPages.ids.size,
+        })
+        .info('Applied page privacy rules.');
       const glossaryService = new GlossaryService();
       const glossaryData = await glossaryService.getGlossaryTermsForBook(bookID);
       this.bookGlossaryCache.set(bookID.toString(), glossaryData.terms);
@@ -611,6 +661,10 @@ export class BookService {
   /**
    * Builds a list of URLs to convert for the book, in the correct order for conversion. This includes handling special cases for pages that
    * should be treated as TOC entries, as well as ensuring front/back matter are indexed correctly.
+   *
+   * The given page is always included. Its CXOne restriction sets the privacy rule for everything below it: a Private or
+   * Semi-Private root (e.g. an unpublished Workbench book) compiles every subpage, while a Public or Semi-Public root
+   * compiles only Public and Semi-Public subpages and prunes the rest along with their descendants.
    * @param libName - the subdomain/library name
    * @param p - the page object
    * @param libService - Optional LibraryService instance to avoid re-initializing for each page. If not provided, a new instance will be created.
@@ -621,7 +675,20 @@ export class BookService {
       libService = new LibraryService({ lib: libName });
       await libService.init();
     }
+    // Only subpages are ever excluded, so the root always resolves to a page
+    return (await this.resolvePageInfo(libName, p, libService))!;
+  }
 
+  /**
+   * Fetches a page and its subtree. Returns null when `publicOnly` is set and the page is not publicly visible.
+   * Leave `publicOnly` undefined for the root page so its own restriction decides the rule for its subtree.
+   */
+  private async resolvePageInfo(
+    libName: string,
+    p: GetPagesResponse,
+    libService: LibraryService,
+    publicOnly?: boolean,
+  ): Promise<BookPageInfo | null> {
     await CXOneRateLimiter.waitUntilAPIAvailable(2);
     const pageDetails = await libService.api.pages.getPage(Number(p['@id']), {
       format: 'html',
@@ -630,6 +697,27 @@ export class BookService {
     });
     this._progress.tick();
     const url = pageDetails['uri.ui']!;
+    const restriction = parseRestriction(pageDetails.security);
+
+    if (publicOnly && !isPubliclyVisible(restriction)) {
+      const pruned = collectPagesInTree(p);
+      const prunedCount = pruned.length;
+      for (const node of pruned) {
+        if (node['@id']) this._excludedPages.ids.add(String(node['@id']));
+        const nodeURL = node['uri.ui'] ? normalizePageURL(node['uri.ui']) : null;
+        if (nodeURL) this._excludedPages.urls.add(nodeURL);
+      }
+      // The tree's uri.ui can be missing, so also record the URL we resolved for this page
+      const pageURL = normalizePageURL(url);
+      if (pageURL) this._excludedPages.urls.add(pageURL);
+      // This page already ticked above, so only its descendants are left to account for
+      if (prunedCount > 1) this._progress.tick(prunedCount - 1);
+      this.logger
+        .withMetadata({ pageID: `${libName}-${p['@id']}`, url, restriction, prunedCount })
+        .info('Excluding non-public page and its subpages from public book.');
+      return null;
+    }
+    const subpagesPublicOnly = publicOnly ?? isPubliclyVisible(restriction);
 
     const subpagesRaw = isNonNullCXOneObject(p.subpages) ? p.subpages : null;
     const subpages = Array.isArray(subpagesRaw?.page)
@@ -672,8 +760,11 @@ export class BookService {
       }),
       printInfo,
       properties: parsedProperties,
+      restriction,
       subdomain: libName,
-      subpages: await Promise.all(subpages.map((s) => this.getPageInfo(libName, s, libService))),
+      subpages: (
+        await Promise.all(subpages.map((s) => this.resolvePageInfo(libName, s, libService, subpagesPublicOnly)))
+      ).filter((s): s is BookPageInfo => s !== null),
       summary: summaryProp?.value ?? '',
       // @ts-expect-error needs fix upstream in cxone sdk
       tail: pageDetails.content?.tail ?? '',
@@ -967,7 +1058,7 @@ export class BookService {
   private async readDevelopmentCacheFile(bookID: PageID) {
     try {
       const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
-      const filePath = `${baseDir}/book-data-cache/${bookID.toString()}.json`;
+      const filePath = `${baseDir}/book-data-cache/${bookID.toString()}-v2.json`;
       const data = await fs.readFile(filePath, 'utf-8');
       if (!data) return null;
       return JSON.parse(data, (key, value) => {
@@ -982,7 +1073,7 @@ export class BookService {
 
   private async writeDevelopmentCacheFile({ bookID, content }: { bookID: PageID; content: Buffer }) {
     const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
-    const filePath = `${baseDir}/book-data-cache/${bookID.toString()}.json`;
+    const filePath = `${baseDir}/book-data-cache/${bookID.toString()}-v2.json`;
     const dirPath = getDirectoryPathFromFilePath(filePath);
     await fs.mkdir(dirPath, { recursive: true });
     await fs.writeFile(filePath, content, 'utf-8');
@@ -1009,7 +1100,7 @@ export class BookService {
           const emptyParagraphsRemoved = removeEmptyParagraphs(fixedSpaceCollapsed);
           const interactiveReplaced = await this.replaceInteractiveElements(emptyParagraphsRemoved, p.url);
           const answersExtracted = this.extractBoxAnswers(interactiveReplaced);
-          p.body = [answersExtracted];
+          p.body = [this.removeExcludedPageLinks(answersExtracted, p.url)];
         }),
       );
       if (!p.subpages?.length) return;
@@ -1019,6 +1110,31 @@ export class BookService {
     };
     queueFixesRecursive(pages);
     await Promise.all(proms);
+  }
+
+  /**
+   * CXOne renders listings (ShowOrg(), guide tabs) and links as LibreBot, which can see private pages. Drops listing
+   * entries for pages excluded by privacy rules and unwraps links to them, keeping the link text. Relative hrefs are
+   * resolved against `pageURL`, the URL of the page the content belongs to.
+   */
+  private removeExcludedPageLinks(content: string, pageURL: string): string {
+    const { ids, urls } = this._excludedPages;
+    if (!content || (!ids.size && !urls.size)) return content;
+    const $ = cheerio.load(content, null, false);
+    let changed = false;
+    $('[data-page-id]').each((_i, el) => {
+      if (!ids.has($(el).attr('data-page-id') ?? '')) return;
+      $(el).remove();
+      changed = true;
+    });
+    $('a[href]').each((_i, el) => {
+      const href = $(el).attr('href') ?? '';
+      const target = normalizePageURL(href, pageURL);
+      if (!target || !urls.has(target)) return;
+      $(el).replaceWith($(el).contents());
+      changed = true;
+    });
+    return changed ? $.html() : content;
   }
 
   /**
