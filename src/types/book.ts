@@ -8,6 +8,9 @@ export type BookPages = {
   tree: BookPageInfo;
 };
 
+/** CXOne page restriction, from `security['permissions.page'].restriction`. */
+export type PageRestriction = 'Public' | 'Semi-Public' | 'Semi-Private' | 'Private';
+
 export type BookPageProperty = {
   name: string;
   value: string;
@@ -23,6 +26,7 @@ export type BookPageInfo = {
   pageID: PageID;
   printInfo: BookPrintInfo;
   properties: BookPageProperty[];
+  restriction: PageRestriction | null;
   subdomain: string;
   subpages?: BookPageInfo[];
   summary?: string;
