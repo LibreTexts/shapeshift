@@ -20,7 +20,7 @@ const IMAGE_FETCH_TIMEOUT_MS = 30_000;
  * ever occupy in the PDF: the content column is 7.25in wide (8.5in page less 0.625in
  * horizontal margins, see styles/pdf-page.css) and `img { max-height: 3in }` caps the
  * height. At 300dpi that is 2175x900px — under 2MP, comfortably below the 20MP limit our
- * print service enforces.
+ * print service enforces. TitlePage images get a full-page height ceiling instead (see pdf.ts).
  */
 const DEFAULT_MAX_WIDTH = 2175;
 const DEFAULT_MAX_HEIGHT = 900;
@@ -262,7 +262,8 @@ export class ImageProcessor {
       if (!extension) throw new Error(`Unsupported content type for restricted image: ${contentType}`);
       const data = optimized?.data ?? original;
 
-      const fileName = `${createHash('sha1').update(url).digest('hex')}.${extension}`;
+      // Size ceiling is part of the key: TitlePage images share the directory at a larger ceiling.
+      const fileName = `${createHash('sha1').update(`${url}@${this._maxWidth}x${this._maxHeight}`).digest('hex')}.${extension}`;
       const filePath = this.resolveOutputPath(fileName);
       await fs.writeFile(filePath, data);
 

@@ -193,6 +193,9 @@ const MAX_PAGES_PER_GROUP = 6;
  */
 const DEFAULT_PRINCE_CONCURRENCY = 4;
 
+/** Printable page height (11in less 0.75in + 0.9in margins, see pdf-titlepage.css) at 300dpi. */
+const TITLE_PAGE_IMAGE_MAX_HEIGHT = 2805;
+
 /**
  * Rough wall-clock estimate for one whole-document Prince invocation, used only to shape the
  * progress creep curve while the subprocess runs. It sets how fast the bar approaches the top of
@@ -1161,6 +1164,7 @@ export class PDFService {
             this.sanitizeImagesForPDF(
               preRenderedBodyHTML ??
                 (await prerenderMath(this.decodeHTML(this.addPageTitle(pageInfo, pageBodyHTML)), pageInfo)),
+              this.isTitlePage(pageInfo),
             ),
           ),
         ),
@@ -1542,13 +1546,25 @@ ${stripBlocklistedScripts(pageTailHTML)}
    * exactly as it did before.
    */
   private async optimizeBookImages(pages: BookPageInfo[]): Promise<void> {
+    const titlePages = pages.filter((p) => this.isTitlePage(p));
+    const otherPages = pages.filter((p) => !this.isTitlePage(p));
+    // TitlePage images may fill the page, so they get a full-page height ceiling. That pass
+    // is a handful of images and skips progress reporting, which `expect` would reset.
+    if (titlePages.length) await this.runImageProcessor(titlePages, { maxHeight: TITLE_PAGE_IMAGE_MAX_HEIGHT });
+    if (otherPages.length) await this.runImageProcessor(otherPages, { progress: this._progress });
+  }
+
+  private async runImageProcessor(
+    pages: BookPageInfo[],
+    opts: { maxHeight?: number; progress?: ProgressReporter },
+  ): Promise<void> {
     try {
       const baseDir = Environment.getOptional('TMP_OUT_DIR', './.tmp');
       const processor = new ImageProcessor({
         bookID: this._bookID.toString(),
         jobID: this._jobID,
         outputDir: resolve(`${baseDir}/pdf/${this._bookID.toString()}/images`),
-        progress: this._progress,
+        ...opts,
       });
       await processor.optimizePages(pages);
     } catch (error) {
@@ -1556,15 +1572,34 @@ ${stripBlocklistedScripts(pageTailHTML)}
     }
   }
 
+  private isTitlePage(pageInfo: BookPageInfo): boolean {
+    return ['TitlePage', 'Title Page'].includes(pageInfo.title);
+  }
+
   /**
    * Strips HTML width/height attributes and inline width/height style declarations from <img>
    * elements so that the CSS max-width rule in pdf-page.css can take effect. CMS content often
    * embeds fixed pixel dimensions that would otherwise override the stylesheet constraint.
+   * With `keepDimensions` (TitlePage), attributes are instead promoted to inline styles so the
+   * author's size beats the stylesheet's `width/height: auto`.
    */
-  private sanitizeImagesForPDF(html: string): string {
+  private sanitizeImagesForPDF(html: string, keepDimensions = false): string {
     const $ = cheerio.load(html, { xmlMode: false });
     $('img').each((_, el) => {
       const $el = $(el);
+      if (keepDimensions) {
+        const style = $el.attr('style') ?? '';
+        const promoted = (['width', 'height'] as const)
+          .filter((dim) => $el.attr(dim) && !new RegExp(`(^|;)\\s*${dim}\\s*:`).test(style))
+          .map((dim) => {
+            const value = $el.attr(dim)!.trim();
+            return `${dim}: ${/^\d+(\.\d+)?$/.test(value) ? `${value}px` : value}`;
+          });
+        if (promoted.length) {
+          $el.attr('style', [style.trim().replace(/;$/, ''), ...promoted].filter(Boolean).join('; '));
+        }
+        return;
+      }
       $el.removeAttr('width');
       $el.removeAttr('height');
       const style = $el.attr('style') ?? '';
@@ -2582,7 +2617,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
           pageTailHTML: task.pageInfo.tail,
           additionalCSS: directoryHTML
             ? pdfTOCStyles
-            : ['TitlePage', 'Title Page'].includes(task.pageInfo.title)
+            : this.isTitlePage(task.pageInfo)
               ? pdfTitlePageStyles
               : undefined,
           sortKey: task.sortKey,
