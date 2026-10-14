@@ -1,4 +1,4 @@
-import sharp from 'sharp';
+import sharp, { type Metadata } from 'sharp';
 
 /**
  * Result of a successful optimization pass. `extension` and `mimeType` describe the
@@ -13,6 +13,9 @@ export interface OptimizedImage {
   format: 'jpeg' | 'png';
   height: number;
   mimeType: string;
+  /** Display-oriented pixel dimensions of the *source* image, before any resize. */
+  sourceHeight: number;
+  sourceWidth: number;
   width: number;
 }
 
@@ -45,6 +48,31 @@ const MAX_LOSSLESS_OUTPUT_BYTES = 1024 * 1024;
  */
 const PASSTHROUGH_FORMATS = new Set(['svg']);
 
+/**
+ * Pixel dimensions as displayed, i.e. after EXIF orientation is applied. Orientations 5-8
+ * involve a 90 degree rotation, so the stored width and height are swapped.
+ */
+function orientedDimensions(metadata: Metadata): { height: number; width: number } | null {
+  if (!metadata.width || !metadata.height) return null;
+  return (metadata.orientation ?? 1) >= 5
+    ? { height: metadata.width, width: metadata.height }
+    : { height: metadata.height, width: metadata.width };
+}
+
+/**
+ * Reads an image's display-oriented pixel dimensions without decoding it. Returns null for
+ * vector, multi-frame, or undecodable input, where intrinsic pixel size is meaningless.
+ */
+export async function readImageDimensions(input: Buffer): Promise<{ height: number; width: number } | null> {
+  try {
+    const metadata = await sharp(input, { failOn: 'none', animated: false }).metadata();
+    if (!metadata.format || PASSTHROUGH_FORMATS.has(metadata.format)) return null;
+    return orientedDimensions(metadata);
+  } catch {
+    return null;
+  }
+}
+
 function describe(format: 'jpeg' | 'png'): { extension: 'jpg' | 'png'; mimeType: string } {
   return format === 'jpeg' ? { extension: 'jpg', mimeType: 'image/jpeg' } : { extension: 'png', mimeType: 'image/png' };
 }
@@ -71,7 +99,8 @@ export async function optimizeImageBuffer(
     if (!metadata.format || PASSTHROUGH_FORMATS.has(metadata.format)) return null;
     // `pages` > 1 means an animated GIF/WebP or a multi-page TIFF — re-encoding would drop frames.
     if ((metadata.pages ?? 1) > 1) return null;
-    if (!metadata.width || !metadata.height) return null;
+    const source = orientedDimensions(metadata);
+    if (!metadata.width || !metadata.height || !source) return null;
 
     const needsResize = metadata.width > maxWidth || metadata.height > maxHeight;
 
@@ -130,6 +159,8 @@ export async function optimizeImageBuffer(
       data: encoded.data,
       format,
       height: encoded.info.height,
+      sourceHeight: source.height,
+      sourceWidth: source.width,
       width: encoded.info.width,
       ...describe(format),
     };

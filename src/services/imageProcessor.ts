@@ -9,7 +9,7 @@ import { fetchCXOneAsset } from '../lib/cxOneAssetFetcher';
 import { Environment } from '../lib/environment';
 import { log as logService } from '../lib/log';
 import { BookPageInfo } from '../types/book';
-import { optimizeImageBuffer } from '../util/imageOptimizer';
+import { optimizeImageBuffer, readImageDimensions } from '../util/imageOptimizer';
 import { nullProgressReporter, type ProgressReporter } from '../lib/jobProgress';
 
 const DEFAULT_FETCH_CONCURRENCY = 8;
@@ -35,6 +35,22 @@ const DEFAULT_JPEG_QUALITY = 80;
  */
 const OPTIMIZED_FILE_NAME = /^[0-9a-f]{40}\.(?:jpg|jpeg|png|gif|webp|svg)$/;
 const ORIGINAL_EXTENSIONS = new Set(['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg']);
+
+/**
+ * Attributes carrying the source image's original pixel dimensions into the HTML. The PDF
+ * renderer sizes images from these (see PDFService.normalizeImageSizingForPDF) so the
+ * printed size never depends on how far we downsampled the embedded file.
+ */
+export const NATURAL_WIDTH_ATTR = 'data-ss-natural-width';
+export const NATURAL_HEIGHT_ATTR = 'data-ss-natural-height';
+
+interface ResolvedImage {
+  /** Local file to embed, or null to keep the remote URL. */
+  path: string | null;
+  /** Display-oriented pixel dimensions of the source image, when known. */
+  height?: number;
+  width?: number;
+}
 
 export interface ImageProcessingSummary {
   /** Total bytes of the source images that were replaced. */
@@ -66,7 +82,7 @@ export interface ImageProcessingSummary {
  * ZIP — which also removes the redundant downloads Prince was performing on each pass.
  */
 export class ImageProcessor {
-  private readonly _cache = new Map<string, string | null>();
+  private readonly _cache = new Map<string, ResolvedImage>();
   private readonly _jpegQuality: number;
   private readonly _limit: ReturnType<typeof pLimit>;
   private readonly _progress: ProgressReporter;
@@ -207,9 +223,15 @@ export class ImageProcessor {
         const $el = $(el);
         const url = this.normalizeSrc($el.attr('src'), subdomain);
         if (!url) return;
-        const localPath = this._cache.get(url);
-        if (!localPath) return; // never fetched, skipped, or failed — keep the remote URL
-        $el.attr('src', localPath);
+        const resolved = this._cache.get(url);
+        if (!resolved) return; // never fetched
+        if (resolved.width && resolved.height) {
+          $el.attr(NATURAL_WIDTH_ATTR, String(resolved.width));
+          $el.attr(NATURAL_HEIGHT_ATTR, String(resolved.height));
+          rewritten++;
+        }
+        if (!resolved.path) return; // skipped or failed — keep the remote URL
+        $el.attr('src', resolved.path);
         // srcset would otherwise send Prince back to the original full-resolution asset.
         $el.removeAttr('srcset');
         rewritten++;
@@ -228,7 +250,7 @@ export class ImageProcessor {
    */
   private async resolveLocalPath(url: string): Promise<string | null> {
     const cached = this._cache.get(url);
-    if (cached !== undefined) return cached;
+    if (cached !== undefined) return cached.path;
 
     try {
       const {
@@ -248,11 +270,16 @@ export class ImageProcessor {
             maxHeight: this._maxHeight,
             maxWidth: this._maxWidth,
           });
+      const dimensions = optimized
+        ? { height: optimized.sourceHeight, width: optimized.sourceWidth }
+        : isSVG
+          ? null
+          : await readImageDimensions(original);
       if (!optimized && !authenticated) {
         // Vector, animated, or already smaller than anything we'd produce. Leaving the
         // remote URL in place lets Prince fetch it as before.
         this._summary.skipped++;
-        this._cache.set(url, null);
+        this._cache.set(url, { path: null, ...dimensions });
         return null;
       }
 
@@ -274,11 +301,11 @@ export class ImageProcessor {
       } else {
         this._summary.skipped++;
       }
-      this._cache.set(url, filePath);
+      this._cache.set(url, { path: filePath, ...dimensions });
       return filePath;
     } catch (error) {
       this._summary.failed++;
-      this._cache.set(url, null);
+      this._cache.set(url, { path: null });
       this.logger
         .withMetadata({ error: error instanceof Error ? error.message : String(error), url })
         .warn('Failed to optimize image; falling back to the original source');
