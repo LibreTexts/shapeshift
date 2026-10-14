@@ -8,6 +8,13 @@
   text-align: center;
 }
 
+/* Honour author-set sizes (promoted to inline styles), clamped to the printable page */
+img,
+picture > img {
+  max-height: 9.35in; /* 11in less 0.75in + 0.9in margins */
+  object-fit: contain;
+}
+
 /* Backward compatibility: map CXOne platform classes for existing TitlePages */
 .mt-align-center {
   text-align: center;
