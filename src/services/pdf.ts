@@ -48,7 +48,7 @@ import { Upload } from '@aws-sdk/lib-storage';
 import { generateSubpageListing, injectDirectoryListing, isCoverpage, isPublicationRoot } from '../util/bookHelpers';
 import { sleep, USER_AGENT } from '../util/util';
 import { renderAutoAttribution } from '../util/licensing';
-import { ImageProcessor } from './imageProcessor';
+import { ImageProcessor, NATURAL_HEIGHT_ATTR, NATURAL_WIDTH_ATTR } from './imageProcessor';
 import { CoverTemplateService } from './coverTemplate';
 import { ResolvedCustomCover } from '../types/customCover';
 import { JOB_MAX_DURATION_MS, nullProgressReporter, type ProgressReporter } from '../lib/jobProgress';
@@ -130,6 +130,21 @@ type PageGroup = {
   isPacked: boolean;
 };
 
+/** Tallest an image may render, in CSS px: 3in at 96px/in, matching `img { max-height }` in pdf-page.css. */
+const PDF_IMAGE_MAX_HEIGHT_PX = 288;
+
+/**
+ * Parses an authored image dimension (`300`, `300px`, `50%`) as browsers do for <img>.
+ * Other units (em, auto, calc, ...) are ignored so the image falls back to its natural size.
+ */
+function parseImageLength(raw: string | undefined): { unit: '%' | 'px'; value: number } | undefined {
+  const match = raw?.trim().match(/^(\d+(?:\.\d+)?|\.\d+)\s*(px|%)?$/i);
+  if (!match) return undefined;
+  const value = Number.parseFloat(match[1]);
+  if (!(value > 0)) return undefined;
+  return { unit: match[2] === '%' ? '%' : 'px', value };
+}
+
 const RETRY_CONFIG = {
   maxAttempts: 3,
   initialDelayMs: 1000,
@@ -195,6 +210,9 @@ const DEFAULT_PRINCE_CONCURRENCY = 4;
 
 /** Printable page height (11in less 0.75in + 0.9in margins, see pdf-titlepage.css) at 300dpi. */
 const TITLE_PAGE_IMAGE_MAX_HEIGHT = 2805;
+
+/** The same printable page height in CSS px (9.35in at 96px/in), matching pdf-titlepage.css. */
+const TITLE_PAGE_IMAGE_MAX_HEIGHT_PX = 897.6;
 
 /**
  * Rough wall-clock estimate for one whole-document Prince invocation, used only to shape the
@@ -1161,10 +1179,10 @@ export class PDFService {
       const renderedBodyHTML = this.rewriteInternalLinks(
         this.decodeHTML(
           formatCodeBlocksForPDF(
-            this.sanitizeImagesForPDF(
+            this.normalizeImageSizingForPDF(
               preRenderedBodyHTML ??
                 (await prerenderMath(this.decodeHTML(this.addPageTitle(pageInfo, pageBodyHTML)), pageInfo)),
-              this.isTitlePage(pageInfo),
+              this.isTitlePage(pageInfo) ? TITLE_PAGE_IMAGE_MAX_HEIGHT_PX : undefined,
             ),
           ),
         ),
@@ -1577,41 +1595,64 @@ ${stripBlocklistedScripts(pageTailHTML)}
   }
 
   /**
-   * Strips HTML width/height attributes and inline width/height style declarations from <img>
-   * elements so that the CSS max-width rule in pdf-page.css can take effect. CMS content often
-   * embeds fixed pixel dimensions that would otherwise override the stylesheet constraint.
-   * With `keepDimensions` (TitlePage), attributes are instead promoted to inline styles so the
-   * author's size beats the stylesheet's `width/height: auto`.
+   * Gives every <img> one explicit CSS width that reproduces its web display size, so Prince
+   * never falls back to the embedded file's pixel count (which the image optimizer changes).
+   *
+   * The authored size wins (inline style first, then attributes, as browsers resolve it),
+   * then the source image's original pixel size recorded by ImageProcessor. The width is
+   * also reduced so the height fits within {@link PDF_IMAGE_MAX_HEIGHT_PX}: a fixed width plus
+   * the stylesheet's `max-height` would squash the image instead of scaling it. Any remaining
+   * overflow of the column is handled by `max-width: 100%; height: auto` in pdf-page.css,
+   * which keeps the aspect ratio. TitlePage images may fill the page, so they pass
+   * {@link TITLE_PAGE_IMAGE_MAX_HEIGHT_PX} instead.
    */
-  private sanitizeImagesForPDF(html: string, keepDimensions = false): string {
+  private normalizeImageSizingForPDF(html: string, maxHeightPx = PDF_IMAGE_MAX_HEIGHT_PX): string {
     const $ = cheerio.load(html, { xmlMode: false });
     $('img').each((_, el) => {
       const $el = $(el);
-      if (keepDimensions) {
-        const style = $el.attr('style') ?? '';
-        const promoted = (['width', 'height'] as const)
-          .filter((dim) => $el.attr(dim) && !new RegExp(`(^|;)\\s*${dim}\\s*:`).test(style))
-          .map((dim) => {
-            const value = $el.attr(dim)!.trim();
-            return `${dim}: ${/^\d+(\.\d+)?$/.test(value) ? `${value}px` : value}`;
-          });
-        if (promoted.length) {
-          $el.attr('style', [style.trim().replace(/;$/, ''), ...promoted].filter(Boolean).join('; '));
-        }
-        return;
+      const declarations = ($el.attr('style') ?? '').split(';').filter((d) => d.trim());
+      // Last declaration wins, as in the cascade.
+      const styleValue = (prop: 'height' | 'width') =>
+        declarations
+          .map((d) => d.match(new RegExp(`^\\s*${prop}\\s*:\\s*(.+?)\\s*(?:!important)?\\s*$`, 'i'))?.[1])
+          .filter(Boolean)
+          .pop();
+
+      const authoredWidth = parseImageLength(styleValue('width') ?? $el.attr('width'));
+      const authoredHeight = parseImageLength(styleValue('height') ?? $el.attr('height'));
+      const naturalWidth = Number($el.attr(NATURAL_WIDTH_ATTR)) || undefined;
+      const naturalHeight = Number($el.attr(NATURAL_HEIGHT_ATTR)) || undefined;
+
+      const aspect =
+        naturalWidth && naturalHeight
+          ? naturalHeight / naturalWidth
+          : authoredWidth?.unit === 'px' && authoredHeight?.unit === 'px'
+            ? authoredHeight.value / authoredWidth.value
+            : undefined;
+
+      let width: string | undefined;
+      if (authoredWidth?.unit === '%') {
+        width = `${authoredWidth.value}%`;
+      } else {
+        let px =
+          authoredWidth?.value ??
+          (authoredHeight?.unit === 'px' && aspect ? authoredHeight.value / aspect : undefined) ??
+          naturalWidth;
+        if (px && aspect && px * aspect > maxHeightPx) px = maxHeightPx / aspect;
+        if (px) width = `${Math.round(px * 100) / 100}px`;
       }
-      $el.removeAttr('width');
-      $el.removeAttr('height');
-      const style = $el.attr('style') ?? '';
-      const cleaned = style
-        .split(';')
-        .filter((s) => !/^\s*(max-)?(width|height)\s*:/.test(s))
-        .join(';');
-      if (cleaned.trim()) {
-        $el.attr('style', cleaned);
+
+      const kept = declarations.filter((d) => !/^\s*(max-|min-)?(width|height)\s*:/i.test(d));
+      if (width) kept.push(`width: ${width}`);
+      if (kept.length) {
+        $el.attr('style', kept.map((d) => d.trim()).join('; '));
       } else {
         $el.removeAttr('style');
       }
+      $el.removeAttr('width');
+      $el.removeAttr('height');
+      $el.removeAttr(NATURAL_WIDTH_ATTR);
+      $el.removeAttr(NATURAL_HEIGHT_ATTR);
     });
     return $('body').html() ?? html;
   }
@@ -2657,7 +2698,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         const anchor = `<span id="page-${t.pageID}" class="pdf-anchor">&#8203;</span>`;
         const renderedBody = this.rewriteInternalLinks(
           formatCodeBlocksForPDF(
-            this.sanitizeImagesForPDF(
+            this.normalizeImageSizingForPDF(
               directoryHTML != null
                 ? `${anchor}${await prerenderMath(directoryHTML, t.pageInfo)}`
                 : (preRendered ?? (await prerenderMath(this.addPageTitle(t.pageInfo, rawBody), t.pageInfo))),
@@ -2780,7 +2821,7 @@ ${stripBlocklistedScripts(t.pageInfo.tail ?? '')}
     //   const packedBodyHTML = rendered
     //     .map(
     //       ({ task: t, body }) =>
-    //         `<div class="packed-page" data-page-id="${t.pageID}">\n${this.sanitizeImagesForPDF(body)}\n</div>`,
+    //         `<div class="packed-page" data-page-id="${t.pageID}">\n${this.normalizeImageSizingForPDF(body)}\n</div>`,
     //     )
     //     .join('\n');
     //

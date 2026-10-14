@@ -175,7 +175,9 @@ mjx-container svg {
   -prince-alt-text: attr(aria-label);
 }
 
-/* Constrain all content images to the printable column width and a sensible max height */
+/* Constrain all content images to the printable column width and a sensible max height.
+   Each content image also gets an inline width (its web display size, pre-clamped to this
+   max-height) from PDFService.normalizeImageSizingForPDF, which overrides width: auto here. */
 img,
 picture > img {
   max-width: 100%;
