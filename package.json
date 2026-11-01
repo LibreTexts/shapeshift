@@ -87,7 +87,7 @@
     "p-limit": "^7.3.0",
     "pdf-lib": "^1.17.1",
     "prince": "^1.14.8",
-    "puppeteer": "^24.22.3",
+    "puppeteer": "^25.16.0",
     "qr-code-styling-node": "^1.5.0",
     "qrcode": "^1.5.4",
     "rate-limiter-flexible": "^7.1.1",
@@ -98,6 +98,6 @@
     "uuid": "^14.0.0",
     "xml-formatter": "^3.6.6",
     "yargs": "^17.7.2",
-    "zod": "^4.1.12"
+    "zod": "^4.6.7"
   }
 }
