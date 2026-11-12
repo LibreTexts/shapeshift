@@ -168,6 +168,34 @@ mjx-container[jax="SVG"][display="true"] {
   margin: 0.7em 0;
 }
 
+/* MathJax table rules (array/matrix \hline, column bars, frames). MathJax emits these as bare
+   <line>/<rect> elements and styles them through its own stylesheet, which our body-only
+   extraction drops. Without these rules the frame <rect> inherits fill="currentColor" from
+   the root <g> (solid black box) and the <line>s inherit stroke-width="0" (invisible).
+   Mirrors the styles in @mathjax/src output/svg/Wrappers/mtable.js. */
+g[data-mml-node="mtable"] > line[data-line],
+svg[data-table] > g > line[data-line],
+g[data-mml-node="mtable"] > rect[data-frame],
+svg[data-table] > g > rect[data-frame] {
+  stroke-width: 70px;
+  fill: none;
+}
+
+g[data-mml-node="mtable"] > .mjx-dashed,
+svg[data-table] > g > .mjx-dashed {
+  stroke-dasharray: 140;
+}
+
+g[data-mml-node="mtable"] > .mjx-dotted,
+svg[data-table] > g > .mjx-dotted {
+  stroke-linecap: round;
+  stroke-dasharray: 0, 140;
+}
+
+g[data-mml-node="mtable"] > g > svg {
+  overflow: visible;
+}
+
 mjx-container svg {
   max-width: 100%;
   height: auto;
