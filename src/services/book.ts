@@ -871,7 +871,8 @@ export class BookService {
     const libClient = new LibraryService({ lib });
     await libClient.init();
 
-    const page = await libClient.api.pages.getPage(path);
+    const goLinkID = path.match(/^\/@go\/page\/(\d+)\/?$/)?.[1];
+    const page = await libClient.api.pages.getPage(goLinkID ? Number(goLinkID) : path);
     if (!page) return null;
     if (Number.isNaN(Number(page['@id']))) return null;
 
