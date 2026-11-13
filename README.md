@@ -3,9 +3,9 @@ A scalable, distributed system for extracting and transforming LibreTexts conten
 
 ## Development
 
-Shapeshift services are split into two containers, `shapeshift-api` and `shapeshift-processor`, which use MySQL for job data storage. 
+Shapeshift services are split into two containers, `shapeshift-api` and `shapeshift-processor`, which use MySQL for job data storage. You can run these locally with `npm run dev:api` and `npm run dev:processor`, respectively.
 
-#### Ephermeral MySQL
+### Ephermeral MySQL
 If you want to start an ephermeral MySQL container for development, you can do so with:
 ```shell
 # Start
@@ -22,21 +22,15 @@ network_mode: "host"
 ```
 This will allow your Shapeshift containers to connect to the MySQL/LocalStack running on your device using `localhost` as the host name.
 
-#### The Main Stack
-After MySQL is set up, start/stop the stack with:
-```shell
-# Start
-docker compose -f docker-compose.dev.yaml up -d
-# Stop
-docker compose -f docker-compose.dev.yaml down
-```
+### Copy .env.example
+Copy the .env.example contents to a new `.env` file.
 
-### Run Development Build
-You can use the `run-dev-build.sh` script to build and start the API and Processor containers with your local changes. The first build may take a few moments; subsequent builds will be faster.
-```shell
-./run-dev-build.sh
-```
-Use Control-C to stop the containers.
+The following variables are not particularly important for local development with LocalStack and can be left at their dummy values for simplicity:
+- `AWS_*`
+- `BUCKET`
+- `CLOUDFRONT_*`
+- `CLOUDWATCH_*`
+- `ECS_*`
 
 ### AWS Emulation
 [LocalStack](https://localstack.cloud) can be used to emulate AWS services (like SQS and Secrets Manager) locally as a
@@ -44,6 +38,17 @@ Docker container, allowing you to test the entire job workflow end-to-end. Creat
 [install the CLI](https://docs.localstack.cloud/aws/getting-started/installation/) to get started. Set the `AWS_REGION`,
 `LOCALSTACK_HOST`, and `LOCALSTACK_PORT` environment variables appropriately. Test data is stored on your machine unless
 the Cloud Pods feature is used.
+
+### LocalStack Helper Script
+The `./create-localstack-resources.sh` script can be run to create the SQS and SSM resources in one shot. This can be done by hand instead, but manually creating the resources each time LocalStack is started can become tedious.
+
+You can copy/modify the script to create additional SSM parameters from your `.env` as needed, but don't commit any changes to keep the process simple for other devs setting up the repo locally for the first time.
+
+### Spin Up
+1. In a terminal window, run `localstack start` and wait for it to be ready. Keep the window open with LocalStack running
+2. In another terminal window, run `./create-localstack-resources.sh`
+3. Then, run `npm run dev:api`
+4. In another terminal window, run `npm run dev:processor`
 
 ### Running a Test Request
 ```bash
