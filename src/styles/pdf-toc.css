@@ -49,3 +49,8 @@
 .libre-print-list h2::before {
   content: none !important; /* MT Default Styling */
 }
+
+/* Literal page numbers, used by per-volume ToCs rendered outside the main print run. */
+.toc-pagenum::before {
+  content: leader('.');
+}

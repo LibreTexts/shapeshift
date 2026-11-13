@@ -21,3 +21,22 @@ a, a:visited {
 /* Interactive placeholder: show raw URL, hide (non-clickable) link line */
 .interactive-placeholder-link { display: none !important; }
 .interactive-placeholder-url  { display: block !important; }
+
+/* ToC page numbers. Prince resolves target-counter across every file of the print run.
+   Front-matter targets (.toc-fm) use roman numerals to match their footers. */
+.libre-print-list a {
+  text-decoration: none;
+}
+.libre-print-list a[href]::after {
+  content: leader('.') target-counter(attr(href), page);
+}
+.libre-print-list a.toc-fm[href]::after {
+  content: leader('.') target-counter(attr(href), page, lower-roman);
+}
+
+/* Volume ToCs are rendered outside the main run, so their numbers are literal
+   (.toc-pagenum, see pdf-toc.css) and target-counter would resolve to nothing. */
+ul.libre-print-list-static a[href]::after,
+ul.libre-print-list-static a.toc-fm[href]::after {
+  content: none;
+}

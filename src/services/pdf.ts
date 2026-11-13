@@ -754,6 +754,14 @@ export class PDFService {
         anchorToShortUrl.set(anchor, `https://go.libretexts.org/${page.pageID}`);
       }
 
+      // Front-matter pages carry roman page numbers, so ToC entries pointing at them need the
+      // lower-roman variant of target-counter (see .toc-fm in prince-pdf-print.css).
+      const frontMatterAnchors = new Set<string>();
+      for (const group of pageGroups) {
+        if (!group.sortKey.startsWith('0000:')) continue;
+        for (const task of group.tasks) frontMatterAnchors.add(`#page-${task.pageID}`);
+      }
+
       await Promise.all(
         fullDocHTMLPaths.map((htmlPath) =>
           htmlFileLimit(async () => {
@@ -768,6 +776,13 @@ export class PDFService {
               const $el = $(el);
               const href = $el.attr('href');
               if (!href) return;
+
+              // ToC entries show a page number (CSS target-counter) in place of the URL.
+              if ($el.closest('.libre-print-list').length) {
+                const fragment = href.includes('#') ? '#' + href.split('#')[1] : href;
+                if (frontMatterAnchors.has(fragment)) $el.addClass('toc-fm');
+                return;
+              }
 
               let url: string | undefined;
               if (href.startsWith('http')) {
@@ -2210,12 +2225,18 @@ ${stripBlocklistedScripts(pageTailHTML)}
   }
 
   private async generateDetailedLicensing({
+    anchorPageID,
     htmlOnly = false,
     pageInfo,
     sortKey,
     pageOffset,
     useRomanNumerals,
   }: {
+    /**
+     * The back-matter "Detailed Licensing" page's own ID. `pageInfo` is the book root (the report
+     * needs the whole hierarchy), so addPageTitle anchors the root ID. ToC links target this ID.
+     */
+    anchorPageID: PageID;
     htmlOnly?: boolean;
     pageInfo: BookPageInfo;
     sortKey: string;
@@ -2242,6 +2263,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
       }
 
       const licensingBodyHTML = `
+        <span id="page-${anchorPageID}" class="pdf-anchor">&#8203;</span>
         <div id="libre-print-directory-header-container">
           <h1 id="libre-print-directory-header">Detailed Licensing</h1>
         </div>
@@ -2630,6 +2652,7 @@ ${stripBlocklistedScripts(pageTailHTML)}
         });
       } else if (task.type === 'detailed-licensing') {
         result = await this.generateDetailedLicensing({
+          anchorPageID: task.pageID,
           htmlOnly,
           pageInfo: task.pageInfo,
           sortKey: task.sortKey,

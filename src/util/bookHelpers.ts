@@ -45,8 +45,17 @@ export function isPublicationRoot(pageInfo: BookPageInfo) {
 /**
  * Builds the nested subpage listing for a directory page. Returns an empty string when no
  * child produces an entry, so callers can treat a falsy result as "nothing to list".
+ *
+ * `pageNumbers` (pageID → displayed page number) renders literal numbers after each entry,
+ * for ToCs laid out outside the main print run (per-volume ToCs), where CSS target-counter
+ * cannot see the target pages. Omit it and the output is unchanged.
  */
-export async function generateSubpageListing(pageInfo: BookPageInfo, level = 2, isSubTOC?: boolean): Promise<string> {
+export async function generateSubpageListing(
+  pageInfo: BookPageInfo,
+  level = 2,
+  isSubTOC?: boolean,
+  pageNumbers?: Map<string, string>,
+): Promise<string> {
   if (!pageInfo.subpages?.length) return '';
   let resolvedIsSubTOC = isSubTOC;
   const pages: BookPageInfo[] = [];
@@ -77,18 +86,21 @@ export async function generateSubpageListing(pageInfo: BookPageInfo, level = 2, 
   const innerRaw = await Promise.all(
     pages.map(async (elem) => {
       const isSubtopic = level > 2 ? `indent${level - 2}` : null;
-      const subPageDir = await generateSubpageListing(elem, level + 1, resolvedIsSubTOC);
+      const subPageDir = await generateSubpageListing(elem, level + 1, resolvedIsSubTOC, pageNumbers);
       const subListSpacing = subPageDir?.length > 0 ? `libre-print-sublisting${level - 2}` : '';
       // "Chapter" tier: a nested entry whose children are all leaf pages.
       const isChapter = level > 2 && subPageDir.length > 0 && !!elem.subpages?.every((sp) => !sp.subpages?.length);
       if (!elem.url || !elem.title) return '';
-      return `<li><div class="nobreak ${isSubtopic} ${subListSpacing} ${isChapter ? 'libre-print-chapter' : ''}"><${prefix}><a href="#page-${elem.pageID}" title="${elem.title}">${elem.title}</a></${prefix}></div>${subPageDir}</li>`;
+      const pageNumber = pageNumbers?.get(elem.pageID.toString());
+      const pageNumberHTML = pageNumber ? `<span class="toc-pagenum">${pageNumber}</span>` : '';
+      return `<li><div class="nobreak ${isSubtopic} ${subListSpacing} ${isChapter ? 'libre-print-chapter' : ''}"><${prefix}><a href="#page-${elem.pageID}" title="${elem.title}">${elem.title}</a>${pageNumberHTML}</${prefix}></div>${subPageDir}</li>`;
     }),
   );
   const inner = innerRaw.join('');
   // Every child was filtered out (empty Front/Back Matter, missing url or title), so there is nothing to list
   if (!inner) return '';
-  return `<ul class='libre-print-list' ${twoColumn ? 'style="column-count: 2;"' : ''}>${inner}</ul>`;
+  const listClass = pageNumbers ? 'libre-print-list libre-print-list-static' : 'libre-print-list';
+  return `<ul class='${listClass}' ${twoColumn ? 'style="column-count: 2;"' : ''}>${inner}</ul>`;
 }
 
 /**
